@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div style="max-width:900px; margin:0 auto;">
+  <form action="/search" method="get" style="display:flex; gap:0.5rem;">
+    <input name="q" value="{{ q }}" type="text" placeholder="Search your corpus..." style="flex:1; padding:0.7rem 1rem; border:1px solid #ccc; border-radius:6px;">
+    <button type="submit">Search</button>
+  </form>
+
+  {% if q %}
+    <p style="margin-top:1rem;">About {{ total }} results</p>
+    <ol start="{{ (page - 1) * per_page + 1 }}">
+      {% for r in results %}
+        <li style="margin-bottom:1rem;">
+          <div><a href="{{ r.url }}" target="_blank" style="font-size:1.1rem; font-weight:600; color:#005fa3;">{{ r.title }}</a></div>
+          <div style="color:#3a3a3a; font-size:0.9rem;">{{ r.url }}</div>
+          <div style="margin-top:0.3rem; font-size:0.95rem;">{{ r.snippet | safe }}</div>
+        </li>
+      {% endfor %}
+    </ol>
+
+    <div style="display:flex; gap:0.5rem;">
+      {% if page > 1 %}
+        <a href="/search?q={{ q }}&page={{ page - 1 }}" style="color:#005fa3;">Prev</a>
+      {% endif %}
+      {% if (page * per_page) < total %}
+        <a href="/search?q={{ q }}&page={{ page + 1 }}" style="color:#005fa3;">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Self‑Hosted Search</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 2rem;
+        color: #1a1a1a;
+      }
+      .search {
+        max-width: 720px;
+        margin: 3rem auto;
+        text-align: center;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 0.9rem 1rem;
+        font-size: 1.2rem;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+      }
+      button {
+        padding: 0.7rem 1rem;
+        font-size: 1rem;
+        margin-top: 0.8rem;
+        background-color: #0077cc;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #005fa3;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="search">
+      <h1>Self‑Hosted Search</h1>
+      <form action="/search" method="get">
+        <input name="q" type="text" placeholder="Search your corpus..." autofocus>
+        <div><button type="submit">Search</button></div>
+      </form>
+    </div>
+  </body>
+</html>

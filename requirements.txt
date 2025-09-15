@@ -1,0 +1,5 @@
+scrapy==2.11.2
+scrapy-playwright==0.0.39
+playwright==1.47.0
+whoosh==2.7.4
+flask==3.0.3
