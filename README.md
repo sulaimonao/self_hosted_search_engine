@@ -1,155 +1,118 @@
 # Self-Hosted Search Engine
 
-A privacy-first search stack that you can run entirely on your own machine. It combines a polite Scrapy crawler, a resumable SQLite-backed frontier, a Whoosh BM25 index, and a responsive Flask UI. No third-party APIs, telemetry, or hosted services are required.
+A fully local crawling + indexing stack powered by Scrapy, Whoosh, and Flask. Point the crawler at any site, rebuild the index, and search from the CLI or a lightweight web UI. No third-party APIs or hosted services required.
 
-## Quickstart
+## Requirements
+
+- Python 3.11.x (a `.python-version` file pins the project to 3.11.12)
+- macOS or Linux with the system dependencies needed for Playwright's Chromium build
+- (Optional) Node.js is **not** required
+
+Verify your interpreter before creating the virtual environment:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-python -m playwright install --with-deps chromium  # optional if you plan to render JS
-
-# or simply
-make setup
+./scripts/ensure_py311.sh python3
 ```
 
-1. **Seed & crawl**
-   ```bash
-   make crawl
-   ```
-   This loads seed URLs/domains/sitemaps from `config.yaml`, keeps `data/frontier.sqlite` in sync, and launches the Scrapy frontier spider with conservative defaults (robots-aware, per-domain throttling, JS fallback only when necessary).
+## Quick start
 
-2. **Build or update the index**
-   ```bash
-   make index      # incremental
-   make reindex    # full rebuild
-   ```
-
-3. **Run the UI**
-   ```bash
-   make serve
-   ```
-   Visit [http://127.0.0.1:5000](http://127.0.0.1:5000) for a clean search experience with highlighting, pagination, domain filters (`site:`), and an `in:title` toggle.
-
-4. **Search from the CLI**
-   ```bash
-   python cli_search.py --site example.com "test query"
-   ```
-
-5. **Validate**
-   ```bash
-   make test
-   ```
-
-## Configuration (`config.yaml`)
-
-All components pull from a single YAML file at the project root. Key sections:
-
-```yaml
-crawler:
-  user_agent: "SelfHostedSearchBot/0.1 (+local)"
-  obey_robots: true
-  download_delay_sec: 0.8
-  concurrent_requests: 8
-  concurrent_per_domain: 4
-  depth_limit: 2
-  per_domain_page_cap: 5
-  use_js_fallback: true
-  js_fallback_threshold_chars: 200
-  frontier_db: "data/frontier.sqlite"
-  robots_cache_dir: "data/robots_cache"
-  max_pages_total: 50000
-
-seeds:
-  urls_file: "seeds/seeds.txt"
-  domains_file: "seeds/domains.txt"
-  sitemaps_file: "seeds/sitemaps.txt"
-
-index:
-  dir: "index"
-  analyzer: "stemming"
-  field_boosts:
-    title: 2.0
-    content: 1.0
-  incremental: true
-
-ui:
-  host: "127.0.0.1"
-  port: 5000
-  page_len: 10
+```bash
+make setup            # creates .venv, installs deps, installs Playwright Chromium
+make dev              # loads .env (if present) and starts the Flask dev server
+# UI is available at http://127.0.0.1:5000
 ```
 
-Override any entry by exporting an uppercase environment variable (`.` replaced with `_`). Example: `CRAWLER_DOWNLOAD_DELAY_SEC=1.5` or `INDEX_DIR=/mnt/index`. Copy `.env.example` to `.env` for local overrides.
+A quick smoke check is available too:
 
-## Crawling pipeline
+```bash
+pytest -q
+```
 
-* **Frontier** – URLs are persisted in `data/frontier.sqlite` with status, depth, and JS rendering flags. The spider resumes unfinished work and enforces per-domain caps.
-* **Seeds** – Populate `seeds/seeds.txt`, `seeds/domains.txt`, or `seeds/sitemaps.txt`. A helper (`scripts/frontier_tool.py`) can inspect, export, clear, or reseed the frontier.
-* **Sitemaps** – Sitemap URLs are fetched, expanded recursively, and enqueued (respecting per-domain limits) before crawling.
-* **Politeness** – Robots.txt obeyed by default, cached in `data/robots_cache`. User-agent and crawl delay configurable.
-* **JS fallback** – Lightweight HTTP fetch first; if rendered text is below the configured threshold the page is re-queued once with Playwright rendering.
-* **Deduplication** – Normalized URLs plus SHA-256 hashes of extracted text prevent duplicate storage. Unique documents append to `data/pages.jsonl`, and hashes are persisted in `data/pages_meta.sqlite`.
-* **Logging & stats** – Structured logs live at `data/crawler.log`. End-of-run stats (pages fetched, failures, per-domain counts, average latency) are written to `data/crawl_stats.json` and surfaced via `make stats`.
+## Crawl → Index → Search
 
-## Indexing
+Seed the crawler with either a single URL or a seeds file:
 
-`index_build.py` reads `data/pages.jsonl` and updates a Whoosh index in `index/`:
+```bash
+make crawl URL="https://www.vmware.com/"
+# or
+make crawl SEEDS_FILE="/path/to/seeds.txt"
+```
 
-* Incremental by default (`index.incremental=true`), skipping documents whose content hash is unchanged (`data/index_meta.sqlite`).
-* Analyzer can be switched between stemming and simple tokenization.
-* Field boosts align with config for BM25 scoring (title vs. content weights).
-* `python index_build.py full` nukes and rebuilds the index; `python index_build.py update` (default) only adds/updates documents.
+The crawler writes raw responses and normalized text to `data/crawl/`. Once you have data, rebuild the index:
 
-## Search UI
+```bash
+make reindex
+```
 
-`app/main.py` exposes a Flask application with:
+Run CLI searches straight from your terminal:
 
-* Search across titles & content with highlighting.
-* `site:` filter (via domain keyword) and optional `in:title` bias.
-* Pagination length sourced from config.
-* `/healthz` endpoint for monitoring.
+```bash
+make search Q="VMware installation guide for macOS"
+# or directly
+python bin/search_cli.py --q "VMware installation guide for macOS" --limit 5
+```
 
-Use `scripts/manage.py serve` (or `make serve`) to launch with config-driven host/port.
+Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream in via `fetch()` and render with highlighted snippets.
 
-## CLI & management tools
+## Project layout
 
-* `scripts/manage.py crawl|sitemapseed|index|serve|stats`
-* `scripts/frontier_tool.py stats|export|clear|seed`
-* `cli_search.py` for quick terminal searches.
+```
+.
+├── app.py                # Flask application with /, /search, /healthz
+├── bin/
+│   ├── crawl.py          # Scrapy wrapper (seeds, env vars, Playwright toggle)
+│   ├── dev_check.py      # Ensures index/crawl dirs exist before dev server starts
+│   ├── reindex.py        # Rebuilds the Whoosh index from normalized crawl data
+│   └── search_cli.py     # Terminal search client with score + snippet output
+├── crawler/
+│   ├── pipelines.py      # Writes raw + normalized JSONL to data/crawl/
+│   ├── seeds.txt         # Default seeds list (one URL per line)
+│   ├── settings.py       # Scrapy settings factory (robots, concurrency, Playwright)
+│   └── spiders/
+│       └── generic_spider.py
+├── search/
+│   ├── indexer.py        # create_or_open_index + JSONL ingestion helpers
+│   └── query.py          # Multifield Whoosh query utilities
+├── static/style.css      # Clean, minimal styling for the web UI
+├── templates/index.html  # Browser UI (search box + async results)
+└── tests/test_health.py  # Smoke test for /healthz
+```
 
-## Phonebook vs. depth mode
+## Environment variables
 
-* **Phonebook mode** – Keep `depth_limit` low (1–2) and `per_domain_page_cap` small to capture one high-value page per domain quickly.
-* **Depth mode** – Increase `depth_limit` and domain cap for deeper site exploration. Adjust `concurrent_requests` and `download_delay_sec` to balance speed with politeness.
+Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 
-## Operational notes
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `INDEX_DIR` | `./data/index` | Location of the Whoosh index |
+| `CRAWL_STORE` | `./data/crawl` | Where crawler JSONL data is persisted |
+| `CRAWL_MAX_PAGES` | `100` | Stop after visiting this many pages |
+| `CRAWL_RESPECT_ROBOTS` | `true` | Toggle robots.txt compliance |
+| `CRAWL_ALLOW_LIST` | _(empty)_ | Comma-separated substrings URLs must contain |
+| `CRAWL_DENY_LIST` | _(empty)_ | Comma-separated substrings URLs must not contain |
+| `CRAWL_USE_PLAYWRIGHT` | `false` | Render every page with Playwright (JS-heavy sites) |
+| `CRAWL_DOWNLOAD_DELAY` | `0.25` | Delay between requests in seconds |
+| `CRAWL_CONCURRENT_REQUESTS` | `8` | Global Scrapy concurrency |
+| `CRAWL_CONCURRENT_PER_DOMAIN` | `4` | Per-domain concurrency cap |
+| `SEARCH_DEFAULT_LIMIT` | `20` | Default number of web UI results |
+| `LOG_LEVEL` | `INFO` | Logging level for the Flask app |
 
-* Prefer SSD/NVMe for both `data/` and `index/` directories; latency-sensitive operations benefit greatly.
-* Large crawls (tens of thousands of pages) may require >8 GB RAM when rendering JS. Disable fallback if headless Chromium is unnecessary.
-* Consider running crawls during off-peak hours to minimize load on target hosts.
+## Scripts & automation
+
+- `make setup` – creates `.venv`, installs Python deps, installs Chromium via Playwright.
+- `make dev` – loads `.env`, runs `bin/dev_check.py`, and starts the Flask dev server with auto-reload.
+- `make crawl` – wraps `python bin/crawl.py`; accepts `URL`, `SEEDS_FILE`, and respects `.env` overrides.
+- `make reindex` – wipes and rebuilds the Whoosh index from `data/crawl/normalized.jsonl`.
+- `make search` – executes the CLI search client with optional `LIMIT`.
+- `pytest -q` – runs the smoke test hitting `/healthz`.
 
 ## Troubleshooting
 
-* **Empty results:** ensure crawl completed (`make stats`), rebuild the index, or enable JS fallback for SPA-heavy sites.
-* **Slow queries:** lower `ui.page_len`, increase title boost, or switch to the simple analyzer.
-* **Index corruption:** run `make reindex` to rebuild from `data/pages.jsonl`.
-* **Crawler stops early:** inspect `data/crawler.log` and `scripts/frontier_tool.py stats` for domain caps or robots exclusions.
+- **“No seeds provided”** – pass `URL=...` to `make crawl` or populate `crawler/seeds.txt`.
+- **Empty results** – confirm `data/crawl/normalized.jsonl` exists, then run `make reindex`.
+- **Playwright prompts** – `make setup` installs Chromium automatically; re-run if browsers are missing.
+- **Non-3.11 Python** – run `./scripts/ensure_py311.sh python3` before `make setup`.
 
-## Docker & Compose
+## Docker (optional)
 
-```bash
-docker compose up --build
-```
-
-* Multi-stage Dockerfile based on Python slim; pass `--build-arg USE_JS_FALLBACK=false` to avoid Playwright system dependencies.
-* `docker-compose.yml` binds `./data` and `./index` into the container and health-checks `/healthz`.
-
-## Continuous Integration
-
-GitHub Actions (`.github/workflows/ci.yml`) runs `pytest -q` on Python 3.10 and 3.11 for every push/PR.
-
-## Next steps
-
-Ideas for future enhancements: vector search or hybrid reranking, SimHash/MinHash for near-duplicate detection, optional Meilisearch backend, richer UI facets, and scheduled crawl orchestration.
+The included Dockerfile + Compose definition build on Python 3.11. Update the bind mounts or environment variables if you want to persist data outside the container.
