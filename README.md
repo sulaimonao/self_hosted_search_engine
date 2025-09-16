@@ -1,114 +1,155 @@
-# Self‑Hosted Search Engine
+# Self-Hosted Search Engine
 
-This repository contains a simple search engine that you can run
-entirely on your own machine.  It consists of three separate
-components:
+A privacy-first search stack that you can run entirely on your own machine. It combines a polite Scrapy crawler, a resumable SQLite-backed frontier, a Whoosh BM25 index, and a responsive Flask UI. No third-party APIs, telemetry, or hosted services are required.
 
-1. **Crawler** – built with Scrapy.  It traverses websites starting
-   from a list of seed URLs or domains, downloads each page, and
-   extracts the title and body text.  The extracted documents are
-   written to a newline‑delimited JSON file under `data/pages.jsonl`.
-2. **Indexer** – a standalone Python script that reads the JSON
-   document file and builds an inverted index using the Whoosh
-   library.  The resulting index is stored in the `index/`
-   directory.
-3. **Search UI** – a small Flask web application that presents a
-   search box and displays results from the Whoosh index.  It
-   supports full‑text search across both titles and page content
-   with BM25 ranking and snippet highlighting.
+## Quickstart
 
-The code here follows the architecture described in the attached
-research report: an **offline pipeline** (crawling and indexing)
-and an **online pipeline** (query processing and ranking)【10†L72-L80】.
-Everything runs locally without sending data to any third‑party
-service, preserving your privacy and making the system fully
-self‑hosted.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+python -m playwright install --with-deps chromium  # optional if you plan to render JS
 
-## Quick start
+# or simply
+make setup
+```
 
-1. **Install dependencies**  
-   We recommend using a virtual environment.  From the project root:
-
+1. **Seed & crawl**
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   make crawl
+   ```
+   This loads seed URLs/domains/sitemaps from `config.yaml`, keeps `data/frontier.sqlite` in sync, and launches the Scrapy frontier spider with conservative defaults (robots-aware, per-domain throttling, JS fallback only when necessary).
 
-   # Install Playwright browsers once:
-   python -m playwright install
+2. **Build or update the index**
+   ```bash
+   make index      # incremental
+   make reindex    # full rebuild
    ```
 
-2. **Crawl some websites**  
-   The crawler can operate in two modes:
-
-   - **Seed mode** – specify one or more starting URLs.  The spider
-     will crawl pages under those domains.  For example:
-
-     ```bash
-     cd crawler
-     scrapy crawl site -a start_urls="https://example.com,https://docs.python.org" \
-                      -a allow="example.com|docs.python.org" \
-                      -a max_pages=100
-     ```
-
-   - **Domain list mode** – provide a text file containing domain
-     names (one per line) and the `phonebook` spider will fetch only
-     the home page of each site.  This is useful when you have a
-     large list of websites and want to build a broad “phone book”
-     style index.  For example:
-
-     ```bash
-     cd crawler
-     scrapy crawl phonebook -a domain_file="domains.txt"
-     ```
-
-   The crawler writes each page to `data/pages.jsonl`.  Feel free to
-   run multiple crawl commands to accumulate a larger corpus.
-
-3. **Build the index**
-
-   Once you have some documents in `data/pages.jsonl`, run:
-
+3. **Run the UI**
    ```bash
-   python index_build.py
+   make serve
+   ```
+   Visit [http://127.0.0.1:5000](http://127.0.0.1:5000) for a clean search experience with highlighting, pagination, domain filters (`site:`), and an `in:title` toggle.
+
+4. **Search from the CLI**
+   ```bash
+   python cli_search.py --site example.com "test query"
    ```
 
-   This will create (or update) a Whoosh index in the `index/`
-   directory.  You can re-run this whenever new pages are crawled to
-   keep the index fresh.
-
-4. **Run the search UI**
-
-   To start the Flask app, execute:
-
+5. **Validate**
    ```bash
-   cd app
-   python main.py
+   make test
    ```
 
-   Then open `http://localhost:5000` in your browser.  Enter a
-   search query to see matching pages with titles and snippets.
+## Configuration (`config.yaml`)
 
-5. **Command‑line search**
+All components pull from a single YAML file at the project root. Key sections:
 
-   A simple CLI utility is provided for quick searches without the
-   web UI:
+```yaml
+crawler:
+  user_agent: "SelfHostedSearchBot/0.1 (+local)"
+  obey_robots: true
+  download_delay_sec: 0.8
+  concurrent_requests: 8
+  concurrent_per_domain: 4
+  depth_limit: 2
+  per_domain_page_cap: 5
+  use_js_fallback: true
+  js_fallback_threshold_chars: 200
+  frontier_db: "data/frontier.sqlite"
+  robots_cache_dir: "data/robots_cache"
+  max_pages_total: 50000
 
-   ```bash
-   python cli_search.py "your search terms"
-   ```
+seeds:
+  urls_file: "seeds/seeds.txt"
+  domains_file: "seeds/domains.txt"
+  sitemaps_file: "seeds/sitemaps.txt"
 
-## Notes on scalability
+index:
+  dir: "index"
+  analyzer: "stemming"
+  field_boosts:
+    title: 2.0
+    content: 1.0
+  incremental: true
 
-This project is designed for personal use.  Crawling the entire web
-is an enormous undertaking: there are billions of pages on the
-internet【21†L90-L97】, and indexing them requires terabytes of storage
-and significant compute.  On a single laptop you should start with a
-modest corpus (tens of thousands or perhaps millions of pages).  The
-`phonebook` spider lets you create a broad directory by fetching only
-home pages, and you can gradually expand the crawl depth and number
-of pages per domain as resources allow.
+ui:
+  host: "127.0.0.1"
+  port: 5000
+  page_len: 10
+```
 
-If your corpus grows too large for Whoosh to handle, consider using a
-more scalable engine such as MeiliSearch or Apache Lucene, both of
-which can index hundreds of millions of documents more efficiently【17†L281-L289】.
+Override any entry by exporting an uppercase environment variable (`.` replaced with `_`). Example: `CRAWLER_DOWNLOAD_DELAY_SEC=1.5` or `INDEX_DIR=/mnt/index`. Copy `.env.example` to `.env` for local overrides.
+
+## Crawling pipeline
+
+* **Frontier** – URLs are persisted in `data/frontier.sqlite` with status, depth, and JS rendering flags. The spider resumes unfinished work and enforces per-domain caps.
+* **Seeds** – Populate `seeds/seeds.txt`, `seeds/domains.txt`, or `seeds/sitemaps.txt`. A helper (`scripts/frontier_tool.py`) can inspect, export, clear, or reseed the frontier.
+* **Sitemaps** – Sitemap URLs are fetched, expanded recursively, and enqueued (respecting per-domain limits) before crawling.
+* **Politeness** – Robots.txt obeyed by default, cached in `data/robots_cache`. User-agent and crawl delay configurable.
+* **JS fallback** – Lightweight HTTP fetch first; if rendered text is below the configured threshold the page is re-queued once with Playwright rendering.
+* **Deduplication** – Normalized URLs plus SHA-256 hashes of extracted text prevent duplicate storage. Unique documents append to `data/pages.jsonl`, and hashes are persisted in `data/pages_meta.sqlite`.
+* **Logging & stats** – Structured logs live at `data/crawler.log`. End-of-run stats (pages fetched, failures, per-domain counts, average latency) are written to `data/crawl_stats.json` and surfaced via `make stats`.
+
+## Indexing
+
+`index_build.py` reads `data/pages.jsonl` and updates a Whoosh index in `index/`:
+
+* Incremental by default (`index.incremental=true`), skipping documents whose content hash is unchanged (`data/index_meta.sqlite`).
+* Analyzer can be switched between stemming and simple tokenization.
+* Field boosts align with config for BM25 scoring (title vs. content weights).
+* `python index_build.py full` nukes and rebuilds the index; `python index_build.py update` (default) only adds/updates documents.
+
+## Search UI
+
+`app/main.py` exposes a Flask application with:
+
+* Search across titles & content with highlighting.
+* `site:` filter (via domain keyword) and optional `in:title` bias.
+* Pagination length sourced from config.
+* `/healthz` endpoint for monitoring.
+
+Use `scripts/manage.py serve` (or `make serve`) to launch with config-driven host/port.
+
+## CLI & management tools
+
+* `scripts/manage.py crawl|sitemapseed|index|serve|stats`
+* `scripts/frontier_tool.py stats|export|clear|seed`
+* `cli_search.py` for quick terminal searches.
+
+## Phonebook vs. depth mode
+
+* **Phonebook mode** – Keep `depth_limit` low (1–2) and `per_domain_page_cap` small to capture one high-value page per domain quickly.
+* **Depth mode** – Increase `depth_limit` and domain cap for deeper site exploration. Adjust `concurrent_requests` and `download_delay_sec` to balance speed with politeness.
+
+## Operational notes
+
+* Prefer SSD/NVMe for both `data/` and `index/` directories; latency-sensitive operations benefit greatly.
+* Large crawls (tens of thousands of pages) may require >8 GB RAM when rendering JS. Disable fallback if headless Chromium is unnecessary.
+* Consider running crawls during off-peak hours to minimize load on target hosts.
+
+## Troubleshooting
+
+* **Empty results:** ensure crawl completed (`make stats`), rebuild the index, or enable JS fallback for SPA-heavy sites.
+* **Slow queries:** lower `ui.page_len`, increase title boost, or switch to the simple analyzer.
+* **Index corruption:** run `make reindex` to rebuild from `data/pages.jsonl`.
+* **Crawler stops early:** inspect `data/crawler.log` and `scripts/frontier_tool.py stats` for domain caps or robots exclusions.
+
+## Docker & Compose
+
+```bash
+docker compose up --build
+```
+
+* Multi-stage Dockerfile based on Python slim; pass `--build-arg USE_JS_FALLBACK=false` to avoid Playwright system dependencies.
+* `docker-compose.yml` binds `./data` and `./index` into the container and health-checks `/healthz`.
+
+## Continuous Integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `pytest -q` on Python 3.10 and 3.11 for every push/PR.
+
+## Next steps
+
+Ideas for future enhancements: vector search or hybrid reranking, SimHash/MinHash for near-duplicate detection, optional Meilisearch backend, richer UI facets, and scheduled crawl orchestration.

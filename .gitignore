@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.sqlite
+*.log
+.venv/
+.env
+pytest.ini
+.pytest_cache/
+*.egg-info/
+*.zst
+data/
+index/
+node_modules/
+.DS_Store

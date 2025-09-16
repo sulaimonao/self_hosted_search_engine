@@ -1,37 +1,42 @@
-"""
-Scrapy project settings.
+"""Scrapy settings derived from config.yaml."""
+from __future__ import annotations
 
-These settings configure the crawler to respect robots.txt, apply a
-short delay between requests to the same domain, and write items via
-the JsonlWriterPipeline.  Adjust concurrency and delays to suit your
-hardware and network limits.
-"""
+from pathlib import Path
+
+from config import data_dir, load_config
+
+cfg = load_config()
 
 BOT_NAME = "crawler"
-
 SPIDER_MODULES = ["crawler.spiders"]
 NEWSPIDER_MODULE = "crawler.spiders"
 
-ROBOTSTXT_OBEY = True
+USER_AGENT = cfg["crawler"]["user_agent"]
+ROBOTSTXT_OBEY = cfg["crawler"].get("obey_robots", True)
+DOWNLOAD_DELAY = cfg["crawler"].get("download_delay_sec", 0.5)
+CONCURRENT_REQUESTS = cfg["crawler"].get("concurrent_requests", 8)
+CONCURRENT_REQUESTS_PER_DOMAIN = cfg["crawler"].get("concurrent_per_domain", 4)
+DEPTH_LIMIT = cfg["crawler"].get("depth_limit", 2)
+TELNETCONSOLE_ENABLED = False
 
-# Throttle requests to avoid overloading hosts.
-DOWNLOAD_DELAY = 0.5
-CONCURRENT_REQUESTS_PER_DOMAIN = 4
-
-# Enable our pipeline to write out pages.jsonl
 ITEM_PIPELINES = {
     "crawler.pipelines.JsonlWriterPipeline": 300,
 }
 
-# Cache robots.txt files to reduce overhead on repeated runs
+robots_cache = Path(cfg["crawler"]["robots_cache_dir"]).expanduser().resolve()
+robots_cache.mkdir(parents=True, exist_ok=True)
 ROBOTSTXT_CACHE_ENABLED = True
-ROBOTSTXT_CACHE_DIR = str((__import__("pathlib").Path(__file__).resolve().parents[2] / "data" / "robots_cache").as_posix())
+ROBOTSTXT_CACHE_DIR = str(robots_cache)
 
-# Uncomment the following lines if you wish to enable Playwright for
-# JavaScript rendering.  See README for details.
-# DOWNLOAD_HANDLERS = {
-#     "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-#     "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-# }
-# TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
-# PLAYWRIGHT_BROWSER_TYPE = "chromium"
+log_dir = data_dir(cfg)
+log_dir.mkdir(parents=True, exist_ok=True)
+LOG_FILE = str((log_dir / "crawler.log").resolve())
+LOG_LEVEL = "INFO"
+
+if cfg["crawler"].get("use_js_fallback", False):
+    DOWNLOAD_HANDLERS = {
+        "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+        "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    }
+    TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+    PLAYWRIGHT_BROWSER_TYPE = "chromium"

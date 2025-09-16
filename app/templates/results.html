@@ -1,32 +1,48 @@
 {% extends "base.html" %}
 
-{% block body %}
-<div style="max-width:900px; margin:0 auto;">
-  <form action="/search" method="get" style="display:flex; gap:0.5rem;">
-    <input name="q" value="{{ q }}" type="text" placeholder="Search your corpus..." style="flex:1; padding:0.7rem 1rem; border:1px solid #ccc; border-radius:6px;">
-    <button type="submit">Search</button>
-  </form>
+{% block content %}
+<form action="/search" method="get" class="search-form" role="search">
+  <input name="q" type="search" placeholder="Search your corpus..." value="{{ q }}" aria-label="Search query">
+  <div class="filters">
+    <label>
+      Site filter:
+      <input type="text" name="site" value="{{ site_filter }}" placeholder="example.com" aria-label="Restrict to domain">
+    </label>
+    <label style="display:flex; gap:0.4rem; align-items:center;">
+      <input type="checkbox" name="in_title" {% if in_title %}checked{% endif %}>
+      in:title
+    </label>
+    <button class="primary" type="submit">Search</button>
+  </div>
+  <input type="hidden" name="page" value="1">
+</form>
 
-  {% if q %}
-    <p style="margin-top:1rem;">About {{ total }} results</p>
-    <ol start="{{ (page - 1) * per_page + 1 }}">
-      {% for r in results %}
-        <li style="margin-bottom:1rem;">
-          <div><a href="{{ r.url }}" target="_blank" style="font-size:1.1rem; font-weight:600; color:#005fa3;">{{ r.title }}</a></div>
-          <div style="color:#3a3a3a; font-size:0.9rem;">{{ r.url }}</div>
-          <div style="margin-top:0.3rem; font-size:0.95rem;">{{ r.snippet | safe }}</div>
-        </li>
-      {% endfor %}
-    </ol>
-
-    <div style="display:flex; gap:0.5rem;">
-      {% if page > 1 %}
-        <a href="/search?q={{ q }}&page={{ page - 1 }}" style="color:#005fa3;">Prev</a>
-      {% endif %}
-      {% if (page * per_page) < total %}
-        <a href="/search?q={{ q }}&page={{ page + 1 }}" style="color:#005fa3;">Next</a>
-      {% endif %}
-    </div>
-  {% endif %}
-</div>
+{% if q %}
+  <div class="meta" style="margin-top:1rem;">
+    {% if total %}
+      {{ total }} results in {{ "%.1f"|format(latency_ms) }} ms
+    {% else %}
+      No results in {{ "%.1f"|format(latency_ms) }} ms
+    {% endif %}
+  </div>
+  <div class="results">
+    {% for r in results %}
+      <div class="result-item">
+        <div><a href="{{ r.url }}" target="_blank" rel="noopener" style="font-size:1.1rem; font-weight:600;">{{ r.title }}</a></div>
+        <div class="meta">{{ r.url }}</div>
+        <p>{{ r.snippet | safe }}</p>
+      </div>
+    {% else %}
+      <p>No matches yet. Try broadening your search.</p>
+    {% endfor %}
+  </div>
+  <div class="pagination">
+    {% if page > 1 %}
+      <a href="/search?q={{ q }}&site={{ site_filter }}&in_title={% if in_title %}on{% endif %}&page={{ page - 1 }}">← Prev</a>
+    {% endif %}
+    {% if (page * per_page) < total %}
+      <a href="/search?q={{ q }}&site={{ site_filter }}&in_title={% if in_title %}on{% endif %}&page={{ page + 1 }}">Next →</a>
+    {% endif %}
+  </div>
+{% endif %}
 {% endblock %}
