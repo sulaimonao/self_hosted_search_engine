@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<form action="/search" method="get" class="search-form">
+  <input name="q" type="search" placeholder="Search your corpus..." value="{{ q }}" aria-label="Search query" autofocus>
+  <div class="filters">
+    <label>
+      Site filter:
+      <input type="text" name="site" value="{{ site_filter }}" placeholder="example.com" aria-label="Restrict to domain">
+    </label>
+    <label style="display:flex; gap:0.4rem; align-items:center;">
+      <input type="checkbox" name="in_title" {% if in_title %}checked{% endif %}>
+      in:title
+    </label>
+    <button class="primary" type="submit">Search</button>
+  </div>
+</form>
+{% endblock %}
