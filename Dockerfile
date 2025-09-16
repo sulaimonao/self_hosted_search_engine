@@ -12,7 +12,9 @@ RUN pip install --upgrade pip \
 FROM python:${PYTHON_VERSION} AS app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UI_PORT=5000
+    UI_PORT=5000 \
+    INDEX_DIR=/app/data/index \
+    CRAWL_STORE=/app/data/crawl
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
@@ -31,4 +33,4 @@ RUN if [ "$USE_JS_FALLBACK" = "true" ]; then \
     fi
 
 EXPOSE ${UI_PORT}
-CMD ["python", "scripts/manage.py", "serve"]
+CMD ["python", "app.py"]

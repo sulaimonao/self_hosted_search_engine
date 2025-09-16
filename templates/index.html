@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Self-Hosted Search</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Self-Hosted Search</h1>
+      <form id="search-form" role="search" aria-label="Search local index">
+        <label class="sr-only" for="query-input">Search query</label>
+        <input
+          id="query-input"
+          name="q"
+          type="search"
+          placeholder="Search your index..."
+          value="{{ query|default('') }}"
+          autocomplete="off"
+          required
+        />
+        <button type="submit">Search</button>
+      </form>
+      <section id="status" aria-live="polite" aria-busy="false"></section>
+      <section id="results" aria-live="polite"></section>
+    </main>
+    <script>
+      const form = document.getElementById("search-form");
+      const queryInput = document.getElementById("query-input");
+      const statusEl = document.getElementById("status");
+      const resultsEl = document.getElementById("results");
+
+      async function runSearch(query) {
+        statusEl.textContent = "Searching...";
+        statusEl.setAttribute("aria-busy", "true");
+        resultsEl.innerHTML = "";
+        try {
+          const response = await fetch(`/search?q=${encodeURIComponent(query)}`);
+          if (!response.ok) {
+            throw new Error(`Request failed: ${response.status}`);
+          }
+          const payload = await response.json();
+          statusEl.textContent = `${payload.results.length} result(s)`;
+          renderResults(payload.results);
+        } catch (error) {
+          console.error(error);
+          statusEl.textContent = "Search failed. Check the console for details.";
+        } finally {
+          statusEl.setAttribute("aria-busy", "false");
+        }
+      }
+
+      function renderResults(results) {
+        if (!results.length) {
+          resultsEl.innerHTML = '<p class="empty">No results yet. Crawl and reindex to populate the search index.</p>';
+          return;
+        }
+        const fragment = document.createDocumentFragment();
+        results.forEach((result) => {
+          const article = document.createElement("article");
+          article.className = "result";
+
+          const heading = document.createElement("h2");
+          const link = document.createElement("a");
+          link.href = result.url;
+          link.textContent = result.title || result.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          heading.appendChild(link);
+          article.appendChild(heading);
+
+          const url = document.createElement("p");
+          url.className = "url";
+          url.textContent = result.url || "";
+          article.appendChild(url);
+
+          if (result.snippet) {
+            const snippet = document.createElement("p");
+            snippet.className = "snippet";
+            snippet.innerHTML = result.snippet;
+            article.appendChild(snippet);
+          }
+
+          const score = document.createElement("p");
+          score.className = "score";
+          score.textContent = `Score: ${result.score.toFixed(3)}`;
+          article.appendChild(score);
+
+          fragment.appendChild(article);
+        });
+        resultsEl.innerHTML = "";
+        resultsEl.appendChild(fragment);
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const query = queryInput.value.trim();
+        if (!query) {
+          statusEl.textContent = "Enter a search query to get started.";
+          resultsEl.innerHTML = "";
+          return;
+        }
+        runSearch(query);
+      });
+
+      const initialQuery = queryInput.value.trim();
+      if (initialQuery) {
+        runSearch(initialQuery);
+      } else {
+        statusEl.textContent = "Enter a search query to get started.";
+      }
+    </script>
+  </body>
+</html>

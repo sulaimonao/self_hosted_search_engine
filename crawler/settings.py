@@ -1,42 +1,56 @@
-"""Scrapy settings derived from config.yaml."""
+"""Scrapy settings builder used by :mod:`bin.crawl`."""
+
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Dict, Any
 
-from config import data_dir, load_config
+DEFAULT_USER_AGENT = os.getenv("CRAWL_USER_AGENT", "SelfHostedSearchBot/0.1 (+local)")
 
-cfg = load_config()
 
-BOT_NAME = "crawler"
-SPIDER_MODULES = ["crawler.spiders"]
-NEWSPIDER_MODULE = "crawler.spiders"
+def _as_bool(value: str | bool | None, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-USER_AGENT = cfg["crawler"]["user_agent"]
-ROBOTSTXT_OBEY = cfg["crawler"].get("obey_robots", True)
-DOWNLOAD_DELAY = cfg["crawler"].get("download_delay_sec", 0.5)
-CONCURRENT_REQUESTS = cfg["crawler"].get("concurrent_requests", 8)
-CONCURRENT_REQUESTS_PER_DOMAIN = cfg["crawler"].get("concurrent_per_domain", 4)
-DEPTH_LIMIT = cfg["crawler"].get("depth_limit", 2)
-TELNETCONSOLE_ENABLED = False
 
-ITEM_PIPELINES = {
-    "crawler.pipelines.JsonlWriterPipeline": 300,
-}
+def build_settings(
+    crawl_store: Path,
+    respect_robots: bool,
+    use_playwright: bool,
+) -> Dict[str, Any]:
+    """Return Scrapy settings tuned for local crawling."""
 
-robots_cache = Path(cfg["crawler"]["robots_cache_dir"]).expanduser().resolve()
-robots_cache.mkdir(parents=True, exist_ok=True)
-ROBOTSTXT_CACHE_ENABLED = True
-ROBOTSTXT_CACHE_DIR = str(robots_cache)
+    crawl_store.mkdir(parents=True, exist_ok=True)
 
-log_dir = data_dir(cfg)
-log_dir.mkdir(parents=True, exist_ok=True)
-LOG_FILE = str((log_dir / "crawler.log").resolve())
-LOG_LEVEL = "INFO"
-
-if cfg["crawler"].get("use_js_fallback", False):
-    DOWNLOAD_HANDLERS = {
-        "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-        "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    settings: Dict[str, Any] = {
+        "BOT_NAME": "self_hosted_search_engine",
+        "ROBOTSTXT_OBEY": respect_robots,
+        "LOG_LEVEL": os.getenv("CRAWL_LOG_LEVEL", "INFO"),
+        "USER_AGENT": DEFAULT_USER_AGENT,
+        "DOWNLOAD_DELAY": float(os.getenv("CRAWL_DOWNLOAD_DELAY", "0.25")),
+        "CONCURRENT_REQUESTS": int(os.getenv("CRAWL_CONCURRENT_REQUESTS", "8")),
+        "CONCURRENT_REQUESTS_PER_DOMAIN": int(os.getenv("CRAWL_CONCURRENT_PER_DOMAIN", "4")),
+        "AUTOTHROTTLE_ENABLED": _as_bool(os.getenv("CRAWL_AUTOTHROTTLE"), True),
+        "FEED_EXPORT_ENCODING": "utf-8",
+        "ITEM_PIPELINES": {"crawler.pipelines.NormalizePipeline": 300},
     }
-    TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
-    PLAYWRIGHT_BROWSER_TYPE = "chromium"
+
+    if use_playwright:
+        settings.update(
+            {
+                "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
+                "PLAYWRIGHT_BROWSER_TYPE": os.getenv("PLAYWRIGHT_BROWSER_TYPE", "chromium"),
+                "DOWNLOAD_HANDLERS": {
+                    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+                    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+                },
+                "PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT": int(
+                    os.getenv("PLAYWRIGHT_NAVIGATION_TIMEOUT", "30000")
+                ),
+            }
+        )
+    return settings

@@ -1,54 +1,54 @@
+"""Pipelines to persist crawl output to disk."""
+
 from __future__ import annotations
 
 import json
-import sqlite3
-from typing import Any
-
-from config import data_dir, load_config
-from crawler.utils import now_utc, sha256_text
+from pathlib import Path
+from typing import Any, Dict
 
 
-class JsonlWriterPipeline:
-    """Pipeline that persists unique pages and tracks hashes."""
+class NormalizePipeline:
+    """Write raw and normalized crawl output to JSONL files."""
 
-    def open_spider(self, spider: Any) -> None:
-        self.config = load_config()
-        base_dir = data_dir(self.config)
-        base_dir.mkdir(parents=True, exist_ok=True)
-        self.pages_path = base_dir / "pages.jsonl"
-        self.meta_path = base_dir / "pages_meta.sqlite"
-        self.meta_conn = sqlite3.connect(self.meta_path)
-        self.meta_conn.execute(
-            "CREATE TABLE IF NOT EXISTS page_hashes (hash TEXT PRIMARY KEY, url TEXT, fetched_at TEXT)"
-        )
-        self.meta_conn.commit()
-        self.file = open(self.pages_path, "a", encoding="utf-8")
+    def __init__(self) -> None:
+        self.raw_path: Path | None = None
+        self.normalized_path: Path | None = None
+        self._raw_handle = None
+        self._normalized_handle = None
+        self._seen_urls: set[str] = set()
 
-    def close_spider(self, spider: Any) -> None:
-        if hasattr(self, "file"):
-            self.file.close()
-        if hasattr(self, "meta_conn"):
-            self.meta_conn.close()
+    def open_spider(self, spider) -> None:  # type: ignore[override]
+        store = Path(getattr(spider, "crawl_store", "./data/crawl"))
+        store.mkdir(parents=True, exist_ok=True)
+        self.raw_path = store / "raw.jsonl"
+        self.normalized_path = store / "normalized.jsonl"
+        self._raw_handle = self.raw_path.open("a", encoding="utf-8")
+        self._normalized_handle = self.normalized_path.open("a", encoding="utf-8")
 
-    def process_item(self, item: Any, spider: Any) -> Any:
-        text = item.get("text", "") or ""
-        content_hash = sha256_text(text)
-        cur = self.meta_conn.cursor()
-        cur.execute("SELECT 1 FROM page_hashes WHERE hash=?", (content_hash,))
-        if cur.fetchone():
-            return item
-        record = {
-            "url": item.get("url"),
+    def close_spider(self, spider) -> None:  # type: ignore[override]
+        if self._raw_handle:
+            self._raw_handle.close()
+        if self._normalized_handle:
+            self._normalized_handle.close()
+
+    def process_item(self, item: Dict[str, Any], spider):  # type: ignore[override]
+        assert self._raw_handle is not None
+        assert self._normalized_handle is not None
+
+        raw_payload = json.dumps(item, ensure_ascii=False)
+        self._raw_handle.write(raw_payload + "\n")
+        self._raw_handle.flush()
+
+        url = item.get("url")
+        if isinstance(url, str):
+            if url in self._seen_urls:
+                return item
+            self._seen_urls.add(url)
+        normalized = {
+            "url": url,
             "title": item.get("title", ""),
-            "text": text,
-            "domain": item.get("domain", ""),
-            "fetched_at": item.get("fetched_at") or now_utc(),
-            "hash": content_hash,
+            "text": item.get("text", ""),
         }
-        self.file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        cur.execute(
-            "INSERT OR REPLACE INTO page_hashes(hash, url, fetched_at) VALUES (?, ?, ?)",
-            (content_hash, record["url"], record["fetched_at"]),
-        )
-        self.meta_conn.commit()
+        self._normalized_handle.write(json.dumps(normalized, ensure_ascii=False) + "\n")
+        self._normalized_handle.flush()
         return item

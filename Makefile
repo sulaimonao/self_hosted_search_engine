@@ -1,36 +1,31 @@
-.PHONY: setup crawl index reindex serve test lint format clean
+.PHONY: setup dev crawl reindex search clean
 
 VENV?=.venv
 PYTHON?=python3
-PIP?=$(VENV)/bin/pip
+PY:=$(VENV)/bin/python
+PIP:=$(VENV)/bin/pip
+PLAYWRIGHT:=$(VENV)/bin/playwright
 
-setup: ## create venv & install deps
-@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
-$(PIP) install --upgrade pip
-$(PIP) install -r requirements.txt
-$(VENV)/bin/python -m playwright install --with-deps chromium || true
+setup:
+	./scripts/ensure_py311.sh $(PYTHON)
+	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
+	$(PY) -m pip install --upgrade pip setuptools wheel
+	$(PIP) install -r requirements.txt
+	$(PLAYWRIGHT) install chromium
 
-crawl: ## run crawler with config
-$(VENV)/bin/python scripts/manage.py crawl
+dev:
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
 
-index: ## incremental index
-$(VENV)/bin/python scripts/manage.py index update
+crawl:
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
 
-reindex: ## full rebuild
-$(VENV)/bin/python scripts/manage.py index full
+reindex:
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE; exec $(PY) bin/reindex.py'
 
-serve: ## run Flask UI
-$(VENV)/bin/python scripts/manage.py serve
-
-stats: ## show latest crawl stats
-$(VENV)/bin/python scripts/manage.py stats
-
-test: ## run pytest
-$(VENV)/bin/pytest -q
-
-lint: ## placeholder for linter hook
-@echo "No linters configured"
+search:
+	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; export INDEX_DIR; exec $(PY) bin/search_cli.py --q "$$Q" --limit "$${LIMIT:-10}"'
 
 clean:
-rm -rf $(VENV)
-rm -rf data index __pycache__ */__pycache__
+	rm -rf $(VENV)
+	rm -rf data/index data/crawl
