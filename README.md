@@ -54,6 +54,56 @@ python bin/search_cli.py --q "VMware installation guide for macOS" --limit 5
 
 Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream in via `fetch()` and render with highlighted snippets.
 
+## Smart search enrichment
+
+The `/search` endpoint now wraps the base Whoosh query with a "smart" layer. When fewer than `SMART_MIN_RESULTS` hits come back, the
+app schedules `bin/crawl_focused.py` in the background and immediately returns the current results. The focused crawl:
+
+- Builds deterministic candidates from `search/frontier.py` (docs/blog/support paths, readthedocs/gitbook fallbacks, etc.).
+- Merges in the highest-scoring domains from the append-only `data/seeds.jsonl` store (managed by `search/seeds.py`).
+- Optionally asks a local Ollama model for additional URLs through `llm/seed_guesser.py` when the UI toggle is on.
+- Uses `FOCUSED_CRAWL_BUDGET` as its page limit so a background run stays lightweight.
+- Records every touched domain back into `data/seeds.jsonl`, gradually improving future crawls.
+
+Results in the browser update automatically: if the first response returned fewer than the configured minimum, the UI polls the
+`/search` endpoint every four seconds (up to ~20 seconds) and re-renders as new hits arrive.
+
+To trigger a run manually, supply a query via `make focused`:
+
+```bash
+make focused Q="postgres vacuum best practices" USE_LLM=1 MODEL="llama3.1:8b-instruct"
+```
+
+The command honours `.env`, allows a one-off `BUDGET=...` override, and respects `CRAWL_RESPECT_ROBOTS` unless you turn it off.
+
+## LLM Assist panel
+
+The web UI now includes an "LLM Assist" panel:
+
+- The status row checks `ollama --version` and the Ollama HTTP API (`/api/tags`) to report whether the runtime is installed and
+  reachable.
+- A model dropdown lists locally available models. The selection is stored in `localStorage` and passed to the focused crawl.
+- The "Use LLM for discovery" toggle persists in `localStorage` and controls whether `smart_search` adds the `--use-llm` flag.
+- Inline guidance appears when Ollama is missing, stopped, or running without any pulled models.
+
+Install and start Ollama locally (macOS example):
+
+```bash
+brew install --cask ollama
+ollama serve
+ollama pull llama3.1:8b-instruct
+```
+
+Then point your browser at the UI. You can verify connectivity via:
+
+```bash
+make llm-status   # reports installed/running/host
+make llm-models   # lists models returned by /api/tags
+```
+
+The default behaviour stays fully local: no external APIs are contacted unless you explicitly enable Ollama. Set `SMART_USE_LLM=true`
+in `.env` if you want the toggle pre-enabled for every user.
+
 ## Project layout
 
 ```
@@ -61,9 +111,13 @@ Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream i
 ├── app.py                # Flask application with /, /search, /healthz
 ├── bin/
 │   ├── crawl.py          # Scrapy wrapper (seeds, env vars, Playwright toggle)
+│   ├── crawl_focused.py  # Query-driven focused crawl with small page budgets
 │   ├── dev_check.py      # Ensures index/crawl dirs exist before dev server starts
 │   ├── reindex.py        # Rebuilds the Whoosh index from normalized crawl data
 │   └── search_cli.py     # Terminal search client with score + snippet output
+├── llm/
+│   ├── __init__.py
+│   └── seed_guesser.py   # Lightweight Ollama client for seed guessing
 ├── crawler/
 │   ├── pipelines.py      # Writes raw + normalized JSONL to data/crawl/
 │   ├── seeds.txt         # Default seeds list (one URL per line)
@@ -71,8 +125,11 @@ Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream i
 │   └── spiders/
 │       └── generic_spider.py
 ├── search/
+│   ├── frontier.py       # Deterministic candidate URL generation for focused crawls
 │   ├── indexer.py        # create_or_open_index + JSONL ingestion helpers
-│   └── query.py          # Multifield Whoosh query utilities
+│   ├── query.py          # Multifield Whoosh query utilities
+│   ├── seeds.py          # Append-only JSONL store tracking useful domains
+│   └── smart_search.py   # Wrapper that triggers focused crawls when results are sparse
 ├── static/style.css      # Clean, minimal styling for the web UI
 ├── templates/index.html  # Browser UI (search box + async results)
 └── tests/test_health.py  # Smoke test for /healthz
@@ -95,6 +152,14 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 | `CRAWL_CONCURRENT_REQUESTS` | `8` | Global Scrapy concurrency |
 | `CRAWL_CONCURRENT_PER_DOMAIN` | `4` | Per-domain concurrency cap |
 | `SEARCH_DEFAULT_LIMIT` | `20` | Default number of web UI results |
+| `SMART_MIN_RESULTS` | `5` | Minimum results before auto-triggering a focused crawl |
+| `FOCUSED_CRAWL_BUDGET` | `50` | Page budget for each focused crawl run |
+| `SMART_TRIGGER_COOLDOWN` | `60` | Seconds to wait before re-running a crawl for the same query |
+| `SMART_USE_LLM` | `false` | Default toggle for LLM-assisted discovery |
+| `SEEDS_PATH` | `data/seeds.jsonl` | Append-only JSONL store of known helpful domains |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
+| `OLLAMA_MODEL` | `llama3.1:8b-instruct` | Default model used when the UI does not pick one |
+| `OLLAMA_TIMEOUT` | `30` | Seconds to wait for Ollama seed generation responses |
 | `LOG_LEVEL` | `INFO` | Logging level for the Flask app |
 
 ## Scripts & automation
@@ -104,6 +169,9 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 - `make crawl` – wraps `python bin/crawl.py`; accepts `URL`, `SEEDS_FILE`, and respects `.env` overrides.
 - `make reindex` – wipes and rebuilds the Whoosh index from `data/crawl/normalized.jsonl`.
 - `make search` – executes the CLI search client with optional `LIMIT`.
+- `make focused` – runs `bin/crawl_focused.py` for a specific query (`Q="..."`) with optional `BUDGET`, `USE_LLM`, and `MODEL` overrides.
+- `make llm-status` – quick health check for the Ollama HTTP API exposed through Flask.
+- `make llm-models` – list locally installed Ollama models via the API.
 - `pytest -q` – runs the smoke test hitting `/healthz`.
 
 ## Troubleshooting
