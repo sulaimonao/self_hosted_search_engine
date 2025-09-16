@@ -1,4 +1,4 @@
-.PHONY: setup dev crawl reindex search clean
+.PHONY: setup dev crawl reindex search focused llm-status llm-models clean
 
 VENV?=.venv
 PYTHON?=python3
@@ -25,6 +25,16 @@ reindex:
 search:
 	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; export INDEX_DIR; exec $(PY) bin/search_cli.py --q "$$Q" --limit "$${LIMIT:-10}"'
+
+focused:
+	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BUDGET_VALUE=$${BUDGET:-$${FOCUSED_CRAWL_BUDGET:-50}}; USE_LLM_FLAG=""; [ -n "$$USE_LLM" ] && USE_LLM_FLAG="--use-llm"; MODEL_FLAG=""; [ -n "$$MODEL" ] && MODEL_FLAG="--model \"$$MODEL\""; exec $(PY) bin/crawl_focused.py --q "$$Q" --budget "$$BUDGET_VALUE" $$USE_LLM_FLAG $$MODEL_FLAG'
+
+llm-status:
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s "http://$$HOST:$$PORT/api/llm/status" | python -m json.tool'
+
+llm-models:
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s "http://$$HOST:$$PORT/api/llm/models" | python -m json.tool'
 
 clean:
 	rm -rf $(VENV)

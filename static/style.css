@@ -23,7 +23,7 @@ body {
 }
 
 .container {
-  max-width: 720px;
+  max-width: 960px;
   width: 100%;
   margin: 3rem 1rem;
   padding: 2rem;
@@ -46,13 +46,28 @@ h1 {
   text-align: center;
 }
 
-form {
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+@media (min-width: 900px) {
+  .layout {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    align-items: start;
+    gap: 2rem;
+  }
+}
+
+.search-panel form {
   display: flex;
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
 
-input[type="search"] {
+.search-panel input[type="search"] {
   flex: 1;
   padding: 0.75rem 1rem;
   border-radius: 999px;
@@ -70,8 +85,8 @@ button {
   cursor: pointer;
 }
 
-button:hover,
-button:focus {
+.search-panel button:hover,
+.search-panel button:focus {
   background: #1e50c5;
   outline: none;
 }
@@ -127,6 +142,82 @@ button:focus {
   margin: 0;
   color: rgba(60, 60, 67, 0.7);
   text-align: center;
+}
+
+.llm-panel {
+  background: rgba(37, 99, 235, 0.06);
+  border-radius: 12px;
+  padding: 1.5rem;
+  border: 1px solid rgba(37, 99, 235, 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+  .llm-panel {
+    background: rgba(37, 99, 235, 0.14);
+    border-color: rgba(148, 163, 239, 0.4);
+  }
+}
+
+.llm-panel h2 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-size: 1.25rem;
+}
+
+.llm-status {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.field label {
+  font-weight: 600;
+}
+
+.field select {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(60, 60, 67, 0.2);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.toggle input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.llm-instructions {
+  font-size: 0.9rem;
+  color: rgba(60, 60, 67, 0.9);
+}
+
+.llm-instructions pre {
+  background: rgba(15, 23, 42, 0.08);
+  padding: 0.75rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .llm-instructions {
+    color: rgba(226, 232, 240, 0.9);
+  }
+  .llm-instructions pre {
+    background: rgba(15, 23, 42, 0.6);
+  }
 }
 
 .sr-only {

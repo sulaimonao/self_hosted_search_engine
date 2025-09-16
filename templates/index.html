@@ -6,50 +6,87 @@
     <title>Self-Hosted Search</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
-  <body>
+  <body data-smart-min-results="{{ smart_min_results }}">
     <main class="container">
       <h1>Self-Hosted Search</h1>
-      <form id="search-form" role="search" aria-label="Search local index">
-        <label class="sr-only" for="query-input">Search query</label>
-        <input
-          id="query-input"
-          name="q"
-          type="search"
-          placeholder="Search your index..."
-          value="{{ query|default('') }}"
-          autocomplete="off"
-          required
-        />
-        <button type="submit">Search</button>
-      </form>
-      <section id="status" aria-live="polite" aria-busy="false"></section>
-      <section id="results" aria-live="polite"></section>
+      <div class="layout">
+        <section class="search-panel" aria-label="Search panel">
+          <form id="search-form" role="search" aria-label="Search local index">
+            <label class="sr-only" for="query-input">Search query</label>
+            <input
+              id="query-input"
+              name="q"
+              type="search"
+              placeholder="Search your index..."
+              value="{{ query|default('') }}"
+              autocomplete="off"
+              required
+            />
+            <button type="submit">Search</button>
+          </form>
+          <section id="status" aria-live="polite" aria-busy="false"></section>
+          <section id="results" aria-live="polite"></section>
+        </section>
+        <aside class="llm-panel" aria-label="LLM Assist">
+          <h2>LLM Assist</h2>
+          <p id="llm-status-text" class="llm-status">Checking Ollama...</p>
+          <div class="field" id="llm-model-wrapper">
+            <label for="llm-model">Model</label>
+            <select id="llm-model" disabled>
+              <option value="">Detecting models...</option>
+            </select>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="llm-toggle" />
+            <span>Use LLM for discovery (focused crawl)</span>
+          </label>
+          <div id="llm-instructions" class="llm-instructions" hidden>
+            <p id="llm-instructions-text">Ollama is not ready. Install and run it locally to enable AI-assisted discovery:</p>
+            <p><strong>macOS:</strong></p>
+            <pre><code>brew install --cask ollama
+ollama serve
+ollama pull llama3.1:8b-instruct</code></pre>
+            <p>
+              See the
+              <a href="https://ollama.com/" target="_blank" rel="noopener noreferrer">official Ollama documentation</a>
+              for more details.
+            </p>
+          </div>
+        </aside>
+      </div>
     </main>
     <script>
       const form = document.getElementById("search-form");
       const queryInput = document.getElementById("query-input");
       const statusEl = document.getElementById("status");
       const resultsEl = document.getElementById("results");
+      const llmStatusEl = document.getElementById("llm-status-text");
+      const llmModelSelect = document.getElementById("llm-model");
+      const llmToggle = document.getElementById("llm-toggle");
+      const llmInstructions = document.getElementById("llm-instructions");
+      const llmInstructionsText = document.getElementById("llm-instructions-text");
+      const defaultInstructionsText = llmInstructionsText ? llmInstructionsText.textContent : "";
 
-      async function runSearch(query) {
-        statusEl.textContent = "Searching...";
-        statusEl.setAttribute("aria-busy", "true");
-        resultsEl.innerHTML = "";
-        try {
-          const response = await fetch(`/search?q=${encodeURIComponent(query)}`);
-          if (!response.ok) {
-            throw new Error(`Request failed: ${response.status}`);
-          }
-          const payload = await response.json();
-          statusEl.textContent = `${payload.results.length} result(s)`;
-          renderResults(payload.results);
-        } catch (error) {
-          console.error(error);
-          statusEl.textContent = "Search failed. Check the console for details.";
-        } finally {
-          statusEl.setAttribute("aria-busy", "false");
-        }
+      const SMART_MIN_RESULTS = Number(document.body.dataset.smartMinResults || "5");
+      const POLL_INTERVAL_MS = 4000;
+      const MAX_POLL_ATTEMPTS = 5;
+      const STORAGE_MODEL_KEY = "ollama_model";
+      const STORAGE_TOGGLE_KEY = "smart_use_llm";
+
+      let pollState = null;
+
+      const savedToggle = localStorage.getItem(STORAGE_TOGGLE_KEY);
+      if (savedToggle !== null) {
+        llmToggle.checked = savedToggle === "true";
       }
+
+      llmToggle.addEventListener("change", () => {
+        localStorage.setItem(STORAGE_TOGGLE_KEY, String(llmToggle.checked));
+      });
+
+      llmModelSelect.addEventListener("change", () => {
+        localStorage.setItem(STORAGE_MODEL_KEY, llmModelSelect.value);
+      });
 
       function renderResults(results) {
         if (!results.length) {
@@ -93,6 +130,220 @@
         resultsEl.appendChild(fragment);
       }
 
+      async function fetchLLMStatus() {
+        try {
+          const response = await fetch("/api/llm/status");
+          if (!response.ok) {
+            throw new Error(`Status request failed: ${response.status}`);
+          }
+          const status = await response.json();
+          applyLLMStatus(status);
+        } catch (error) {
+          console.error(error);
+          llmStatusEl.textContent = "Ollama: Unable to determine status";
+          llmInstructions.hidden = false;
+          llmModelSelect.disabled = true;
+          llmToggle.disabled = true;
+        }
+      }
+
+      async function fetchLLMModels() {
+        try {
+          const response = await fetch("/api/llm/models");
+          if (!response.ok) {
+            throw new Error(`Model request failed: ${response.status}`);
+          }
+          const payload = await response.json();
+          populateModelSelect(payload.models || []);
+        } catch (error) {
+          console.error(error);
+          populateModelSelect([]);
+        }
+      }
+
+      function populateModelSelect(models) {
+        llmModelSelect.innerHTML = "";
+        const storedModel = localStorage.getItem(STORAGE_MODEL_KEY) || "";
+        if (!models.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No local models detected";
+          llmModelSelect.appendChild(option);
+          llmModelSelect.disabled = true;
+          if (llmInstructionsText) {
+            llmInstructionsText.textContent =
+              'Ollama is running but no models were found. Pull one (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:';
+          }
+          llmInstructions.hidden = false;
+          return;
+        }
+        if (llmInstructionsText) {
+          llmInstructionsText.textContent = defaultInstructionsText;
+        }
+        llmInstructions.hidden = true;
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Use Ollama default";
+        llmModelSelect.appendChild(placeholder);
+
+        let matched = false;
+        models.forEach((model) => {
+          if (!model || !model.name) {
+            return;
+          }
+          const option = document.createElement("option");
+          option.value = model.name;
+          option.textContent = model.name;
+          if (model.name === storedModel) {
+            option.selected = true;
+            matched = true;
+          }
+          llmModelSelect.appendChild(option);
+        });
+
+        if (!matched && storedModel) {
+          const manualOption = document.createElement("option");
+          manualOption.value = storedModel;
+          manualOption.textContent = `${storedModel} (missing)`;
+          manualOption.selected = true;
+          llmModelSelect.appendChild(manualOption);
+        }
+
+        llmModelSelect.disabled = false;
+      }
+
+      function applyLLMStatus(status) {
+        if (!status || typeof status !== "object") {
+          llmStatusEl.textContent = "Ollama: Unknown";
+          llmInstructions.hidden = false;
+          llmModelSelect.disabled = true;
+          llmToggle.disabled = true;
+          return;
+        }
+        if (!status.installed) {
+          llmStatusEl.textContent = "Ollama: Not detected";
+          if (llmInstructionsText) {
+            llmInstructionsText.textContent = defaultInstructionsText ||
+              "Ollama is not ready. Install and run it locally to enable AI-assisted discovery:";
+          }
+          llmInstructions.hidden = false;
+          llmModelSelect.disabled = true;
+          llmToggle.disabled = true;
+          return;
+        }
+        if (!status.running) {
+          llmStatusEl.textContent = "Ollama: Installed but not running";
+          if (llmInstructionsText) {
+            llmInstructionsText.textContent =
+              'Ollama is installed. Start it locally with "ollama serve" to unlock discovery:';
+          }
+          llmInstructions.hidden = false;
+          llmModelSelect.disabled = true;
+          llmToggle.disabled = true;
+          return;
+        }
+        const hostLabel = status.host ? String(status.host) : "local";
+        llmStatusEl.textContent = `Ollama: Running (${hostLabel})`;
+        if (llmInstructionsText) {
+          llmInstructionsText.textContent = defaultInstructionsText;
+        }
+        llmInstructions.hidden = true;
+        llmToggle.disabled = false;
+        fetchLLMModels();
+      }
+
+      async function performSearch(query, options) {
+        const params = new URLSearchParams();
+        params.set("q", query);
+        params.set("llm", options.useLLM ? "on" : "off");
+        if (options.model) {
+          params.set("model", options.model);
+        }
+        const response = await fetch(`/search?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(`Request failed: ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function cancelPendingPoll() {
+        if (pollState && pollState.timeoutId) {
+          clearTimeout(pollState.timeoutId);
+        }
+        if (pollState) {
+          pollState.cancelled = true;
+        }
+        pollState = null;
+      }
+
+      function startPolling(query, baselineCount, options) {
+        cancelPendingPoll();
+        pollState = {
+          attempts: 0,
+          cancelled: false,
+          bestCount: baselineCount,
+          timeoutId: null,
+        };
+
+        const pollOnce = async () => {
+          if (!pollState || pollState.cancelled) {
+            return;
+          }
+          pollState.attempts += 1;
+          try {
+            const payload = await performSearch(query, options);
+            const count = payload.results.length;
+            if (count > pollState.bestCount) {
+              pollState.bestCount = count;
+              statusEl.textContent = `${count} result(s)`;
+              renderResults(payload.results);
+              if (count >= SMART_MIN_RESULTS) {
+                cancelPendingPoll();
+                return;
+              }
+            }
+          } catch (error) {
+            console.error(error);
+          }
+
+          if (pollState && !pollState.cancelled && pollState.attempts < MAX_POLL_ATTEMPTS) {
+            pollState.timeoutId = window.setTimeout(pollOnce, POLL_INTERVAL_MS);
+          } else {
+            cancelPendingPoll();
+          }
+        };
+
+        pollState.timeoutId = window.setTimeout(pollOnce, POLL_INTERVAL_MS);
+      }
+
+      async function runSearch(query) {
+        cancelPendingPoll();
+        statusEl.textContent = "Searching...";
+        statusEl.setAttribute("aria-busy", "true");
+        resultsEl.innerHTML = "";
+
+        const options = {
+          useLLM: llmToggle.checked,
+          model: llmModelSelect.value.trim(),
+        };
+
+        try {
+          const payload = await performSearch(query, options);
+          statusEl.textContent = `${payload.results.length} result(s)`;
+          renderResults(payload.results);
+
+          if (payload.results.length < SMART_MIN_RESULTS && query) {
+            statusEl.textContent = `${payload.results.length} result(s). Focused crawl running...`;
+            startPolling(query, payload.results.length, options);
+          }
+        } catch (error) {
+          console.error(error);
+          statusEl.textContent = "Search failed. Check the console for details.";
+        } finally {
+          statusEl.setAttribute("aria-busy", "false");
+        }
+      }
+
       form.addEventListener("submit", (event) => {
         event.preventDefault();
         const query = queryInput.value.trim();
@@ -110,6 +361,8 @@
       } else {
         statusEl.textContent = "Enter a search query to get started.";
       }
+
+      fetchLLMStatus();
     </script>
   </body>
 </html>
