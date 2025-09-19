@@ -97,6 +97,38 @@ button {
   min-height: 1.5rem;
 }
 
+.focused-status {
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.focused-status h2 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.focused-status pre {
+  background: rgba(15, 23, 42, 0.05);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lang {
+  font-size: 0.75rem;
+  color: rgba(60, 60, 67, 0.65);
+  margin: 0.25rem 0;
+}
+
 .result {
   padding: 1rem 0;
   border-bottom: 1px solid rgba(60, 60, 67, 0.2);
@@ -197,6 +229,34 @@ button {
 .toggle input[type="checkbox"] {
   width: 1.1rem;
   height: 1.1rem;
+}
+
+.cheat-sheet {
+  margin-top: 1.5rem;
+  background: rgba(37, 99, 235, 0.05);
+  border-radius: 10px;
+  padding: 1rem;
+  font-size: 0.9rem;
+}
+
+.cheat-sheet h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+}
+
+.cheat-sheet ul {
+  padding-left: 1.2rem;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.cheat-sheet code {
+  background: rgba(15, 23, 42, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 .llm-instructions {
