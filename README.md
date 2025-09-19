@@ -46,6 +46,13 @@ make reindex-incremental
 make tail               # follow the focused crawl log in another terminal
 ```
 
+### Index schema upgrades
+
+The incremental indexer now validates the on-disk Whoosh schema before reusing it. If a legacy deployment only contains the
+`text`, `title`, and `url` fields, the index directory is automatically rebuilt so the modern `url`, `lang`, `title`, `h1h2`, and
+`body` fields are available. Existing postings are discarded during this migration, so plan to re-run your crawl or the
+incremental indexer afterwards to repopulate the upgraded schema.
+
 Run CLI searches straight from your terminal:
 
 ```bash
