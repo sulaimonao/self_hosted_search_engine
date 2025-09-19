@@ -17,6 +17,7 @@ __all__ = [
     "domain_from_url",
     "get_top_domains",
     "load_entries",
+    "merge_curated_seeds",
     "record_domains",
 ]
 
@@ -142,3 +143,42 @@ def record_domains(
                 "ts": timestamp,
             }
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def merge_curated_seeds(
+    curated_path: Path, *, store_path: Optional[Path] = None, reason: str = "curated"
+) -> int:
+    """Merge curated seed domains into the append-only store.
+
+    The curated file must be JSONL with at least ``url`` and ``value_prior`` keys.
+    Returns the number of new seed entries written to the store.
+    """
+
+    if not curated_path.exists():
+        return 0
+
+    domains: dict[str, float] = {}
+    with curated_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            url = payload.get("url")
+            domain = domain_from_url(url) if isinstance(url, str) else None
+            if not domain:
+                continue
+            try:
+                value = float(payload.get("value_prior", 0.0))
+            except (TypeError, ValueError):
+                value = 0.0
+            domains[domain] = max(domains.get(domain, 0.0), value)
+
+    if not domains:
+        return 0
+
+    record_domains(domains, query="curated-seeds", reason=reason, path=store_path)
+    return len(domains)

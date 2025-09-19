@@ -37,6 +37,9 @@ def build_settings(
         "AUTOTHROTTLE_ENABLED": _as_bool(os.getenv("CRAWL_AUTOTHROTTLE"), True),
         "FEED_EXPORT_ENCODING": "utf-8",
         "ITEM_PIPELINES": {"crawler.pipelines.NormalizePipeline": 300},
+        "DOWNLOADER_MIDDLEWARES": {
+            "crawler.middlewares.AdaptiveDelayMiddleware": 850,
+        },
     }
 
     if use_playwright:

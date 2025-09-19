@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -44,10 +46,39 @@ class NormalizePipeline:
             if url in self._seen_urls:
                 return item
             self._seen_urls.add(url)
+        canonical = item.get("canonical_url")
+        if isinstance(canonical, str) and canonical:
+            canonical_url = canonical
+        else:
+            canonical_url = url
+        lang = item.get("lang") if isinstance(item.get("lang"), str) else ""
+        text = item.get("text", "")
+        if isinstance(text, str):
+            body_text = text
+        else:
+            body_text = ""
+        content_hash = hashlib.sha256(body_text.encode("utf-8", errors="ignore")).hexdigest()
+        fetched_at = item.get("fetched_at")
+        try:
+            fetched_at_ts = float(fetched_at) if fetched_at is not None else time.time()
+        except (TypeError, ValueError):
+            fetched_at_ts = time.time()
+        outlinks = item.get("outlinks") or []
+        if isinstance(outlinks, str):
+            outlinks_list = [part.strip() for part in outlinks.split(",") if part.strip()]
+        elif isinstance(outlinks, list):
+            outlinks_list = [str(link) for link in outlinks[:200]]
+        else:
+            outlinks_list = []
         normalized = {
             "url": url,
+            "canonical_url": canonical_url,
             "title": item.get("title", ""),
-            "text": item.get("text", ""),
+            "text": body_text,
+            "lang": lang or "",
+            "content_hash": content_hash,
+            "fetched_at": fetched_at_ts,
+            "outlinks": outlinks_list,
         }
         self._normalized_handle.write(json.dumps(normalized, ensure_ascii=False) + "\n")
         self._normalized_handle.flush()

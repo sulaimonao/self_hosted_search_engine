@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
+from urllib.parse import urlparse
 
 from crawler.frontier import Candidate, build_frontier
 from crawler.run import FocusedCrawler
-from search.seeds import get_top_domains
+from search.seeds import DEFAULT_SEEDS_PATH, get_top_domains
 
 from ..config import AppConfig
 from ..indexer.incremental import incremental_index
@@ -79,6 +81,36 @@ def run_focused_crawl(
     return stats
 
 
+def _load_curated_values(path: Path) -> dict[str, float]:
+    values: dict[str, float] = {}
+    if not path.exists():
+        return values
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                url = payload.get("url")
+                if not isinstance(url, str):
+                    continue
+                domain = urlparse(url).netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+                try:
+                    score = float(payload.get("value_prior", 0.0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                values[domain] = max(values.get(domain, 0.0), score)
+    except OSError:
+        return values
+    return values
+
+
 def _get_seed_candidates(
     query: str,
     budget: int,
@@ -95,6 +127,29 @@ def _get_seed_candidates(
         seed_domains = get_top_domains(limit=25)
     except Exception:  # pragma: no cover - defensive
         seed_domains = []
+    value_overrides: dict[str, float] = {}
+    data_root = Path(os.getenv("DATA_DIR", "data"))
+    value_overrides.update(_load_curated_values(data_root / "seeds" / "curated_seeds.jsonl"))
+    try:
+        with DEFAULT_SEEDS_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                domain = (payload.get("domain") or "").strip().lower()
+                if not domain:
+                    continue
+                try:
+                    score = float(payload.get("score", 0.0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                value_overrides[domain] = max(value_overrides.get(domain, 0.0), score)
+    except OSError:
+        pass
     llm_urls: List[str] = []
     if use_llm:
         try:
@@ -114,8 +169,7 @@ def _get_seed_candidates(
         extra_urls=merged_extra,
         seed_domains=seed_domains,
         budget=max(budget * 4, 40),
-        cooldowns=None,
-        cooldown_seconds=config.smart_trigger_cooldown,
+        value_overrides=value_overrides,
     )
     if not candidates:
         fallback = [

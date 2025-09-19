@@ -7,19 +7,25 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
-from urllib.parse import urlparse
-from urllib.robotparser import RobotFileParser
+from urllib.parse import urljoin, urlparse
 
 try:
     import httpx
 except ImportError:  # pragma: no cover - optional dependency
     httpx = None
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:  # pragma: no cover - optional dependency
+    BeautifulSoup = None
+
 from backend.app.metrics import metrics
+from frontier import ContentFingerprint, RobotsCache, UrlBloom
 
 from .frontier import (
     Candidate,
@@ -46,6 +52,8 @@ class PageResult:
     html: str
     title: str
     fetched_at: float
+    fingerprint: ContentFingerprint
+    outlinks: List[str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,13 +80,6 @@ async def _maybe_llm_urls(query: str, use_llm: bool, model: Optional[str]) -> Li
     finally:
         metrics.record_llm_seed_time((time.perf_counter() - start) * 1000)
     return urls
-
-
-def _robots_parser(domain: str, content: str, url: str) -> RobotFileParser:
-    parser = RobotFileParser()
-    parser.set_url(url)
-    parser.parse(content.splitlines())
-    return parser
 
 
 def _extract_title(html: str) -> str:
@@ -122,9 +123,19 @@ async def _fetch_with_playwright(url: str) -> Optional[PageResult]:
             html = await page.content()
             title = await page.title()
             status = response.status if response else 200
+            fingerprint = ContentFingerprint.from_text(html)
+            outlinks = _extract_outlinks(url, html)
             await browser.close()
             metrics.record_playwright_use()
-            return PageResult(url=url, status=status, html=html, title=title, fetched_at=time.time())
+            return PageResult(
+                url=url,
+                status=status,
+                html=html,
+                title=title,
+                fetched_at=time.time(),
+                fingerprint=fingerprint,
+                outlinks=outlinks,
+            )
     except Exception as exc:
         LOGGER.debug("Playwright fetch failed for %s: %s", url, exc)
         return None
@@ -141,6 +152,29 @@ def _should_use_playwright(html: str) -> bool:
     lowered = html.lower()
     hints = ["#/", "data-reactroot", "ng-app", "id=\"app\"", "window.__INITIAL_STATE__", "<app-root"]
     return any(hint in lowered for hint in hints)
+
+
+def _extract_outlinks(base_url: str, html: str, limit: int = 100) -> List[str]:
+    links: List[str] = []
+    if BeautifulSoup:
+        soup = BeautifulSoup(html, "lxml")
+        for element in soup.find_all("a"):
+            href = element.get("href")
+            if not href:
+                continue
+            candidate = urljoin(base_url, href)
+            links.append(candidate)
+            if len(links) >= limit:
+                break
+    else:
+        for match in re.finditer(r"href=\"([^\"]+)\"", html, flags=re.IGNORECASE):
+            href = match.group(1)
+            if not href:
+                continue
+            links.append(urljoin(base_url, href))
+            if len(links) >= limit:
+                break
+    return links
 
 
 class FocusedCrawler:
@@ -162,7 +196,9 @@ class FocusedCrawler:
         self.cooldowns = CrawlCooldowns(out_dir.parent / "cooldowns.json")
         self.results: List[PageResult] = []
         self.visited: set[str] = set()
-        self.robot_cache: Dict[str, RobotFileParser] = {}
+        self.robots = RobotsCache(respect=RESPECT_ROBOTS, user_agent=USER_AGENT)
+        self._url_filter = UrlBloom(capacity=max(1024, budget * 10))
+        self._content_seen: set[str] = set()
         self._domain_locks: Dict[str, asyncio.Semaphore] = {}
         self._domain_lock_guard: Optional[asyncio.Lock] = None
         self._results_lock: Optional[asyncio.Lock] = None
@@ -231,6 +267,10 @@ class FocusedCrawler:
                 queue.task_done()
                 continue
             url = candidate.url
+            if url in self._url_filter:
+                queue.task_done()
+                continue
+            self._url_filter.add(url)
             if url in self.visited:
                 queue.task_done()
                 continue
@@ -265,12 +305,16 @@ class FocusedCrawler:
         url = candidate.url
         if url in self.visited:
             return None
-        if RESPECT_ROBOTS and not await self._allowed(client, url):
+        if RESPECT_ROBOTS and not await self.robots.allowed_async(client, url):
             LOGGER.debug("blocked by robots: %s", url)
             return None
         if PLAYWRIGHT_MODE in {"1", "true", "yes", "on"}:
             replacement = await _fetch_with_playwright(url)
             if replacement:
+                fingerprint = replacement.fingerprint
+                if fingerprint.md5 in self._content_seen:
+                    return None
+                self._content_seen.add(fingerprint.md5)
                 metrics.record_crawl_pages(1)
                 return replacement
         backoff = 1.0
@@ -281,34 +325,36 @@ class FocusedCrawler:
                 status = response.status_code
                 html = response.text
                 title = _extract_title(html)
+                fingerprint = ContentFingerprint.from_text(html)
+                if fingerprint.md5 in self._content_seen:
+                    return None
                 metrics.record_crawl_pages(1)
                 if PLAYWRIGHT_MODE != "0" and _should_use_playwright(html):
                     replacement = await _fetch_with_playwright(str(response.url))
                     if replacement:
+                        fingerprint = replacement.fingerprint
+                        if fingerprint.md5 in self._content_seen:
+                            return None
+                        self._content_seen.add(fingerprint.md5)
                         return replacement
-                return PageResult(url=str(response.url), status=status, html=html, title=title, fetched_at=time.time())
+                outlinks = _extract_outlinks(str(response.url), html)
+                self._content_seen.add(fingerprint.md5)
+                return PageResult(
+                    url=str(response.url),
+                    status=status,
+                    html=html,
+                    title=title,
+                    fetched_at=time.time(),
+                    fingerprint=fingerprint,
+                    outlinks=outlinks,
+                )
             except Exception as exc:
                 last_error = exc
                 await asyncio.sleep(backoff)
-                backoff *= 2
+                backoff = min(backoff * 2, 8.0)
         if last_error:
             LOGGER.debug("failed to fetch %s: %s", url, last_error)
         return None
-
-    async def _allowed(self, client: httpx.AsyncClient, url: str) -> bool:
-        parsed = urlparse(url)
-        key = f"{parsed.scheme}://{parsed.netloc}"
-        parser = self.robot_cache.get(key)
-        if parser is None:
-            robots_url = f"{key}/robots.txt"
-            try:
-                response = await client.get(robots_url, timeout=5.0)
-                content = response.text if response.status_code < 400 else ""
-            except Exception:
-                content = ""
-            parser = _robots_parser(parsed.netloc, content, robots_url)
-            self.robot_cache[key] = parser
-        return parser.can_fetch(USER_AGENT, url)
 
     def _persist_results(self) -> None:
         if not self.results:
@@ -319,19 +365,22 @@ class FocusedCrawler:
         path = self.out_dir / f"focused_{timestamp}.jsonl"
         with path.open("w", encoding="utf-8") as handle:
             for result in self.results:
-                handle.write(
-                    json.dumps(
-                        {
-                            "query": self.query,
-                            "url": result.url,
-                            "status": result.status,
-                            "title": result.title,
-                            "html": result.html,
-                            "fetched_at": result.fetched_at,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
+                    handle.write(
+                        json.dumps(
+                            {
+                                "query": self.query,
+                                "url": result.url,
+                                "status": result.status,
+                                "title": result.title,
+                                "html": result.html,
+                                "fetched_at": result.fetched_at,
+                                "content_hash": result.fingerprint.md5,
+                                "simhash": result.fingerprint.simhash,
+                                "outlinks": result.outlinks,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
                 )
         LOGGER.info("Persisted %s page(s) to %s", len(self.results), path)
         self.last_output_path = path

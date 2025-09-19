@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -10,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 from typing import List, Optional
+
+from search.seeds import get_top_domains
 
 from .query import search as basic_search
 
@@ -20,6 +23,7 @@ SMART_USE_LLM = os.getenv("SMART_USE_LLM", "false").lower() in {"1", "true", "ye
 TRIGGER_COOLDOWN_SECONDS = max(0, int(os.getenv("SMART_TRIGGER_COOLDOWN", "60")))
 
 _FOCUSED_SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "crawl_focused.py"
+_CURATED_PATH = Path(os.getenv("CURATED_SEEDS_PATH", "data/seeds/curated_seeds.jsonl"))
 _TRIGGER_HISTORY: dict[str, float] = {}
 _TRIGGER_LOCK = threading.Lock()
 
@@ -43,6 +47,33 @@ def _mark_triggered(query: str) -> None:
         _TRIGGER_HISTORY[query] = time.time()
 
 
+def _load_curated_seeds(limit: int = 10) -> List[str]:
+    if not _CURATED_PATH.exists():
+        return []
+    seeds: List[tuple[float, str]] = []
+    try:
+        with _CURATED_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                url = payload.get("url")
+                if isinstance(url, str):
+                    try:
+                        value = float(payload.get("value_prior", 0.0))
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    seeds.append((value, url))
+    except OSError:
+        return []
+    seeds.sort(reverse=True)
+    return [url for _, url in seeds[:limit]]
+
+
 def _schedule_crawl(query: str, *, use_llm: bool, model: Optional[str]) -> bool:
     if not _FOCUSED_SCRIPT.exists():
         LOGGER.warning("Focused crawl script missing at %s", _FOCUSED_SCRIPT)
@@ -56,6 +87,16 @@ def _schedule_crawl(query: str, *, use_llm: bool, model: Optional[str]) -> bool:
     elif model:
         # Allow specifying a model even if the UI toggle is off for this request.
         cmd.extend(["--model", model])
+
+    curated_urls = _load_curated_seeds(limit=8)
+    for url in curated_urls:
+        cmd.extend(["--extra-seed", url])
+
+    for domain in get_top_domains(limit=5):
+        cmd.extend(["--extra-seed", f"https://{domain}"])
+
+    if _CURATED_PATH.exists():
+        cmd.extend(["--curated-path", str(_CURATED_PATH)])
 
     try:
         subprocess.Popen(  # noqa: S603 - deliberate subprocess execution
@@ -98,5 +139,6 @@ def smart_search(
 
     if _schedule_crawl(q, use_llm=effective_use_llm, model=model):
         _mark_triggered(q)
+        LOGGER.info("smart search triggered focused crawl for '%s' (llm=%s)", q, effective_use_llm)
 
     return results

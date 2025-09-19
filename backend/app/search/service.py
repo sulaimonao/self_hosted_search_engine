@@ -8,6 +8,7 @@ import time
 from typing import Optional, Tuple
 
 from search import query as query_module
+from rank import blend_results, maybe_rerank
 from ..config import AppConfig
 from ..indexer.incremental import ensure_index
 from ..jobs.focused_crawl import FocusedCrawlManager
@@ -53,11 +54,24 @@ class SearchService:
         metrics.record_search_latency(duration_ms)
 
         q = (query or "").strip()
+        blended = blend_results(results)
+        llm_enabled = self.config.use_llm_rerank if use_llm is None else bool(use_llm)
+        if llm_enabled:
+            reranked = maybe_rerank(q, blended, enabled=True, model=model)
+            if reranked is not blended:
+                metrics.record_llm_usage_event()
+            blended = reranked
+
         job_id: Optional[str] = None
-        if q and len(results) < self.config.smart_min_results:
+        triggered = False
+        if q and len(blended) < self.config.smart_min_results:
             effective_use_llm = bool(use_llm)
             job_id = self.manager.schedule(q, effective_use_llm, model)
-        return results, job_id
+            if job_id:
+                triggered = True
+                metrics.record_focused_enqueue()
+        metrics.record_query_event(len(blended), triggered, duration_ms)
+        return blended, job_id
 
     def last_index_time(self) -> int:
         return self.manager.last_index_time()
