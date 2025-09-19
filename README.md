@@ -38,10 +38,12 @@ make crawl URL="https://www.vmware.com/"
 make crawl SEEDS_FILE="/path/to/seeds.txt"
 ```
 
-The crawler writes raw responses and normalized text to `data/crawl/`. Once you have data, rebuild the index:
+The crawler writes raw responses and normalized text to `data/crawl/`. When raw data changes you can normalize and index incrementally:
 
 ```bash
-make reindex
+make normalize
+make reindex-incremental
+make tail               # follow the focused crawl log in another terminal
 ```
 
 Run CLI searches straight from your terminal:
@@ -68,10 +70,20 @@ app schedules `bin/crawl_focused.py` in the background and immediately returns t
 Results in the browser update automatically: if the first response returned fewer than the configured minimum, the UI polls the
 `/search` endpoint every four seconds (up to ~20 seconds) and re-renders as new hits arrive.
 
+With the cold-start upgrades the pipeline no longer requires a manual `make crawl` kick-off. When the index is empty the first search request:
+
+- Schedules a focused crawl using `python -m crawler.run` with the configured budget.
+- Streams crawler logs to `data/logs/focused.log` and exposes them via `/api/focused/status`.
+- Normalizes every newly fetched page with Trafilatura + language detection and incrementally indexes changed documents.
+- Emits `last_index_time` so the browser can auto-refresh results as soon as new hits land.
+
+You can tail progress from the CLI with `make tail` or fetch metrics from `/metrics` to verify crawl/index counters.
+
 To trigger a run manually, supply a query via `make focused`:
 
 ```bash
 make focused Q="postgres vacuum best practices" USE_LLM=1 MODEL="llama3.1:8b-instruct"
+make tail
 ```
 
 The command honours `.env`, allows a one-off `BUDGET=...` override, and respects `CRAWL_RESPECT_ROBOTS` unless you turn it off.
@@ -147,14 +159,16 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 | `CRAWL_RESPECT_ROBOTS` | `true` | Toggle robots.txt compliance |
 | `CRAWL_ALLOW_LIST` | _(empty)_ | Comma-separated substrings URLs must contain |
 | `CRAWL_DENY_LIST` | _(empty)_ | Comma-separated substrings URLs must not contain |
-| `CRAWL_USE_PLAYWRIGHT` | `false` | Render every page with Playwright (JS-heavy sites) |
+| `CRAWL_USE_PLAYWRIGHT` | `auto` | `0` disables, `1` forces, `auto` re-renders JS-heavy pages |
 | `CRAWL_DOWNLOAD_DELAY` | `0.25` | Delay between requests in seconds |
 | `CRAWL_CONCURRENT_REQUESTS` | `8` | Global Scrapy concurrency |
 | `CRAWL_CONCURRENT_PER_DOMAIN` | `4` | Per-domain concurrency cap |
 | `SEARCH_DEFAULT_LIMIT` | `20` | Default number of web UI results |
-| `SMART_MIN_RESULTS` | `5` | Minimum results before auto-triggering a focused crawl |
-| `FOCUSED_CRAWL_BUDGET` | `50` | Page budget for each focused crawl run |
-| `SMART_TRIGGER_COOLDOWN` | `60` | Seconds to wait before re-running a crawl for the same query |
+| `SMART_MIN_RESULTS` | `1` | Minimum results before auto-triggering a focused crawl |
+| `FOCUSED_CRAWL_ENABLED` | `1` | Enable the cold-start focused crawl pipeline |
+| `FOCUSED_CRAWL_BUDGET` | `10` | Page budget for each focused crawl run |
+| `SMART_TRIGGER_COOLDOWN` | `900` | Seconds to wait before re-running a crawl for the same query |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
 | `SMART_USE_LLM` | `false` | Default toggle for LLM-assisted discovery |
 | `SEEDS_PATH` | `data/seeds.jsonl` | Append-only JSONL store of known helpful domains |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
