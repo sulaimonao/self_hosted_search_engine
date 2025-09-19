@@ -24,6 +24,10 @@
             />
             <button type="submit">Search</button>
           </form>
+          <label class="toggle">
+            <input type="checkbox" id="llm-toggle" />
+            <span>Use LLM for discovery (focused crawl)</span>
+          </label>
           <section id="status" aria-live="polite" aria-busy="false"></section>
           <section id="focused-status" class="focused-status" aria-live="polite" aria-busy="false" hidden>
             <h2>Focused crawl activity</h2>
@@ -32,19 +36,84 @@
           </section>
           <section id="results" aria-live="polite"></section>
         </section>
-        <aside class="llm-panel" aria-label="LLM Assist">
-          <h2>LLM Assist</h2>
-          <p id="llm-status-text" class="llm-status">Checking Ollama...</p>
-          <div class="field" id="llm-model-wrapper">
-            <label for="llm-model">Model</label>
-            <select id="llm-model" disabled>
-              <option value="">Detecting models...</option>
-            </select>
+        <aside class="assist-panel" aria-label="AI Assist">
+          <div class="assist-header">
+            <h2>AI Assist</h2>
+            <p id="llm-status-text" class="llm-status">Checking Ollama...</p>
+            <div class="field">
+              <label for="llm-model">Model</label>
+              <select id="llm-model" disabled>
+                <option value="">Detecting models...</option>
+              </select>
+            </div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" id="llm-toggle" />
-            <span>Use LLM for discovery (focused crawl)</span>
-          </label>
+          <div class="assist-tabs" role="tablist">
+            <button
+              type="button"
+              class="assist-tab active"
+              id="chat-tab"
+              data-tab="chat"
+              role="tab"
+              aria-controls="chat-panel"
+              aria-selected="true"
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              class="assist-tab"
+              id="research-tab"
+              data-tab="research"
+              role="tab"
+              aria-controls="research-panel"
+              aria-selected="false"
+            >
+              Deep Research
+            </button>
+          </div>
+          <section id="chat-panel" class="tab-panel active" role="tabpanel" aria-labelledby="chat-tab">
+            <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+            <form id="chat-form" class="chat-form">
+              <label class="sr-only" for="chat-input">Ask the assistant</label>
+              <textarea id="chat-input" rows="3" placeholder="Ask the local model…" required></textarea>
+              <div class="chat-actions">
+                <button type="submit" id="chat-send">Send</button>
+              </div>
+            </form>
+          </section>
+          <section
+            id="research-panel"
+            class="tab-panel"
+            role="tabpanel"
+            aria-labelledby="research-tab"
+            hidden
+          >
+            <form id="research-form" class="research-form">
+              <label for="research-query">Research question</label>
+              <textarea
+                id="research-query"
+                rows="4"
+                placeholder="What would you like to investigate?"
+                required
+              ></textarea>
+              <div class="field-group">
+                <label for="research-budget">Crawl budget</label>
+                <input id="research-budget" type="number" min="1" max="100" value="20" />
+              </div>
+              <button type="submit" id="research-start">Start research</button>
+            </form>
+            <section class="research-status" aria-live="polite">
+              <h3>Job activity</h3>
+              <pre id="research-log"></pre>
+            </section>
+            <article id="research-report" class="research-report" hidden>
+              <header>
+                <h3>Research report</h3>
+                <a id="research-report-download" href="#" download>Save to file</a>
+              </header>
+              <div id="research-report-content"></div>
+            </article>
+          </section>
           <div id="llm-instructions" class="llm-instructions" hidden>
             <p id="llm-instructions-text">Ollama is not ready. Install and run it locally to enable AI-assisted discovery:</p>
             <p><strong>macOS:</strong></p>
@@ -68,349 +137,663 @@ ollama pull llama3.1:8b-instruct</code></pre>
         </aside>
       </div>
     </main>
-    <script>
-      const form = document.getElementById("search-form");
-      const queryInput = document.getElementById("query-input");
-      const statusEl = document.getElementById("status");
-      const resultsEl = document.getElementById("results");
-      const focusedSection = document.getElementById("focused-status");
-      const focusedMessage = document.getElementById("focused-message");
-      const focusedLog = document.getElementById("focused-log");
-      const llmStatusEl = document.getElementById("llm-status-text");
-      const llmModelSelect = document.getElementById("llm-model");
-      const llmToggle = document.getElementById("llm-toggle");
-      const llmInstructions = document.getElementById("llm-instructions");
-      const llmInstructionsText = document.getElementById("llm-instructions-text");
-      const defaultInstructionsText = llmInstructionsText ? llmInstructionsText.textContent : "";
+    
+<script>
+  const form = document.getElementById("search-form");
+  const queryInput = document.getElementById("query-input");
+  const statusEl = document.getElementById("status");
+  const resultsEl = document.getElementById("results");
+  const focusedSection = document.getElementById("focused-status");
+  const focusedMessage = document.getElementById("focused-message");
+  const focusedLog = document.getElementById("focused-log");
+  const llmStatusEl = document.getElementById("llm-status-text");
+  const llmModelSelect = document.getElementById("llm-model");
+  const llmToggle = document.getElementById("llm-toggle");
+  const llmInstructions = document.getElementById("llm-instructions");
+  const llmInstructionsText = document.getElementById("llm-instructions-text");
+  const defaultInstructionsText = llmInstructionsText ? llmInstructionsText.textContent : "";
+  const chatTabs = document.querySelectorAll(".assist-tab");
+  const chatPanel = document.getElementById("chat-panel");
+  const researchPanel = document.getElementById("research-panel");
+  const chatMessagesEl = document.getElementById("chat-messages");
+  const chatForm = document.getElementById("chat-form");
+  const chatInput = document.getElementById("chat-input");
+  const chatSend = document.getElementById("chat-send");
+  const researchForm = document.getElementById("research-form");
+  const researchQuery = document.getElementById("research-query");
+  const researchBudget = document.getElementById("research-budget");
+  const researchLog = document.getElementById("research-log");
+  const researchReport = document.getElementById("research-report");
+  const researchReportContent = document.getElementById("research-report-content");
+  const researchReportDownload = document.getElementById("research-report-download");
 
-      const SMART_MIN_RESULTS = Number(document.body.dataset.smartMinResults || "1");
-      const STORAGE_MODEL_KEY = "ollama_model";
-      const STORAGE_TOGGLE_KEY = "smart_use_llm";
+  const SMART_MIN_RESULTS = Number(document.body.dataset.smartMinResults || "1");
+  const STORAGE_MODEL_KEY = "ollama_model";
+  const STORAGE_TOGGLE_KEY = "smart_use_llm";
 
-      const state = {
-        pollTimer: null,
-        indexTimer: null,
-        baselineIndexTime: 0,
-        latestIndexTime: 0,
-        autoRefresh: false,
-        lastQuery: queryInput.value.trim(),
-        lastParams: "",
-      };
+  const state = {
+    searchJobId: null,
+    searchJobTimer: null,
+    indexTimer: null,
+    baselineIndexTime: 0,
+    latestIndexTime: 0,
+    autoRefresh: false,
+    lastQuery: queryInput.value.trim(),
+    lastParams: "",
+    chatMessages: [],
+    researchJobId: null,
+    researchPollTimer: null,
+  };
 
-      const savedToggle = localStorage.getItem(STORAGE_TOGGLE_KEY);
-      if (savedToggle !== null) {
-        llmToggle.checked = savedToggle === "true";
+  function setTab(tabId) {
+    const panels = { chat: chatPanel, research: researchPanel };
+    chatTabs.forEach((button) => {
+      const active = button.dataset.tab === tabId;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      const panel = panels[button.dataset.tab];
+      if (panel) {
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
       }
+    });
+  }
 
-      llmToggle.addEventListener("change", () => {
-        localStorage.setItem(STORAGE_TOGGLE_KEY, String(llmToggle.checked));
-      });
+  chatTabs.forEach((button) => {
+    button.addEventListener("click", () => setTab(button.dataset.tab));
+  });
 
-      llmModelSelect.addEventListener("change", () => {
-        localStorage.setItem(STORAGE_MODEL_KEY, llmModelSelect.value);
-      });
+  const savedToggle = localStorage.getItem(STORAGE_TOGGLE_KEY);
+  if (savedToggle !== null) {
+    llmToggle.checked = savedToggle === "true";
+  }
 
-      function updateStatus(text, busy = false) {
-        statusEl.textContent = text;
-        statusEl.setAttribute("aria-busy", busy ? "true" : "false");
+  llmToggle.addEventListener("change", () => {
+    localStorage.setItem(STORAGE_TOGGLE_KEY, String(llmToggle.checked));
+  });
+
+  llmModelSelect.addEventListener("change", () => {
+    localStorage.setItem(STORAGE_MODEL_KEY, llmModelSelect.value);
+  });
+
+  function updateStatus(text, busy = false) {
+    statusEl.textContent = text;
+    statusEl.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
+  function escapeHTML(text) {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function formatPlain(text) {
+    return escapeHTML(text).replace(/\n/g, "<br>");
+  }
+
+  function formatInline(text) {
+    let safe = escapeHTML(text);
+    safe = safe.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    safe = safe.replace(/(https?:\/\/[^\s)]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    return safe;
+  }
+
+  function renderMarkdown(markdown) {
+    const lines = markdown.split(/\r?\n/);
+    const html = [];
+    let inList = false;
+    const closeList = () => {
+      if (inList) {
+        html.push("</ul>");
+        inList = false;
       }
-
-      function renderResults(results) {
-        if (!results.length) {
-          resultsEl.innerHTML = '<p class="empty">No results yet. Trigger a crawl or wait for focused discovery.</p>';
-          return;
+    };
+    for (const line of lines) {
+      if (line.startsWith("# ")) {
+        closeList();
+        html.push(`<h2>${formatInline(line.slice(2))}</h2>`);
+      } else if (line.startsWith("## ")) {
+        closeList();
+        html.push(`<h3>${formatInline(line.slice(3))}</h3>`);
+      } else if (line.startsWith("### ")) {
+        closeList();
+        html.push(`<h4>${formatInline(line.slice(4))}</h4>`);
+      } else if (line.startsWith("- ")) {
+        if (!inList) {
+          html.push("<ul>");
+          inList = true;
         }
-        const fragment = document.createDocumentFragment();
-        results.forEach((result) => {
-          const article = document.createElement("article");
-          article.className = "result";
+        html.push(`<li>${formatInline(line.slice(2))}</li>`);
+      } else if (!line.trim()) {
+        closeList();
+      } else {
+        closeList();
+        html.push(`<p>${formatInline(line)}</p>`);
+      }
+    }
+    closeList();
+    return html.join("\n");
+  }
 
-          const heading = document.createElement("h2");
-          const link = document.createElement("a");
-          link.href = result.url;
-          link.textContent = result.title || result.url;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          heading.appendChild(link);
-          article.appendChild(heading);
+  function renderResults(results) {
+    if (!results.length) {
+      resultsEl.innerHTML = '<p class="empty">No results yet. Trigger a crawl or wait for focused discovery.</p>';
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    results.forEach((result) => {
+      const article = document.createElement("article");
+      article.className = "result";
 
-          const url = document.createElement("p");
-          url.className = "url";
-          url.textContent = result.url || "";
-          article.appendChild(url);
+      const heading = document.createElement("h2");
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.textContent = result.title || result.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      heading.appendChild(link);
+      article.appendChild(heading);
 
-          if (result.lang) {
-            const lang = document.createElement("p");
-            lang.className = "lang";
-            lang.textContent = `Language: ${result.lang}`;
-            article.appendChild(lang);
-          }
+      const url = document.createElement("p");
+      url.className = "url";
+      url.textContent = result.url || "";
+      article.appendChild(url);
 
-          if (result.snippet) {
-            const snippet = document.createElement("p");
-            snippet.className = "snippet";
-            snippet.innerHTML = result.snippet;
-            article.appendChild(snippet);
-          }
-
-          const score = document.createElement("p");
-          score.className = "score";
-          score.textContent = `Score: ${Number(result.score || 0).toFixed(3)}`;
-          article.appendChild(score);
-
-          fragment.appendChild(article);
-        });
-        resultsEl.innerHTML = "";
-        resultsEl.appendChild(fragment);
+      if (result.lang) {
+        const lang = document.createElement("p");
+        lang.className = "lang";
+        lang.textContent = `Language: ${result.lang}`;
+        article.appendChild(lang);
       }
 
-      function renderFocusedLog(lines) {
-        focusedLog.textContent = lines.length ? lines.join("\n") : "Waiting for crawler output...";
+      if (result.snippet) {
+        const snippet = document.createElement("p");
+        snippet.className = "snippet";
+        snippet.innerHTML = result.snippet;
+        article.appendChild(snippet);
       }
 
-      function stopPolling() {
-        if (state.pollTimer) {
-          clearInterval(state.pollTimer);
-          state.pollTimer = null;
-        }
-        if (state.indexTimer) {
-          clearInterval(state.indexTimer);
-          state.indexTimer = null;
-        }
+      const score = document.createElement("p");
+      score.className = "score";
+      score.textContent = `Score: ${Number(result.score || 0).toFixed(3)}`;
+      article.appendChild(score);
+
+      fragment.appendChild(article);
+    });
+    resultsEl.innerHTML = "";
+    resultsEl.appendChild(fragment);
+  }
+
+  function renderFocusedLog(lines, message) {
+    focusedLog.textContent = lines.length ? lines.join("\n") : "Waiting for crawler output...";
+    focusedMessage.textContent = message;
+  }
+
+  function stopSearchPolling() {
+    if (state.searchJobTimer) {
+      clearInterval(state.searchJobTimer);
+      state.searchJobTimer = null;
+    }
+    if (state.indexTimer) {
+      clearInterval(state.indexTimer);
+      state.indexTimer = null;
+    }
+    state.searchJobId = null;
+    focusedSection.hidden = true;
+    focusedSection.setAttribute("aria-busy", "false");
+    renderFocusedLog([], "Focused crawl idle.");
+  }
+
+  function startSearchPolling(jobId, baseline) {
+    state.searchJobId = jobId;
+    state.baselineIndexTime = baseline || 0;
+    state.latestIndexTime = baseline || 0;
+    state.autoRefresh = true;
+    focusedSection.hidden = false;
+    focusedSection.setAttribute("aria-busy", "true");
+    renderFocusedLog([], "Focused crawl queued…");
+    pollSearchJob();
+    if (state.searchJobTimer) {
+      clearInterval(state.searchJobTimer);
+    }
+    if (state.indexTimer) {
+      clearInterval(state.indexTimer);
+    }
+    state.searchJobTimer = setInterval(pollSearchJob, 3000);
+    state.indexTimer = setInterval(checkIndexUpdate, 4000);
+  }
+
+  async function pollSearchJob() {
+    if (!state.searchJobId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/jobs/${state.searchJobId}/status`);
+      if (!response.ok) {
+        throw new Error(`Job status failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      const tail = Array.isArray(payload.logs_tail) ? payload.logs_tail.slice(-3) : [];
+      const stateText = payload.state === "running"
+        ? "Focused crawl running. New results will appear automatically."
+        : payload.state === "done"
+        ? "Focused crawl finished. Refreshing results…"
+        : payload.state === "error"
+        ? "Focused crawl failed. Check logs."
+        : "Focused crawl queued…";
+      renderFocusedLog(tail, stateText);
+      if (payload.state === "error") {
         state.autoRefresh = false;
-        focusedSection.hidden = true;
         focusedSection.setAttribute("aria-busy", "false");
-        renderFocusedLog([]);
       }
+    } catch (error) {
+      console.error(error);
+      renderFocusedLog(["Unable to read focused crawl log."], "Status unavailable.");
+    }
+  }
 
-      async function fetchFocusedStatus() {
-        try {
-          const response = await fetch("/api/focused/status");
-          if (!response.ok) {
-            throw new Error(`Status request failed: ${response.status}`);
-          }
-          const payload = await response.json();
-          const logTail = Array.isArray(payload.log_tail) ? payload.log_tail.slice(-3) : [];
-          renderFocusedLog(logTail);
-          focusedMessage.textContent = payload.running
-            ? "Focused crawl running. New results will appear automatically."
-            : "Focused crawl finished. Refreshing results…";
-        } catch (error) {
-          console.error(error);
-          renderFocusedLog(["Unable to read focused crawl log."]);
-        }
+  async function checkIndexUpdate() {
+    try {
+      const response = await fetch("/api/focused/last_index_time");
+      if (!response.ok) {
+        throw new Error(`Index status failed: ${response.status}`);
       }
-
-      async function checkIndexUpdate() {
-        try {
-          const response = await fetch("/api/focused/last_index_time");
-          if (!response.ok) {
-            throw new Error(`Index status failed: ${response.status}`);
-          }
-          const payload = await response.json();
-          const value = Number(payload.last_index_time || 0);
-          state.latestIndexTime = Math.max(state.latestIndexTime, value);
-          if (state.autoRefresh && value > state.baselineIndexTime) {
-            state.autoRefresh = false;
-            await runSearch({ auto: true });
-          }
-        } catch (error) {
-          console.error(error);
-        }
+      const payload = await response.json();
+      const value = Number(payload.last_index_time || 0);
+      state.latestIndexTime = Math.max(state.latestIndexTime, value);
+      if (state.autoRefresh && value > state.baselineIndexTime) {
+        state.autoRefresh = false;
+        await runSearch({ auto: true });
       }
+    } catch (error) {
+      console.error(error);
+    }
+  }
 
-      function startPolling(baseline) {
-        state.baselineIndexTime = baseline || 0;
-        state.latestIndexTime = baseline || 0;
-        state.autoRefresh = true;
-        if (state.pollTimer) {
-          clearInterval(state.pollTimer);
-        }
-        if (state.indexTimer) {
-          clearInterval(state.indexTimer);
-        }
-        focusedSection.hidden = false;
-        focusedSection.setAttribute("aria-busy", "true");
-        renderFocusedLog([]);
-        fetchFocusedStatus();
-        state.pollTimer = setInterval(fetchFocusedStatus, 3000);
-        state.indexTimer = setInterval(checkIndexUpdate, 4000);
+  function buildParams(auto) {
+    if (auto && state.lastParams) {
+      return new URLSearchParams(state.lastParams);
+    }
+    const params = new URLSearchParams();
+    params.set("q", queryInput.value.trim());
+    params.set("llm", llmToggle.checked ? "on" : "off");
+    if (llmModelSelect.value) {
+      params.set("model", llmModelSelect.value);
+    }
+    state.lastParams = params.toString();
+    return params;
+  }
+
+  async function runSearch({ auto = false } = {}) {
+    const query = auto ? state.lastQuery : queryInput.value.trim();
+    if (!query) {
+      updateStatus("Enter a query to search your local index.");
+      renderResults([]);
+      stopSearchPolling();
+      return;
+    }
+    const params = buildParams(auto);
+    params.set("q", query);
+    state.lastQuery = query;
+
+    updateStatus(auto ? "Refreshing results…" : "Searching index…", true);
+    try {
+      const response = await fetch(`/api/search?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.status}`);
       }
-
-      function buildParams(auto) {
-        if (auto && state.lastParams) {
-          return new URLSearchParams(state.lastParams);
-        }
-        const params = new URLSearchParams();
-        params.set("q", queryInput.value.trim());
-        if (llmToggle.checked) {
-          params.set("llm", "on");
+      const payload = await response.json();
+      const results = payload.results || [];
+      renderResults(results);
+      if (payload.status === "focused_crawl_running" && payload.job_id) {
+        updateStatus("Focused crawl running. Waiting for new documents…", true);
+        startSearchPolling(payload.job_id, Number(payload.last_index_time || 0));
+      } else {
+        stopSearchPolling();
+        const count = results.length;
+        if (!count) {
+          updateStatus("No results found. Try a different query or wait for new data.");
         } else {
-          params.set("llm", "off");
-        }
-        if (llmModelSelect.value) {
-          params.set("model", llmModelSelect.value);
-        }
-        state.lastParams = params.toString();
-        return params;
-      }
-
-      async function runSearch({ auto = false } = {}) {
-        const query = auto ? state.lastQuery : queryInput.value.trim();
-        if (!query) {
-          updateStatus("Enter a query to search your local index.");
-          renderResults([]);
-          stopPolling();
-          return;
-        }
-        const params = buildParams(auto);
-        params.set("q", query);
-        state.lastQuery = query;
-
-        updateStatus(auto ? "Refreshing results…" : "Searching index…", true);
-        try {
-          const response = await fetch(`/api/search?${params.toString()}`);
-          if (!response.ok) {
-            throw new Error(`Search failed: ${response.status}`);
-          }
-          const payload = await response.json();
-          const results = payload.results || [];
-          renderResults(results);
-          if (payload.status === "focused_crawl_running") {
-            updateStatus("Focused crawl running. Waiting for new documents…", true);
-            startPolling(Number(payload.last_index_time || 0));
-          } else {
-            stopPolling();
-            const count = results.length;
-            if (!count) {
-              updateStatus("No results found. Try a different query or wait for new data.");
-            } else {
-              updateStatus(`Found ${count} result${count === 1 ? "" : "s"}.`);
-            }
-          }
-        } catch (error) {
-          console.error(error);
-          updateStatus("Search failed. Check console logs for details.");
-          stopPolling();
+          updateStatus(`Found ${count} result${count === 1 ? "" : "s"}.`);
         }
       }
+    } catch (error) {
+      console.error(error);
+      updateStatus("Search failed. Check console logs for details.");
+      stopSearchPolling();
+    }
+  }
 
-      async function fetchLLMStatus() {
-        try {
-          const response = await fetch("/api/llm/status");
-          if (!response.ok) {
-            throw new Error(`Status request failed: ${response.status}`);
-          }
-          const status = await response.json();
-          applyLLMStatus(status);
-        } catch (error) {
-          console.error(error);
-          llmStatusEl.textContent = "Ollama: Unable to determine status";
-          llmInstructions.hidden = false;
-          llmModelSelect.disabled = true;
-          llmToggle.disabled = true;
-        }
+  async function fetchLLMStatus() {
+    try {
+      const response = await fetch("/api/llm/status");
+      if (!response.ok) {
+        throw new Error(`Status request failed: ${response.status}`);
       }
+      const status = await response.json();
+      applyLLMStatus(status);
+    } catch (error) {
+      console.error(error);
+      llmStatusEl.textContent = "Ollama: Unable to determine status";
+      llmInstructions.hidden = false;
+      llmModelSelect.disabled = true;
+      llmToggle.disabled = true;
+      setAssistAvailability(false);
+    }
+  }
 
-      async function fetchLLMModels() {
-        try {
-          const response = await fetch("/api/llm/models");
-          if (!response.ok) {
-            throw new Error(`Model request failed: ${response.status}`);
-          }
-          const payload = await response.json();
-          populateModelSelect(payload.models || []);
-        } catch (error) {
-          console.error(error);
-          populateModelSelect([]);
-        }
+  async function fetchLLMModels() {
+    try {
+      const response = await fetch("/api/llm/models");
+      if (!response.ok) {
+        throw new Error(`Model request failed: ${response.status}`);
       }
+      const payload = await response.json();
+      populateModelSelect(payload.models || []);
+    } catch (error) {
+      console.error(error);
+      populateModelSelect([]);
+    }
+  }
 
-      function populateModelSelect(models) {
-        llmModelSelect.innerHTML = "";
-        const storedModel = localStorage.getItem(STORAGE_MODEL_KEY) || "";
-        if (!models.length) {
-          const option = document.createElement("option");
-          option.value = "";
-          option.textContent = "No local models detected";
-          llmModelSelect.appendChild(option);
-          llmModelSelect.disabled = true;
-          if (llmInstructionsText) {
-            llmInstructionsText.textContent =
-              'Ollama is running but no models were found. Pull one (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:';
-          }
-          llmInstructions.hidden = false;
-          return;
-        }
-        if (llmInstructionsText) {
-          llmInstructionsText.textContent = defaultInstructionsText;
-        }
-        llmInstructions.hidden = true;
-        const placeholder = document.createElement("option");
-        placeholder.value = "";
-        placeholder.textContent = "Use Ollama default";
-        llmModelSelect.appendChild(placeholder);
-
-        let matched = false;
-        models.forEach((model) => {
-          if (!model || !model.name) {
-            return;
-          }
-          const option = document.createElement("option");
-          option.value = model.name;
-          option.textContent = model.name;
-          if (model.name === storedModel) {
-            option.selected = true;
-            matched = true;
-          }
-          llmModelSelect.appendChild(option);
-        });
-        llmModelSelect.disabled = false;
-        if (!matched && storedModel) {
-          localStorage.removeItem(STORAGE_MODEL_KEY);
-        }
+  function setAssistAvailability(ready) {
+    [chatInput, chatSend, researchQuery, researchBudget].forEach((el) => {
+      if (el) {
+        el.disabled = !ready;
       }
+    });
+    researchForm.querySelectorAll("button").forEach((btn) => {
+      btn.disabled = !ready;
+    });
+  }
 
-      function applyLLMStatus(status) {
-        if (!status) {
-          llmStatusEl.textContent = "Ollama: status unavailable";
-          llmInstructions.hidden = false;
-          llmModelSelect.disabled = true;
-          llmToggle.disabled = true;
-          return;
-        }
-        const { installed, running, host } = status;
-        if (!installed) {
-          llmStatusEl.textContent = "Ollama not installed";
-          llmInstructions.hidden = false;
-          llmModelSelect.disabled = true;
-          llmToggle.disabled = true;
-          return;
-        }
-        if (!running) {
-          llmStatusEl.textContent = `Ollama installed on ${host}, but not running`;
-          llmInstructions.hidden = false;
-          llmModelSelect.disabled = true;
-          llmToggle.disabled = true;
-          return;
-        }
-        llmStatusEl.textContent = `Ollama ready at ${host}`;
-        llmInstructions.hidden = true;
-        llmModelSelect.disabled = false;
-        llmToggle.disabled = false;
+  function populateModelSelect(models) {
+    llmModelSelect.innerHTML = "";
+    const storedModel = localStorage.getItem(STORAGE_MODEL_KEY) || "";
+    if (!models.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No local models detected";
+      llmModelSelect.appendChild(option);
+      llmModelSelect.disabled = true;
+      if (llmInstructionsText) {
+        llmInstructionsText.textContent =
+          'Ollama is running but no models were found. Pull one (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:';
       }
+      llmInstructions.hidden = false;
+      return;
+    }
+    if (llmInstructionsText) {
+      llmInstructionsText.textContent = defaultInstructionsText;
+    }
+    llmInstructions.hidden = true;
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Use Ollama default";
+    llmModelSelect.appendChild(placeholder);
 
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        runSearch();
+    let matched = false;
+    models.forEach((model) => {
+      if (!model || !model.name) {
+        return;
+      }
+      const option = document.createElement("option");
+      option.value = model.name;
+      option.textContent = model.name;
+      if (model.name === storedModel) {
+        option.selected = true;
+        matched = true;
+      }
+      llmModelSelect.appendChild(option);
+    });
+    llmModelSelect.disabled = false;
+    if (!matched && storedModel) {
+      localStorage.removeItem(STORAGE_MODEL_KEY);
+    }
+  }
+
+  function applyLLMStatus(status) {
+    if (!status) {
+      llmStatusEl.textContent = "Ollama: status unavailable";
+      llmInstructions.hidden = false;
+      llmModelSelect.disabled = true;
+      llmToggle.disabled = true;
+      setAssistAvailability(false);
+      return;
+    }
+    const { installed, running, host } = status;
+    if (!installed) {
+      llmStatusEl.textContent = "Ollama not installed";
+      llmInstructions.hidden = false;
+      llmModelSelect.disabled = true;
+      llmToggle.disabled = true;
+      setAssistAvailability(false);
+      return;
+    }
+    if (!running) {
+      llmStatusEl.textContent = `Ollama installed on ${host}, but not running`;
+      llmInstructions.hidden = false;
+      llmModelSelect.disabled = true;
+      llmToggle.disabled = true;
+      setAssistAvailability(false);
+      return;
+    }
+    llmStatusEl.textContent = `Ollama ready at ${host}`;
+    llmInstructions.hidden = true;
+    llmModelSelect.disabled = false;
+    llmToggle.disabled = false;
+    setAssistAvailability(true);
+  }
+
+  function appendChatMessage(role, content) {
+    const wrapper = document.createElement("div");
+    wrapper.className = `chat-message ${role}`;
+    wrapper.innerHTML = `<p>${formatPlain(content)}</p>`;
+    chatMessagesEl.appendChild(wrapper);
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    return wrapper;
+  }
+
+  function parseSSEChunk(chunk) {
+    const lines = chunk.split("\n");
+    const dataParts = [];
+    for (const line of lines) {
+      if (line.startsWith("data:")) {
+        dataParts.push(line.slice(5).trimStart());
+      }
+    }
+    return dataParts.join("");
+  }
+
+  function safeParseJSON(text) {
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function sendChatMessage(text) {
+    const question = text.trim();
+    if (!question) {
+      return;
+    }
+    const userMessage = { role: "user", content: question };
+    state.chatMessages.push(userMessage);
+    appendChatMessage("user", question);
+
+    const requestMessages = state.chatMessages.slice();
+    const assistantMessage = { role: "assistant", content: "" };
+    state.chatMessages.push(assistantMessage);
+    const assistantElement = appendChatMessage("assistant", "");
+
+    chatForm.classList.add("busy");
+    chatInput.value = "";
+    chatInput.disabled = true;
+    chatSend.disabled = true;
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: requestMessages, model: llmModelSelect.value || undefined }),
       });
-
-      fetchLLMStatus();
-      fetchLLMModels();
-
-      if (queryInput.value.trim()) {
-        runSearch();
+      if (!response.ok || !response.body) {
+        throw new Error(`Chat failed: ${response.status}`);
       }
-    </script>
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const assistantIndex = state.chatMessages.length - 1;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary !== -1) {
+          const chunk = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = parseSSEChunk(chunk);
+          const payload = safeParseJSON(data);
+          if (payload && payload.type === "token") {
+            state.chatMessages[assistantIndex].content += payload.content;
+            assistantElement.innerHTML = `<p>${formatPlain(state.chatMessages[assistantIndex].content)}</p>`;
+            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+          } else if (payload && payload.type === "error") {
+            state.chatMessages[assistantIndex].content += `\n[Error: ${payload.content}]`;
+            assistantElement.innerHTML = `<p>${formatPlain(state.chatMessages[assistantIndex].content)}</p>`;
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      const assistantIndex = state.chatMessages.length - 1;
+      state.chatMessages[assistantIndex].content = `Error: ${error.message}`;
+      assistantElement.innerHTML = `<p>${formatPlain(state.chatMessages[assistantIndex].content)}</p>`;
+    } finally {
+      chatForm.classList.remove("busy");
+      chatInput.disabled = false;
+      chatSend.disabled = false;
+      chatInput.focus();
+    }
+  }
+
+  async function pollResearchJob() {
+    if (!state.researchJobId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/jobs/${state.researchJobId}/status`);
+      if (!response.ok) {
+        throw new Error(`Research status failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      const tail = Array.isArray(payload.logs_tail) ? payload.logs_tail.slice(-6) : [];
+      researchLog.textContent = tail.length ? tail.join("\n") : "Waiting for job output...";
+      if (payload.state === "done") {
+        clearInterval(state.researchPollTimer);
+        state.researchPollTimer = null;
+        researchForm.classList.remove("busy");
+        const result = payload.result || {};
+        if (result.report_path) {
+          await loadResearchReport(result.report_path);
+        } else {
+          researchReportContent.innerHTML = "<p>No report generated.</p>";
+          researchReport.hidden = false;
+        }
+        state.researchJobId = null;
+      } else if (payload.state === "error") {
+        clearInterval(state.researchPollTimer);
+        state.researchPollTimer = null;
+        researchForm.classList.remove("busy");
+        researchReport.hidden = true;
+        if (payload.error) {
+          researchLog.textContent += `\nError: ${payload.error}`;
+        }
+        state.researchJobId = null;
+      }
+    } catch (error) {
+      researchLog.textContent = `Unable to read research status: ${error.message}`;
+    }
+  }
+
+  async function loadResearchReport(path) {
+    try {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Report fetch failed: ${response.status}`);
+      }
+      const markdown = await response.text();
+      researchReportContent.innerHTML = renderMarkdown(markdown);
+      researchReportDownload.href = path;
+      researchReport.hidden = false;
+    } catch (error) {
+      researchReportContent.innerHTML = `<p>${formatPlain(`Unable to load report: ${error.message}`)}</p>`;
+      researchReportDownload.removeAttribute("href");
+      researchReport.hidden = false;
+    }
+  }
+
+  chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendChatMessage(chatInput.value);
+  });
+
+  researchForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!researchQuery.value.trim()) {
+      return;
+    }
+    researchForm.classList.add("busy");
+    researchReport.hidden = true;
+    researchReportContent.innerHTML = "";
+    researchReportDownload.removeAttribute("href");
+    researchLog.textContent = "Submitting research job…";
+    try {
+      const response = await fetch("/api/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: researchQuery.value.trim(),
+          model: llmModelSelect.value || undefined,
+          budget: Number(researchBudget.value || 20),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      state.researchJobId = payload.job_id;
+      pollResearchJob();
+      if (state.researchPollTimer) {
+        clearInterval(state.researchPollTimer);
+      }
+      state.researchPollTimer = setInterval(pollResearchJob, 3000);
+    } catch (error) {
+      researchLog.textContent = `Unable to start research: ${error.message}`;
+      researchForm.classList.remove("busy");
+    }
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSearch();
+  });
+
+  setTab("chat");
+  fetchLLMStatus();
+  fetchLLMModels();
+
+  if (queryInput.value.trim()) {
+    runSearch();
+  }
+</script>
+
   </body>
 </html>

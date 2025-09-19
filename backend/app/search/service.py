@@ -10,16 +10,16 @@ from typing import Optional, Tuple
 from search import query as query_module
 from ..config import AppConfig
 from ..indexer.incremental import ensure_index
-from ..jobs.focused_crawl import FocusedCrawlSupervisor
+from ..jobs.focused_crawl import FocusedCrawlManager
 from ..metrics import metrics
 
 LOGGER = logging.getLogger(__name__)
 
 
 class SearchService:
-    def __init__(self, config: AppConfig, supervisor: FocusedCrawlSupervisor) -> None:
+    def __init__(self, config: AppConfig, manager: FocusedCrawlManager) -> None:
         self.config = config
-        self.supervisor = supervisor
+        self.manager = manager
         self._lock = threading.Lock()
         self._index = None
         self._index_dir = None
@@ -39,7 +39,7 @@ class SearchService:
         limit: int,
         use_llm: Optional[bool],
         model: Optional[str],
-    ) -> Tuple[list[dict], bool]:
+    ) -> Tuple[list[dict], Optional[str]]:
         start = time.perf_counter()
         ix = self._get_index()
         results = query_module.search(
@@ -53,11 +53,11 @@ class SearchService:
         metrics.record_search_latency(duration_ms)
 
         q = (query or "").strip()
-        scheduled = False
+        job_id: Optional[str] = None
         if q and len(results) < self.config.smart_min_results:
             effective_use_llm = bool(use_llm)
-            scheduled = self.supervisor.schedule(q, effective_use_llm, model)
-        return results, scheduled
+            job_id = self.manager.schedule(q, effective_use_llm, model)
+        return results, job_id
 
     def last_index_time(self) -> int:
-        return self.supervisor.last_index_time()
+        return self.manager.last_index_time()

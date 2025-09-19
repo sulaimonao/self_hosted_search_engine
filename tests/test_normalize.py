@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import json
 
 from backend.app.pipeline.normalize import normalize
 
 
-def test_normalize_extracts_body_and_language(tmp_path):
+def test_normalize_extracts_fields(tmp_path):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     record = {

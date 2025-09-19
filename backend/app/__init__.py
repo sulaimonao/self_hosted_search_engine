@@ -11,11 +11,14 @@ from typing import Optional
 import requests
 from flask import Flask, jsonify, render_template, request
 
-from .api import focused as focused_api
+from .api import chat as chat_api
+from .api import jobs as jobs_api
 from .api import metrics as metrics_api
+from .api import research as research_api
 from .api import search as search_api
 from .config import AppConfig
-from .jobs.focused_crawl import FocusedCrawlSupervisor
+from .jobs.focused_crawl import FocusedCrawlManager
+from .jobs.runner import JobRunner
 from .metrics import metrics
 from .search.service import SearchService
 
@@ -36,17 +39,21 @@ def create_app() -> Flask:
     config.ensure_dirs()
     config.log_summary()
 
-    supervisor = FocusedCrawlSupervisor(config)
-    search_service = SearchService(config, supervisor)
+    runner = JobRunner(config.logs_dir)
+    manager = FocusedCrawlManager(config, runner)
+    search_service = SearchService(config, manager)
 
     app.config.update(
         APP_CONFIG=config,
-        FOCUSED_SUPERVISOR=supervisor,
+        JOB_RUNNER=runner,
+        FOCUSED_MANAGER=manager,
         SEARCH_SERVICE=search_service,
     )
 
     app.register_blueprint(search_api.bp)
-    app.register_blueprint(focused_api.bp)
+    app.register_blueprint(jobs_api.bp)
+    app.register_blueprint(chat_api.bp)
+    app.register_blueprint(research_api.bp)
     app.register_blueprint(metrics_api.bp)
 
     @app.get("/healthz")
