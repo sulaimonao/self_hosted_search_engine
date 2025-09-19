@@ -12,6 +12,8 @@ from typing import Iterable, Mapping, Tuple
 
 from whoosh import index
 
+from rank.authority import AuthorityIndex
+
 from .dedupe import SimHashIndex, simhash64
 from .schema import build_schema
 from ..metrics import metrics
@@ -120,7 +122,9 @@ def incremental_index(
     sim_index = SimHashIndex.load(simhash_path)
 
     added = skipped = deduped = 0
+    authority = AuthorityIndex.load_default()
     writer = ix.writer(limitmb=256)
+    indexed_docs: list[Mapping[str, str]] = []
     try:
         for doc in docs:
             url = (doc.get("url") or "").strip()
@@ -149,12 +153,22 @@ def incremental_index(
             ledger[url] = signature
             sim_index.update(url, sim_signature)
             added += 1
+            indexed_docs.append(doc)
     finally:
         writer.commit()
 
     _write_json(ledger_path, ledger)
     sim_index.save(simhash_path)
     last_index_time_path.write_text(str(int(time.time())) + "\n", encoding="utf-8")
-    metrics.record_index_results(added, skipped, deduped)
-    LOGGER.info("incremental index completed: added=%s skipped=%s deduped=%s", added, skipped, deduped)
+    authority.update_from_docs(indexed_docs)
+    authority.save()
+    total_docs = ix.doc_count()
+    metrics.record_index_results(added, skipped, deduped, total_docs)
+    LOGGER.info(
+        "incremental index completed: added=%s skipped=%s deduped=%s total=%s",
+        added,
+        skipped,
+        deduped,
+        total_docs,
+    )
     return added, skipped, deduped

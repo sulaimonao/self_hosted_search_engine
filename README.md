@@ -177,6 +177,13 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 | `SMART_TRIGGER_COOLDOWN` | `900` | Seconds to wait before re-running a crawl for the same query |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
 | `SMART_USE_LLM` | `false` | Default toggle for LLM-assisted discovery |
+| `USE_LLM_RERANK` | `false` | Enable LLM reranking of the top N results |
+| `SEED_QUOTA_NON_EN` | `0.30` | Minimum non-English share in curated seeds |
+| `SEED_QUOTA_NON_US` | `0.40` | Minimum non-US share in curated seeds |
+| `FRONTIER_W_VALUE` | `0.5` | Weight applied to value priors when ranking frontier URLs |
+| `FRONTIER_W_FRESH` | `0.3` | Weight applied to freshness hints |
+| `FRONTIER_W_AUTH` | `0.2` | Weight applied to host authority |
+| `INDEX_INC_WINDOW_MIN` | `60` | Sliding window (minutes) for incremental reindex |
 | `SEEDS_PATH` | `data/seeds.jsonl` | Append-only JSONL store of known helpful domains |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
 | `OLLAMA_MODEL` | `llama3.1:8b-instruct` | Default model used when the UI does not pick one |
@@ -188,7 +195,7 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 - `make setup` – creates `.venv`, installs Python deps, installs Chromium via Playwright.
 - `make dev` – loads `.env`, runs `bin/dev_check.py`, and starts the Flask dev server with auto-reload.
 - `make crawl` – wraps `python bin/crawl.py`; accepts `URL`, `SEEDS_FILE`, and respects `.env` overrides.
-- `make reindex` – wipes and rebuilds the Whoosh index from `data/crawl/normalized.jsonl`.
+- `make reindex` – rebuilds the Whoosh index (use `make index-inc` for incremental updates).
 - `make search` – executes the CLI search client with optional `LIMIT`.
 - `make focused` – runs `bin/crawl_focused.py` for a specific query (`Q="..."`) with optional `BUDGET`, `USE_LLM`, and `MODEL` overrides.
 - `make llm-status` – quick health check for the Ollama HTTP API exposed through Flask.
@@ -201,6 +208,13 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 - **Empty results** – confirm `data/crawl/normalized.jsonl` exists, then run `make reindex`.
 - **Playwright prompts** – `make setup` installs Chromium automatically; re-run if browsers are missing.
 - **Non-3.11 Python** – run `./scripts/ensure_py311.sh python3` before `make setup`.
+
+## Cold-start & LLM enhancements
+
+- `make seeds` generates `data/seeds/curated_seeds.jsonl` by merging local lists, CommonCrawl dumps, stored sitemaps, and (when enabled) Ollama suggestions. Domains are merged into `data/seeds.jsonl` with diversity quotas applied.
+- `make index-inc` performs a single incremental indexing pass using the `INDEX_INC_WINDOW_MIN` sliding window. Run `bin/index_inc.py` without `--once` to keep indexing continuously.
+- Focused crawls now prioritise seeds via value priors, freshness hints, and host authority metrics while avoiding duplicate URLs and content fingerprints.
+- Optional LLM reranking (`USE_LLM_RERANK=1`) adjusts the top results. `/metrics` exposes coverage, freshness lag, focused trigger rates, enqueue counts, and LLM usage.
 
 ## Docker (optional)
 

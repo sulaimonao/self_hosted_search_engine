@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import statistics
 import threading
+import time
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from metrics.counters import metrics_state
 
 
 @dataclass
@@ -54,15 +57,19 @@ class MetricsRegistry:
         with self._lock:
             latency = self.search_latency_ms.percentiles()
             llm = self.llm_seed_ms.percentiles()
-            return {
-                "search_latency_ms": latency,
-                "crawl_pages_fetched": self.crawl_pages_fetched.value,
-                "llm_seed_ms": llm,
-                "index_docs_added": self.index_docs_added.value,
-                "index_docs_skipped": self.index_docs_skipped.value,
-                "dedupe_hits": self.dedupe_hits.value,
-                "playwright_uses": self.playwright_uses.value,
-            }
+            snapshot = metrics_state.snapshot()
+            snapshot.update(
+                {
+                    "search_latency_ms": latency,
+                    "crawl_pages_fetched": self.crawl_pages_fetched.value,
+                    "llm_seed_ms": llm,
+                    "index_docs_added": self.index_docs_added.value,
+                    "index_docs_skipped": self.index_docs_skipped.value,
+                    "dedupe_hits": self.dedupe_hits.value,
+                    "playwright_uses": self.playwright_uses.value,
+                }
+            )
+            return snapshot
 
     def record_search_latency(self, ms: float) -> None:
         with self._lock:
@@ -76,15 +83,26 @@ class MetricsRegistry:
         with self._lock:
             self.llm_seed_ms.add(ms)
 
-    def record_index_results(self, added: int, skipped: int, deduped: int) -> None:
+    def record_index_results(self, added: int, skipped: int, deduped: int, total_docs: Optional[int] = None) -> None:
         with self._lock:
             self.index_docs_added.incr(added)
             self.index_docs_skipped.incr(skipped)
             self.dedupe_hits.incr(deduped)
+            if total_docs is not None:
+                metrics_state.record_index(total_docs, int(time.time()))
 
     def record_playwright_use(self, count: int = 1) -> None:
         with self._lock:
             self.playwright_uses.incr(count)
+
+    def record_query_event(self, results_count: int, triggered: bool, latency_ms: float) -> None:
+        metrics_state.record_query(results_count, triggered, latency_ms)
+
+    def record_focused_enqueue(self, count: int = 1) -> None:
+        metrics_state.record_enqueue(count)
+
+    def record_llm_usage_event(self, count: int = 1) -> None:
+        metrics_state.record_llm_usage(count)
 
 
 metrics = MetricsRegistry()

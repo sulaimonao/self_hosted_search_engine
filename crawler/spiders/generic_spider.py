@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
 
@@ -71,6 +72,20 @@ class GenericSpider(scrapy.Spider):
         title = response.xpath("//title/text()").get() or response.xpath("//h1/text()").get() or ""
         text_nodes = response.xpath("//body//text()[normalize-space()]").getall()
         text = _clean_text(text_nodes)
+        canonical = response.css("link[rel=canonical]::attr(href)").get()
+        if canonical:
+            canonical = response.urljoin(canonical)
+        lang = response.xpath("//html/@lang").get() or response.css("meta[http-equiv='content-language']::attr(content)").get()
+        outlinks: list[str] = []
+        for href in response.css("a::attr(href)").getall():
+            if not href:
+                continue
+            next_url = response.urljoin(href)
+            if next_url not in outlinks:
+                outlinks.append(next_url)
+            if not self._should_visit(next_url):
+                continue
+            yield response.follow(next_url, callback=self.parse, **self._request_kwargs())
 
         yield {
             "url": response.url,
@@ -78,15 +93,10 @@ class GenericSpider(scrapy.Spider):
             "title": title.strip(),
             "text": text,
             "raw_html": response.text,
+            "canonical_url": canonical,
+            "lang": (lang or "").split(",")[0].strip() if lang else "",
+            "outlinks": outlinks[:100],
+            "fetched_at": time.time(),
         }
-
         if self.pages_seen >= self.max_pages:
             return
-
-        for href in response.css("a::attr(href)").getall():
-            if not href:
-                continue
-            next_url = response.urljoin(href)
-            if not self._should_visit(next_url):
-                continue
-            yield response.follow(next_url, callback=self.parse, **self._request_kwargs())

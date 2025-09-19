@@ -34,6 +34,7 @@ class AppConfig:
     max_query_length: int
     ollama_url: str
     crawl_use_playwright: str
+    use_llm_rerank: bool
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -56,6 +57,7 @@ class AppConfig:
         max_query_length = max(32, int(os.getenv("SEARCH_MAX_QUERY_LENGTH", "256")))
         ollama_url = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         crawl_use_playwright = os.getenv("CRAWL_USE_PLAYWRIGHT", "auto").lower()
+        use_llm_rerank = os.getenv("USE_LLM_RERANK", "false").lower() in {"1", "true", "yes", "on"}
 
         return cls(
             index_dir=index_dir,
@@ -74,6 +76,7 @@ class AppConfig:
             max_query_length=max_query_length,
             ollama_url=ollama_url,
             crawl_use_playwright=crawl_use_playwright,
+            use_llm_rerank=use_llm_rerank,
         )
 
     def ensure_dirs(self) -> None:
@@ -100,6 +103,7 @@ class AppConfig:
             "max_query_length": self.max_query_length,
             "ollama_url": self.ollama_url,
             "crawl_use_playwright": self.crawl_use_playwright,
+            "use_llm_rerank": self.use_llm_rerank,
         }
         LOGGER.info("runtime configuration: %s", json.dumps(payload, sort_keys=True))
 

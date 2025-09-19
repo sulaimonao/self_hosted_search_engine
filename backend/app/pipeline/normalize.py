@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import re
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
@@ -130,13 +132,35 @@ def normalize(
         if not body:
             continue
         headings = _collect_headings(html)
-        lang = _detect_language(body)
+        lang_hint = str(record.get("lang") or "").strip()
+        lang = lang_hint or _detect_language(body)
+        fetched_at = record.get("fetched_at")
+        try:
+            fetched_ts = float(fetched_at) if fetched_at is not None else time.time()
+        except (TypeError, ValueError):
+            fetched_ts = time.time()
+        canonical = record.get("canonical_url")
+        canonical_url = str(canonical).strip() or url
+        content_hash = record.get("content_hash")
+        if not isinstance(content_hash, str) or not content_hash:
+            content_hash = hashlib.sha256(body.encode("utf-8", errors="ignore")).hexdigest()
+        outlinks_raw = record.get("outlinks") or []
+        if isinstance(outlinks_raw, str):
+            outlinks_list = [item.strip() for item in outlinks_raw.split(",") if item.strip()]
+        elif isinstance(outlinks_raw, list):
+            outlinks_list = [str(link) for link in outlinks_raw[:200]]
+        else:
+            outlinks_list = []
         docs[url] = {
             "url": url,
+            "canonical_url": canonical_url,
             "title": title,
             "h1h2": headings,
             "body": body,
             "lang": lang,
+            "fetched_at": fetched_ts,
+            "content_hash": content_hash,
+            "outlinks": outlinks_list,
         }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
