@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 import time
 from pathlib import Path
 from typing import Iterable, Mapping, Tuple
@@ -16,6 +17,8 @@ from .schema import build_schema
 from ..metrics import metrics
 
 LOGGER = logging.getLogger(__name__)
+
+REQUIRED_FIELDS = {"url", "lang", "title", "h1h2", "body"}
 
 
 def _content_hash(doc: Mapping[str, str]) -> str:
@@ -37,11 +40,60 @@ def _write_json(path: Path, payload: dict[str, str]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _field_signature(field) -> Tuple[type, bool, bool, bool, float, type | None]:
+    analyzer = getattr(field, "analyzer", None)
+    analyzer_type = analyzer.__class__ if analyzer is not None else None
+    return (
+        field.__class__,
+        getattr(field, "stored", False),
+        getattr(field, "unique", False),
+        getattr(field, "vector", False),
+        getattr(field, "field_boost", 1.0),
+        analyzer_type,
+    )
+
+
+def _schema_migration_reason(current_schema, desired_schema) -> str | None:
+    current_fields = set(current_schema.names())
+    missing = REQUIRED_FIELDS - current_fields
+    if missing:
+        return f"missing required fields: {', '.join(sorted(missing))}"
+    for field_name in REQUIRED_FIELDS:
+        current_field = current_schema[field_name]
+        desired_field = desired_schema[field_name]
+        if _field_signature(current_field) != _field_signature(desired_field):
+            return f"incompatible field definition for '{field_name}'"
+    return None
+
+
+def _clear_index_dir(index_dir: Path) -> None:
+    for entry in index_dir.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
 def ensure_index(index_dir: Path):
     index_dir.mkdir(parents=True, exist_ok=True)
-    if index.exists_in(index_dir):
-        return index.open_dir(index_dir)
     schema = build_schema()
+    if index.exists_in(index_dir):
+        ix = index.open_dir(index_dir)
+        try:
+            reason = _schema_migration_reason(ix.schema, schema)
+        except Exception:
+            LOGGER.warning("failed to inspect existing index schema at %s; rebuilding", index_dir, exc_info=True)
+            reason = "schema inspection failed"
+        if reason is None:
+            return ix
+        LOGGER.warning(
+            "rebuilding search index at %s due to schema change (%s); legacy documents will be re-indexed on the next crawl",
+            index_dir,
+            reason,
+        )
+        ix.close()
+        _clear_index_dir(index_dir)
+        return index.create_in(index_dir, schema)
     return index.create_in(index_dir, schema)
 
 
