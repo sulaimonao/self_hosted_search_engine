@@ -2,6 +2,7 @@ from whoosh import index
 from whoosh.fields import ID, TEXT, Schema
 
 from backend.app.indexer.incremental import ensure_index, REQUIRED_FIELDS
+from backend.app.indexer.schema import build_schema
 
 
 def test_ensure_index_upgrades_legacy_schema(tmp_path):
@@ -22,6 +23,25 @@ def test_ensure_index_upgrades_legacy_schema(tmp_path):
     try:
         names = set(upgraded_ix.schema.names())
         assert REQUIRED_FIELDS.issubset(names)
+
+        desired_schema = build_schema()
+        for field_name in REQUIRED_FIELDS:
+            upgraded_field = upgraded_ix.schema[field_name]
+            desired_field = desired_schema[field_name]
+            assert upgraded_field.__class__ is desired_field.__class__
+            assert bool(getattr(upgraded_field, "stored", False)) == bool(
+                getattr(desired_field, "stored", False)
+            )
+            assert getattr(upgraded_field, "field_boost", 1.0) == getattr(
+                desired_field, "field_boost", 1.0
+            )
+            upgraded_analyzer = getattr(upgraded_field, "analyzer", None)
+            desired_analyzer = getattr(desired_field, "analyzer", None)
+            assert (
+                upgraded_analyzer.__class__ if upgraded_analyzer is not None else None
+            ) is (
+                desired_analyzer.__class__ if desired_analyzer is not None else None
+            )
 
         writer = upgraded_ix.writer()
         writer.add_document(

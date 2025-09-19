@@ -40,15 +40,21 @@ def _write_json(path: Path, payload: dict[str, str]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _field_signature(field) -> Tuple[type, bool, bool, bool, float, type | None]:
+_FIELD_BOOL_OPTIONS = ("stored", "unique", "sortable", "spelling", "scorable")
+
+
+def _field_signature(field) -> Tuple:
     analyzer = getattr(field, "analyzer", None)
     analyzer_type = analyzer.__class__ if analyzer is not None else None
+    fmt = getattr(field, "format", None)
+    fmt_type = fmt.__class__ if fmt is not None else None
+    bool_options = tuple(bool(getattr(field, option, False)) for option in _FIELD_BOOL_OPTIONS)
     return (
         field.__class__,
-        getattr(field, "stored", False),
-        getattr(field, "unique", False),
-        getattr(field, "vector", False),
+        bool_options,
+        getattr(field, "vector", None),
         getattr(field, "field_boost", 1.0),
+        fmt_type,
         analyzer_type,
     )
 
