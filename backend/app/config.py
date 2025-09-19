@@ -24,7 +24,7 @@ class AppConfig:
     ledger_path: Path
     simhash_path: Path
     last_index_time_path: Path
-    focused_log_path: Path
+    logs_dir: Path
     focused_enabled: bool
     focused_budget: int
     smart_min_results: int
@@ -45,7 +45,7 @@ class AppConfig:
         ledger_path = Path(os.getenv("INDEX_LEDGER", data_dir / "index_ledger.json"))
         simhash_path = Path(os.getenv("SIMHASH_PATH", data_dir / "simhash_index.json"))
         last_index_time_path = Path(os.getenv("LAST_INDEX_TIME_PATH", data_dir / ".last_index_time"))
-        focused_log_path = Path(os.getenv("FOCUSED_LOG_PATH", data_dir / "logs" / "focused.log"))
+        logs_dir = Path(os.getenv("LOGS_DIR", data_dir / "logs"))
 
         focused_enabled = os.getenv("FOCUSED_CRAWL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
@@ -64,7 +64,7 @@ class AppConfig:
             ledger_path=ledger_path,
             simhash_path=simhash_path,
             last_index_time_path=last_index_time_path,
-            focused_log_path=focused_log_path,
+            logs_dir=logs_dir,
             focused_enabled=focused_enabled,
             focused_budget=focused_budget,
             smart_min_results=smart_min_results,
@@ -81,7 +81,7 @@ class AppConfig:
 
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.crawl_raw_dir.mkdir(parents=True, exist_ok=True)
-        self.focused_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.normalized_path.parent.mkdir(parents=True, exist_ok=True)
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self.simhash_path.parent.mkdir(parents=True, exist_ok=True)

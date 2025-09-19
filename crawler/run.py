@@ -10,11 +10,14 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
-import httpx
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional dependency
+    httpx = None
 
 from backend.app.metrics import metrics
 
@@ -141,12 +144,21 @@ def _should_use_playwright(html: str) -> bool:
 
 
 class FocusedCrawler:
-    def __init__(self, query: str, budget: int, out_dir: Path, use_llm: bool, model: Optional[str]) -> None:
+    def __init__(
+        self,
+        query: str,
+        budget: int,
+        out_dir: Path,
+        use_llm: bool,
+        model: Optional[str],
+        initial_seeds: Optional[Sequence[Candidate]] = None,
+    ) -> None:
         self.query = query
         self.budget = max(1, budget)
         self.out_dir = out_dir
         self.use_llm = use_llm
         self.model = model
+        self.initial_seeds = list(initial_seeds) if initial_seeds else None
         self.cooldowns = CrawlCooldowns(out_dir.parent / "cooldowns.json")
         self.results: List[PageResult] = []
         self.visited: set[str] = set()
@@ -154,23 +166,29 @@ class FocusedCrawler:
         self._domain_locks: Dict[str, asyncio.Semaphore] = {}
         self._domain_lock_guard: Optional[asyncio.Lock] = None
         self._results_lock: Optional[asyncio.Lock] = None
+        self.last_output_path: Optional[Path] = None
         if not RESPECT_ROBOTS:
             LOGGER.warning("Robots.txt enforcement disabled for this run")
 
     async def run(self) -> None:
+        if httpx is None:
+            raise RuntimeError("httpx is required to run the focused crawler")
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._domain_lock_guard = asyncio.Lock()
         self._results_lock = asyncio.Lock()
         async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
-            extra_urls = await _maybe_llm_urls(self.query, self.use_llm, self.model)
-            frontier = build_frontier(
-                self.query,
-                extra_urls=extra_urls,
-                budget=self.budget * 4,
-                cooldowns=self.cooldowns,
-                cooldown_seconds=DEFAULT_COOLDOWN,
-            )
-            seeds = await self._expand_with_sitemaps(client, frontier)
+            if self.initial_seeds is not None:
+                seeds = list(self.initial_seeds)
+            else:
+                extra_urls = await _maybe_llm_urls(self.query, self.use_llm, self.model)
+                frontier = build_frontier(
+                    self.query,
+                    extra_urls=extra_urls,
+                    budget=self.budget * 4,
+                    cooldowns=self.cooldowns,
+                    cooldown_seconds=DEFAULT_COOLDOWN,
+                )
+                seeds = await self._expand_with_sitemaps(client, frontier)
             await self._crawl(client, seeds)
         self.cooldowns.save()
         self._persist_results()
@@ -295,6 +313,7 @@ class FocusedCrawler:
     def _persist_results(self) -> None:
         if not self.results:
             LOGGER.info("No pages fetched for query '%s'", self.query)
+            self.last_output_path = None
             return
         timestamp = int(time.time())
         path = self.out_dir / f"focused_{timestamp}.jsonl"
@@ -315,6 +334,7 @@ class FocusedCrawler:
                     + "\n"
                 )
         LOGGER.info("Persisted %s page(s) to %s", len(self.results), path)
+        self.last_output_path = path
 
 
 async def async_main(args: argparse.Namespace) -> None:

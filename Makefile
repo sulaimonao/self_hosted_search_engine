@@ -1,4 +1,4 @@
-.PHONY: setup dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models clean
+.PHONY: setup dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean
 
 VENV?=.venv
 PYTHON?=python3
@@ -37,13 +37,18 @@ reindex-incremental:
         @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/reindex_incremental.py'
 
 tail:
-        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; LOG_PATH="${FOCUSED_LOG_PATH:-./data/logs/focused.log}"; touch "$$LOG_PATH"; tail -n 50 -f "$$LOG_PATH"'
+        @if [ -z "$$JOB" ]; then echo "Set JOB=<identifier> to tail" >&2; exit 1; fi
+        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; LOG_DIR="${LOGS_DIR:-./data/logs}"; LOG_PATH="$$LOG_DIR/$$JOB.log"; touch "$$LOG_PATH"; tail -n 50 -f "$$LOG_PATH"'
 
 llm-status:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s "http://$$HOST:$$PORT/api/llm/status" | python -m json.tool'
 
 llm-models:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s "http://$$HOST:$$PORT/api/llm/models" | python -m json.tool'
+        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s "http://$$HOST:$$PORT/api/llm/models" | python -m json.tool'
+
+research:
+        @if [ -z "$$Q" ]; then echo "Set Q=\"question\"" >&2; exit 1; fi
+        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; curl -s -H "Content-Type: application/json" -X POST "http://$$HOST:$$PORT/api/research" -d "{\"query\": \"$$Q\", \"budget\": $${BUDGET:-20}}" | python -m json.tool'
 
 clean:
 	rm -rf $(VENV)
