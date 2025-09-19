@@ -5,17 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 import time
 from pathlib import Path
 from typing import Iterable, Mapping, Tuple
 
 from whoosh import index
+from whoosh.analysis import CompositeAnalyzer
 
 from .dedupe import SimHashIndex, simhash64
 from .schema import build_schema
 from ..metrics import metrics
 
 LOGGER = logging.getLogger(__name__)
+
+REQUIRED_FIELDS = {"url", "lang", "title", "h1h2", "body"}
 
 
 def _content_hash(doc: Mapping[str, str]) -> str:
@@ -37,11 +41,70 @@ def _write_json(path: Path, payload: dict[str, str]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _field_compatible(current_field, expected_field) -> bool:
+    """Return True when the current field matches the expected schema."""
+
+    if current_field.__class__ is not expected_field.__class__:
+        return False
+
+    for attr in ("stored", "unique", "scorable", "vector"):
+        if getattr(current_field, attr, None) != getattr(expected_field, attr, None):
+            return False
+
+    current_phrase = getattr(current_field, "phrase", None)
+    expected_phrase = getattr(expected_field, "phrase", None)
+    if current_phrase != expected_phrase:
+        return False
+
+    current_analyzer = getattr(current_field, "analyzer", None)
+    expected_analyzer = getattr(expected_field, "analyzer", None)
+    if bool(current_analyzer) != bool(expected_analyzer):
+        return False
+    if expected_analyzer is not None:
+        if current_analyzer.__class__ is not expected_analyzer.__class__:
+            return False
+        if isinstance(expected_analyzer, CompositeAnalyzer):
+            expected_components = tuple(type(component) for component in expected_analyzer)
+            current_components = tuple(type(component) for component in current_analyzer)
+            if current_components != expected_components:
+                return False
+    return True
+
+
+def _schema_needs_migration(existing_schema, expected_schema) -> bool:
+    existing_fields = set(existing_schema.names())
+    if not REQUIRED_FIELDS.issubset(existing_fields):
+        return True
+
+    for field_name in REQUIRED_FIELDS:
+        if not _field_compatible(existing_schema[field_name], expected_schema[field_name]):
+            return True
+    return False
+
+
+def _clear_directory(path: Path) -> None:
+    for child in path.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def ensure_index(index_dir: Path):
     index_dir.mkdir(parents=True, exist_ok=True)
-    if index.exists_in(index_dir):
-        return index.open_dir(index_dir)
     schema = build_schema()
+    if index.exists_in(index_dir):
+        ix = index.open_dir(index_dir)
+        if _schema_needs_migration(ix.schema, schema):
+            LOGGER.warning(
+                "detected legacy Whoosh schema at %s; rebuilding index with the current definition",
+                index_dir,
+            )
+            ix.close()
+            _clear_directory(index_dir)
+            index_dir.mkdir(parents=True, exist_ok=True)
+            return index.create_in(index_dir, schema)
+        return ix
     return index.create_in(index_dir, schema)
 
 

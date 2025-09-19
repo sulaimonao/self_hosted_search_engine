@@ -56,6 +56,10 @@ python bin/search_cli.py --q "VMware installation guide for macOS" --limit 5
 
 Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream in via `fetch()` and render with highlighted snippets.
 
+### Automatic index schema upgrades
+
+The incremental indexer now inspects the on-disk Whoosh schema before opening it. If legacy indexes are missing required fields such as `lang`, `h1h2`, or `body`, the directory is cleared and recreated with the latest schema. The upgrade runs automatically the next time the index is touched, but the rebuild wipes stored documents—rerun `make crawl` or `make reindex` to repopulate the fresh schema.
+
 ## Smart search enrichment
 
 The `/search` endpoint now wraps the base Whoosh query with a "smart" layer. When fewer than `SMART_MIN_RESULTS` hits come back, the

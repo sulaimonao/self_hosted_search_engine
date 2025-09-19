@@ -1,10 +1,12 @@
 import time
 
 import pytest
+from whoosh import index as whoosh_index
+from whoosh.fields import ID, TEXT, Schema
 
 from backend.app import create_app
 from backend.app.config import AppConfig
-from backend.app.indexer.incremental import incremental_index
+from backend.app.indexer.incremental import ensure_index, incremental_index
 
 
 def fake_run_focused_crawl(query, budget, use_llm, model, *, config: AppConfig, extra_seeds=None):
@@ -80,3 +82,29 @@ def test_cold_start_triggers_background_job(monkeypatch, tmp_path):
     assert follow_payload["results"], "expected indexed results after cold start"
     urls = [item["url"] for item in follow_payload["results"]]
     assert any(url.startswith("https://local-doc/") for url in urls)
+
+
+def test_ensure_index_upgrades_legacy_schema(tmp_path):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+
+    legacy_schema = Schema(
+        url=ID(stored=True, unique=True),
+        title=TEXT(stored=True),
+        text=TEXT(stored=True),
+    )
+    legacy_ix = whoosh_index.create_in(index_dir, legacy_schema)
+    legacy_ix.close()
+
+    ix = ensure_index(index_dir)
+    assert {"url", "lang", "title", "h1h2", "body"}.issubset(set(ix.schema.names()))
+
+    writer = ix.writer()
+    writer.add_document(
+        url="https://example.com/doc",
+        lang="en",
+        title="Example",
+        h1h2="Example Heading",
+        body="Example body text for migration.",
+    )
+    writer.commit()
