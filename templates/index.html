@@ -278,53 +278,142 @@ ollama pull llama3.1:8b-instruct</code></pre>
     return html.join("\n");
   }
 
-  function renderResults(results) {
-    if (!results.length) {
+  function renderResults(results, payload = {}) {
+    const answer = (payload.answer || "").trim();
+    const sources = Array.isArray(payload.sources) ? payload.sources : [];
+    const hasAnswer = Boolean(answer);
+    const hasResults = Array.isArray(results) && results.length > 0;
+
+    resultsEl.innerHTML = "";
+
+    if (!hasAnswer && !hasResults) {
       resultsEl.innerHTML = '<p class="empty">No results yet. Trigger a crawl or wait for focused discovery.</p>';
       return;
     }
+
     const fragment = document.createDocumentFragment();
-    results.forEach((result) => {
+
+    if (hasAnswer) {
       const article = document.createElement("article");
-      article.className = "result";
+      article.className = "result answer";
 
       const heading = document.createElement("h2");
-      const link = document.createElement("a");
-      link.href = result.url;
-      link.textContent = result.title || result.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      heading.appendChild(link);
+      heading.textContent = "AI Summary";
       article.appendChild(heading);
 
-      const url = document.createElement("p");
-      url.className = "url";
-      url.textContent = result.url || "";
-      article.appendChild(url);
+      const body = document.createElement("div");
+      body.className = "answer-body";
+      body.innerHTML = renderMarkdown(answer);
+      article.appendChild(body);
 
-      if (result.lang) {
-        const lang = document.createElement("p");
-        lang.className = "lang";
-        lang.textContent = `Language: ${result.lang}`;
-        article.appendChild(lang);
+      if (sources.length) {
+        const sourcesHeading = document.createElement("h3");
+        sourcesHeading.textContent = "Sources";
+        article.appendChild(sourcesHeading);
+
+        const list = document.createElement("ol");
+        list.className = "sources";
+        sources.forEach((source, index) => {
+          const item = document.createElement("li");
+          const title = source.title || source.url || `Source ${index + 1}`;
+          if (source.url) {
+            const link = document.createElement("a");
+            link.href = source.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = title;
+            item.appendChild(link);
+          } else {
+            item.textContent = title;
+          }
+          const scoreValue = Number(
+            source.similarity ?? source.score ?? 0
+          );
+          if (!Number.isNaN(scoreValue) && scoreValue > 0) {
+            const score = document.createElement("span");
+            score.className = "score";
+            score.textContent = ` (${scoreValue.toFixed(3)})`;
+            item.appendChild(score);
+          }
+          list.appendChild(item);
+        });
+        article.appendChild(list);
       }
-
-      if (result.snippet) {
-        const snippet = document.createElement("p");
-        snippet.className = "snippet";
-        snippet.innerHTML = result.snippet;
-        article.appendChild(snippet);
-      }
-
-      const score = document.createElement("p");
-      score.className = "score";
-      score.textContent = `Score: ${Number(result.score || 0).toFixed(3)}`;
-      article.appendChild(score);
 
       fragment.appendChild(article);
-    });
-    resultsEl.innerHTML = "";
+    }
+
+    if (hasResults) {
+      results.forEach((result) => {
+        const article = document.createElement("article");
+        article.className = "result";
+
+        const heading = document.createElement("h2");
+        const link = document.createElement("a");
+        link.href = result.url;
+        link.textContent = result.title || result.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        heading.appendChild(link);
+        article.appendChild(heading);
+
+        const url = document.createElement("p");
+        url.className = "url";
+        url.textContent = result.url || "";
+        article.appendChild(url);
+
+        if (result.lang) {
+          const lang = document.createElement("p");
+          lang.className = "lang";
+          lang.textContent = `Language: ${result.lang}`;
+          article.appendChild(lang);
+        }
+
+        if (result.snippet) {
+          const snippet = document.createElement("p");
+          snippet.className = "snippet";
+          snippet.innerHTML = result.snippet;
+          article.appendChild(snippet);
+        }
+
+        const score = document.createElement("p");
+        score.className = "score";
+        score.textContent = `Score: ${Number(result.score || 0).toFixed(3)}`;
+        article.appendChild(score);
+
+        fragment.appendChild(article);
+      });
+    } else if (hasAnswer) {
+      const note = document.createElement("p");
+      note.className = "empty";
+      note.textContent = "No supporting documents yet. Trigger a crawl to enrich the index.";
+      fragment.appendChild(note);
+    }
+
     resultsEl.appendChild(fragment);
+  }
+
+  function handleSearchError(status, payload) {
+    const code = payload && payload.code;
+    if (code === "embedding_unavailable") {
+      const detail = payload?.detail ||
+        "Semantic search requires a local embedding model.";
+      const action = payload?.action ? `<pre><code>${escapeHTML(payload.action)}</code></pre>` : "";
+      resultsEl.innerHTML = `
+        <article class="result">
+          <h2>Embedding model required</h2>
+          <p>${escapeHTML(detail)}</p>
+          ${action}
+        </article>
+      `;
+      updateStatus("Install the embedding model to enable semantic search.");
+      return;
+    }
+    const message =
+      (payload && (payload.detail || payload.error)) ||
+      `Search failed (${status}).`;
+    resultsEl.innerHTML = `<p class="empty">${escapeHTML(message)}</p>`;
+    updateStatus(`Search failed (${status}).`);
   }
 
   function renderFocusedLog(lines, message) {
@@ -431,7 +520,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
     const query = auto ? state.lastQuery : queryInput.value.trim();
     if (!query) {
       updateStatus("Enter a query to search your local index.");
-      renderResults([]);
+      renderResults([], {});
       stopSearchPolling();
       return;
     }
@@ -442,19 +531,28 @@ ollama pull llama3.1:8b-instruct</code></pre>
     updateStatus(auto ? "Refreshing results…" : "Searching index…", true);
     try {
       const response = await fetch(`/api/search?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(`Search failed: ${response.status}`);
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (parseError) {
+        payload = null;
       }
-      const payload = await response.json();
-      const results = payload.results || [];
-      renderResults(results);
-      if (payload.status === "focused_crawl_running" && payload.job_id) {
+      if (!response.ok) {
+        handleSearchError(response.status, payload || {});
+        stopSearchPolling();
+        return;
+      }
+      const data = payload || {};
+      const results = Array.isArray(data.results) ? data.results : [];
+      renderResults(results, data);
+      if (data.status === "focused_crawl_running" && data.job_id) {
         updateStatus("Focused crawl running. Waiting for new documents…", true);
-        startSearchPolling(payload.job_id, Number(payload.last_index_time || 0));
+        startSearchPolling(data.job_id, Number(data.last_index_time || 0));
       } else {
         stopSearchPolling();
         const count = results.length;
-        if (!count) {
+        const hasAnswer = Boolean((data.answer || "").trim());
+        if (!count && !hasAnswer) {
           updateStatus("No results found. Try a different query or wait for new data.");
         } else {
           updateStatus(`Found ${count} result${count === 1 ? "" : "s"}.`);

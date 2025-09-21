@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Sequence
 
 from ..data.store import VectorStore
 from ..search.provider import seed_urls_for_query
@@ -10,7 +10,8 @@ from .chunk import TokenChunker
 from .crawl import CrawlClient, CrawlError
 from .embed import OllamaEmbedder
 
-SeedProvider = Callable[[str, int], list[str]]
+SeedProvider = Callable[[str, int], Sequence[str]]
+LLMSeedProvider = Callable[[str, int, str | None], Sequence[str]]
 
 
 class ColdStartIndexer:
@@ -23,6 +24,7 @@ class ColdStartIndexer:
         chunker: TokenChunker,
         embedder: OllamaEmbedder,
         seed_provider: SeedProvider = seed_urls_for_query,
+        llm_seed_provider: LLMSeedProvider | None = None,
         max_pages: int = 5,
     ) -> None:
         self._store = store
@@ -30,10 +32,25 @@ class ColdStartIndexer:
         self._chunker = chunker
         self._embedder = embedder
         self._seed_provider = seed_provider
+        self._llm_seed_provider = llm_seed_provider
         self._max_pages = max_pages
 
-    def build_index(self, query: str) -> int:
-        urls = self._seed_provider(query, self._max_pages)
+    def build_index(
+        self, query: str, *, use_llm: bool = False, llm_model: str | None = None
+    ) -> int:
+        base_urls = list(self._seed_provider(query, self._max_pages) or [])
+        llm_urls: list[str] = []
+        if use_llm and self._llm_seed_provider is not None:
+            llm_urls = [
+                url
+                for url in self._llm_seed_provider(query, self._max_pages, llm_model)
+                if isinstance(url, str) and url
+            ]
+        combined: list[str] = []
+        for url in llm_urls + base_urls:
+            if url and url not in combined:
+                combined.append(url)
+        urls = combined or base_urls
         indexed = 0
         for url in urls:
             if indexed >= self._max_pages:

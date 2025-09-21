@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from flask import Flask
+
+from backend.app.api.search import bp as search_bp
+from engine.agents.rag import RagResult
+from engine.data.store import RetrievedChunk
+
+
+class StubEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def embed_query(self, text: str):
+        self.calls.append(text)
+        return [0.1, 0.2]
+
+
+class StubStore:
+    def __init__(self, results: list[RetrievedChunk]):
+        self._results = results
+        self.queries: int = 0
+
+    def query(self, **kwargs):
+        self.queries += 1
+        return list(self._results)
+
+
+class ColdStartSpy:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def build_index(self, query: str, *, use_llm: bool = False, llm_model: str | None = None):
+        self.calls.append({"query": query, "use_llm": use_llm, "llm_model": llm_model})
+        return 0
+
+
+class StubRagAgent:
+    def run(self, question: str, documents):
+        return RagResult(
+            answer="Summary answer",
+            sources=[{"id": 1, "url": "https://example.com", "title": "Example", "similarity": 0.91}],
+            used=len(documents),
+        )
+
+
+def _base_config():
+    return SimpleNamespace(
+        models=SimpleNamespace(embed="test-embed"),
+        retrieval=SimpleNamespace(k=3, min_hits=0, similarity_threshold=0.1),
+        ollama=SimpleNamespace(base_url="http://localhost:11434"),
+    )
+
+
+def _build_app(store, coldstart, rag_agent, *, embedding_ready: bool = True, engine_config=None):
+    app = Flask(__name__)
+    app.register_blueprint(search_bp)
+    config = engine_config or _base_config()
+    app.config.update(
+        RAG_ENGINE_CONFIG=config,
+        RAG_VECTOR_STORE=store,
+        RAG_EMBEDDER=StubEmbedder(),
+        RAG_COLDSTART=coldstart,
+        RAG_AGENT=rag_agent,
+        RAG_EMBEDDING_READY=embedding_ready,
+        RAG_EMBED_MODEL_NAME=config.models.embed,
+        RAG_OLLAMA_HOST=config.ollama.base_url,
+    )
+    app.testing = True
+    return app
+
+
+def test_search_returns_answer_and_results():
+    chunks = [
+        RetrievedChunk(
+            text="This is a retrieved chunk of content that answers the query.",
+            title="Test Document",
+            url="https://docs.example.com",
+            similarity=0.87,
+        )
+    ]
+    store = StubStore(chunks)
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    app = _build_app(store, coldstart, rag_agent)
+
+    client = app.test_client()
+    response = client.get("/api/search", query_string={"q": "test"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["answer"] == "Summary answer"
+    assert payload["k"] == 1
+    assert payload["results"]
+    first = payload["results"][0]
+    assert first["url"] == "https://docs.example.com"
+    assert "snippet" in first and first["snippet"].startswith("This is")
+    assert coldstart.calls == []
+
+
+def test_search_triggers_coldstart_with_llm_toggle():
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+
+    class RejectingRag:
+        def run(self, question, documents):  # pragma: no cover - should not execute
+            raise AssertionError("RAG should not run when no documents are returned")
+
+    engine_config = SimpleNamespace(
+        models=SimpleNamespace(embed="test-embed"),
+        retrieval=SimpleNamespace(k=3, min_hits=2, similarity_threshold=0.1),
+        ollama=SimpleNamespace(base_url="http://localhost:11434"),
+    )
+
+    app = _build_app(store, coldstart, RejectingRag(), engine_config=engine_config)
+    client = app.test_client()
+
+    response = client.get("/api/search", query_string={"q": "need data", "llm": "on", "model": "llama"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "no_results"
+    assert payload["llm_used"] is True
+    assert coldstart.calls
+    call = coldstart.calls[0]
+    assert call == {"query": "need data", "use_llm": True, "llm_model": "llama"}
+
+
+def test_search_reports_embedding_unavailable():
+    chunks = []
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    app = _build_app(store, coldstart, rag_agent, embedding_ready=False)
+    client = app.test_client()
+
+    response = client.get("/api/search", query_string={"q": "test"})
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["code"] == "embedding_unavailable"
+    assert payload["action"] == "ollama pull test-embed"
+    assert "detail" in payload

@@ -16,7 +16,9 @@ from engine.indexing.coldstart import ColdStartIndexer
 from engine.indexing.crawl import CrawlClient
 from engine.indexing.chunk import TokenChunker
 from engine.indexing.embed import OllamaEmbedder
+from engine.search.provider import seed_urls_for_query
 from engine.llm.ollama_client import OllamaClient
+from llm.seed_guesser import guess_urls as llm_guess_urls
 
 load_dotenv()
 
@@ -33,11 +35,20 @@ crawler = CrawlClient(
     read_timeout=ENGINE_CONFIG.crawl.read_timeout,
     min_delay=ENGINE_CONFIG.crawl.sleep_seconds,
 )
+
+
+def _llm_seed_provider(query: str, limit: int, model: str | None) -> list[str]:
+    urls = llm_guess_urls(query, model=model)
+    return urls[:limit] if limit > 0 else urls
+
+
 coldstart = ColdStartIndexer(
     store=vector_store,
     crawler=crawler,
     chunker=chunker,
     embedder=embedder,
+    seed_provider=seed_urls_for_query,
+    llm_seed_provider=_llm_seed_provider,
     max_pages=ENGINE_CONFIG.crawl.max_pages,
 )
 rag_agent = RagAgent(
@@ -47,12 +58,22 @@ rag_agent = RagAgent(
 )
 
 app = create_app()
+embedding_ready = ollama_client.has_model(ENGINE_CONFIG.models.embed)
+if not embedding_ready:
+    logging.getLogger(__name__).warning(
+        "Ollama embedding model '%s' unavailable at %s. Semantic search will be disabled until installed.",
+        ENGINE_CONFIG.models.embed,
+        ENGINE_CONFIG.ollama.base_url,
+    )
 app.config.update(
     RAG_ENGINE_CONFIG=ENGINE_CONFIG,
     RAG_VECTOR_STORE=vector_store,
     RAG_EMBEDDER=embedder,
     RAG_COLDSTART=coldstart,
     RAG_AGENT=rag_agent,
+    RAG_EMBEDDING_READY=embedding_ready,
+    RAG_EMBED_MODEL_NAME=ENGINE_CONFIG.models.embed,
+    RAG_OLLAMA_HOST=ENGINE_CONFIG.ollama.base_url,
 )
 
 
