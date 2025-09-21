@@ -19,18 +19,18 @@ setup:
 	$(PLAYWRIGHT) install chromium
 
 dev:
-        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
 
 run:
-        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
 
 index:
-        @if [ -z "$$Q" ]; then echo "Set Q=\"seed query\"" >&2; exit 1; fi
-        @bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; python -c "import os; from app import coldstart; query = os.environ.get('"'"Q"'"', '"'"""'"'); count = coldstart.build_index(query); print(f'"'"Indexed {count} pages for query: {query}"'"')"'
+	@if [ -z "$$Q" ]; then echo "Set Q=\"seed query\"" >&2; exit 1; fi
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; python -c "import os; from app import coldstart; query = os.environ.get('"'"Q"'"', '"'"""'"'); count = coldstart.build_index(query); print(f'"'"Indexed {count} pages for query: {query}"'"')"'
 
 clean-index:
-        rm -rf .chroma
-        rm -f data/index.duckdb
+	rm -rf .chroma
+	rm -f data/index.duckdb
 
 crawl:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
