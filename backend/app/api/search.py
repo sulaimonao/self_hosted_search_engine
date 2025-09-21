@@ -70,16 +70,48 @@ def search_endpoint():
     llm_enabled = _normalize_bool(request.args.get("llm"))
     llm_model = (request.args.get("model") or "").strip() or None
 
-    engine_config: EngineConfig = current_app.config["RAG_ENGINE_CONFIG"]
+    engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
+    if engine_config is None:
+        search_service = current_app.config.get("SEARCH_SERVICE")
+        app_config = current_app.config.get("APP_CONFIG")
+        if search_service and app_config:
+            results, job_id = search_service.run_query(
+                query,
+                limit=app_config.search_default_limit,
+                use_llm=llm_enabled,
+                model=llm_model,
+            )
+            payload = {
+                "status": "ok",
+                "results": results,
+                "llm_used": bool(llm_enabled),
+            }
+            if job_id:
+                payload.update(
+                    {
+                        "status": "focused_crawl_running",
+                        "job_id": job_id,
+                        "last_index_time": search_service.last_index_time(),
+                    }
+                )
+            if llm_model:
+                payload["llm_model"] = llm_model
+            return jsonify(payload)
+        return jsonify({"error": "Semantic search unavailable"}), 503
+
     store: VectorStore = current_app.config["RAG_VECTOR_STORE"]
     embedder: OllamaEmbedder = current_app.config["RAG_EMBEDDER"]
     coldstart: ColdStartIndexer = current_app.config["RAG_COLDSTART"]
     rag_agent: RagAgent = current_app.config["RAG_AGENT"]
 
+    embed_model_name = (
+        current_app.config.get("RAG_EMBED_MODEL_NAME") or engine_config.models.embed
+    )
+
     if not current_app.config.get("RAG_EMBEDDING_READY", True):
         message = (
             "Semantic search requires a local embedding model. Install it with "
-            f"`ollama pull {engine_config.models.embed}` and retry."
+            f"`ollama pull {embed_model_name}` and retry."
         )
         return _embedding_unavailable_response(message)
 
@@ -88,7 +120,7 @@ def search_endpoint():
     except EmbeddingError as exc:
         message = (
             "Unable to generate embeddings from Ollama. "
-            f"Ensure the model '{engine_config.models.embed}' is installed and running."
+            f"Ensure the model '{embed_model_name}' is installed and running."
         )
         return _embedding_unavailable_response(f"{message} ({exc})")
 
@@ -105,7 +137,7 @@ def search_endpoint():
         except EmbeddingError as exc:
             message = (
                 "Unable to generate embeddings from Ollama. "
-                f"Ensure the model '{engine_config.models.embed}' is installed and running."
+                f"Ensure the model '{embed_model_name}' is installed and running."
             )
             return _embedding_unavailable_response(f"{message} ({exc})")
         results = store.query(

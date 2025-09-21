@@ -25,8 +25,15 @@ load_dotenv()
 CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 ENGINE_CONFIG = EngineConfig.from_yaml(CONFIG_PATH)
 
+_embed_override = os.getenv("RAG_EMBED_MODEL_NAME")
+if _embed_override:
+    logging.getLogger(__name__).info(
+        "Overriding embedding model from config.yaml: using '%s'", _embed_override
+    )
+embed_model_name = _embed_override or ENGINE_CONFIG.models.embed
+
 ollama_client = OllamaClient(ENGINE_CONFIG.ollama.base_url)
-embedder = OllamaEmbedder(ollama_client, ENGINE_CONFIG.models.embed)
+embedder = OllamaEmbedder(ollama_client, embed_model_name)
 vector_store = VectorStore(ENGINE_CONFIG.index.persist_dir, ENGINE_CONFIG.index.db_path)
 chunker = TokenChunker()
 crawler = CrawlClient(
@@ -58,11 +65,11 @@ rag_agent = RagAgent(
 )
 
 app = create_app()
-embedding_ready = ollama_client.has_model(ENGINE_CONFIG.models.embed)
+embedding_ready = ollama_client.has_model(embed_model_name)
 if not embedding_ready:
     logging.getLogger(__name__).warning(
         "Ollama embedding model '%s' unavailable at %s. Semantic search will be disabled until installed.",
-        ENGINE_CONFIG.models.embed,
+        embed_model_name,
         ENGINE_CONFIG.ollama.base_url,
     )
 app.config.update(
@@ -72,7 +79,7 @@ app.config.update(
     RAG_COLDSTART=coldstart,
     RAG_AGENT=rag_agent,
     RAG_EMBEDDING_READY=embedding_ready,
-    RAG_EMBED_MODEL_NAME=ENGINE_CONFIG.models.embed,
+    RAG_EMBED_MODEL_NAME=embed_model_name,
     RAG_OLLAMA_HOST=ENGINE_CONFIG.ollama.base_url,
 )
 

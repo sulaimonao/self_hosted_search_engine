@@ -122,7 +122,34 @@ Install and start Ollama locally (macOS example):
 brew install --cask ollama
 ollama serve
 ollama pull llama3.1:8b-instruct
+ollama pull nomic-embed-text
 ```
+
+The embedding model used for semantic search lives in `config.yaml` under `models.embed`:
+
+```yaml
+models:
+  llm_primary: "gemma2:latest"
+  llm_fallback: "gpt-oss:latest"
+  embed: "nomic-embed-text"
+```
+
+That `embed` entry is mandatory—without a pulled embedding model the Flask app logs a startup warning (`Ollama embedding model 'nomic-embed-text' unavailable …`) and every `/api/search` request returns HTTP 503 with an `embedding_unavailable` payload until the model is installed.
+
+To switch to [EmbeddingGemma](https://ollama.com/library/embedding-gemma):
+
+```bash
+ollama pull embedding-gemma:latest
+```
+
+Then either edit `config.yaml` to set `models.embed: "embedding-gemma:latest"`, or add an environment override before starting the app:
+
+```bash
+export RAG_EMBED_MODEL_NAME=embedding-gemma:latest
+make dev
+```
+
+Adding the override to `.env` works as well; the `app.py` loader reads it on boot. Once the embedding model is present and `ollama serve` is running, the warning disappears and `/api/search` responses return to `200`.
 
 Then point your browser at the UI. You can verify connectivity via:
 
