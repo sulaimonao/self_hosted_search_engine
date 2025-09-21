@@ -86,5 +86,42 @@ class OllamaClient:
         [vector] = self.embed(model, [text])
         return vector
 
+    # ------------------------------------------------------------------
+    # Model discovery helpers
+    # ------------------------------------------------------------------
+    def list_models(self) -> list[str]:
+        """Return the names of models available on the Ollama instance."""
+
+        try:
+            response = self._session.get(
+                f"{self.base_url}/api/tags", timeout=self.timeout
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:  # pragma: no cover - network failure
+            raise OllamaClientError(str(exc)) from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:  # pragma: no cover - unexpected response
+            raise OllamaClientError("Invalid JSON response from Ollama") from exc
+        models: list[str] = []
+        for item in payload.get("models", []):
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if isinstance(name, str) and name:
+                models.append(name)
+        return models
+
+    def has_model(self, model: str) -> bool:
+        """Return ``True`` when the named model is available locally."""
+
+        if not model:
+            return False
+        try:
+            available = self.list_models()
+        except OllamaClientError:
+            return False
+        return model in available
+
 
 __all__ = ["OllamaClient", "OllamaClientError", "ChatMessage"]
