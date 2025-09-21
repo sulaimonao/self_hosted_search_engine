@@ -1,7 +1,12 @@
 .PHONY: setup dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean seeds index-inc
 
+PYTHON ?= python3
+# Prefer 3.11 if available
+ifeq ($(shell command -v python3.11 >/dev/null 2>&1 && echo yes),yes)
+  PYTHON := python3.11
+endif
+
 VENV?=.venv
-PYTHON?=python3
 PY:=$(VENV)/bin/python
 PIP:=$(VENV)/bin/pip
 PLAYWRIGHT:=$(VENV)/bin/playwright
@@ -9,8 +14,7 @@ PLAYWRIGHT:=$(VENV)/bin/playwright
 setup:
 	./scripts/ensure_py311.sh $(PYTHON)
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
-	$(PY) -m pip install --upgrade pip setuptools wheel
-	$(PIP) install -r requirements.txt
+	. $(VENV)/bin/activate && pip install -U pip setuptools wheel && pip install -r requirements.txt
 	$(PLAYWRIGHT) install chromium
 
 dev:
