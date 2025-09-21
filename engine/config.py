@@ -71,7 +71,7 @@ class EngineConfig:
         model_cfg = ModelConfig(
             llm_primary=str(models.get("llm_primary", "gemma2:latest")),
             llm_fallback=str(models.get("llm_fallback")) if models.get("llm_fallback") else None,
-            embed=str(models.get("embed", "nomic-embed-text")),
+            embed=str(models.get("embed", "embedding-gemma:7b")),
         )
         ollama_cfg = OllamaConfig(base_url=str(ollama.get("base_url", "http://localhost:11434")))
         retrieval_cfg = RetrievalConfig(
