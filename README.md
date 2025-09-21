@@ -28,6 +28,17 @@ A quick smoke check is available too:
 pytest -q
 ```
 
+## RAG vector store configuration
+
+The retrieval layer persists embeddings in a local [Chroma](https://www.trychroma.com/) store and tracks crawl metadata in DuckDB. Both paths are configurable via `config.yaml`:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `index.persist_dir` | `./.chroma` | Directory holding the Chroma collection used during retrieval |
+| `index.db_path` | `./data/index.duckdb` | DuckDB database storing document metadata for crawl deduplication |
+
+Ensure these locations live on fast local storage—the cold-start indexer and Flask app share the same files, so the vector store must be accessible to both processes.
+
 ## Crawl → Index → Search
 
 Seed the crawler with either a single URL or a seeds file:

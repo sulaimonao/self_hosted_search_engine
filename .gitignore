@@ -9,6 +9,7 @@ pytest.ini
 *.egg-info/
 *.zst
 data/
+!engine/data/
 .chroma/
 index/
 node_modules/
