@@ -75,3 +75,10 @@ class SearchService:
 
     def last_index_time(self) -> int:
         return self.manager.last_index_time()
+
+    def refresh_index(self) -> None:
+        """Force the Whoosh index handle to reload from disk."""
+
+        with self._lock:
+            self._index = ensure_index(self.config.index_dir)
+            self._index_dir = self.config.index_dir

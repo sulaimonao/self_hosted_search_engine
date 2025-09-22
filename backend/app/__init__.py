@@ -56,7 +56,7 @@ def create_app() -> Flask:
     runner = JobRunner(config.logs_dir)
     manager = FocusedCrawlManager(config, runner)
     search_service = SearchService(config, manager)
-    refresh_worker = RefreshWorker(config)
+    refresh_worker = RefreshWorker(config, search_service=search_service)
 
     app.config.update(
         APP_CONFIG=config,

@@ -27,6 +27,7 @@ class AppConfig:
     logs_dir: Path
     focused_enabled: bool
     focused_budget: int
+    focused_depth: int
     smart_min_results: int
     smart_trigger_cooldown: int
     search_default_limit: int
@@ -35,6 +36,7 @@ class AppConfig:
     ollama_url: str
     crawl_use_playwright: str
     use_llm_rerank: bool
+    discovery_metadata_path: Path
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -50,6 +52,7 @@ class AppConfig:
 
         focused_enabled = os.getenv("FOCUSED_CRAWL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
+        focused_depth = max(1, int(os.getenv("FOCUSED_CRAWL_DEPTH", "2")))
         smart_min_results = max(0, int(os.getenv("SMART_MIN_RESULTS", "1")))
         smart_trigger_cooldown = max(0, int(os.getenv("SMART_TRIGGER_COOLDOWN", "900")))
         search_default_limit = max(1, int(os.getenv("SEARCH_DEFAULT_LIMIT", "20")))
@@ -58,6 +61,13 @@ class AppConfig:
         ollama_url = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         crawl_use_playwright = os.getenv("CRAWL_USE_PLAYWRIGHT", "auto").lower()
         use_llm_rerank = os.getenv("USE_LLM_RERANK", "false").lower() in {"1", "true", "yes", "on"}
+
+        discovery_metadata_path = Path(
+            os.getenv(
+                "DISCOVERY_METADATA_PATH",
+                crawl_root / "discovery_metadata.jsonl",
+            )
+        )
 
         return cls(
             index_dir=index_dir,
@@ -69,6 +79,7 @@ class AppConfig:
             logs_dir=logs_dir,
             focused_enabled=focused_enabled,
             focused_budget=focused_budget,
+            focused_depth=focused_depth,
             smart_min_results=smart_min_results,
             smart_trigger_cooldown=smart_trigger_cooldown,
             search_default_limit=search_default_limit,
@@ -77,6 +88,7 @@ class AppConfig:
             ollama_url=ollama_url,
             crawl_use_playwright=crawl_use_playwright,
             use_llm_rerank=use_llm_rerank,
+            discovery_metadata_path=discovery_metadata_path,
         )
 
     def ensure_dirs(self) -> None:
@@ -89,6 +101,7 @@ class AppConfig:
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self.simhash_path.parent.mkdir(parents=True, exist_ok=True)
         self.last_index_time_path.parent.mkdir(parents=True, exist_ok=True)
+        self.discovery_metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
     def log_summary(self) -> None:
         """Log environment-derived flags for observability."""

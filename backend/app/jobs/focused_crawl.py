@@ -32,6 +32,9 @@ def run_focused_crawl(
     *,
     config: AppConfig,
     extra_seeds: Optional[Sequence[str]] = None,
+    frontier_budget: Optional[int] = None,
+    frontier_depth: Optional[int] = None,
+    discovery_metadata_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
 ) -> dict:
     """Execute the full focused crawl pipeline and return summary statistics."""
@@ -47,8 +50,28 @@ def run_focused_crawl(
     start = time.perf_counter()
     config.ensure_dirs()
     _emit("frontier_start", query=query)
-    seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
+    normalized_frontier_budget = max(frontier_budget or budget, 1)
+    normalized_frontier_depth = max(frontier_depth or 1, 1)
+    seeds = _get_seed_candidates(
+        query,
+        budget,
+        use_llm,
+        model,
+        config,
+        extra_seeds=extra_seeds,
+        frontier_budget=normalized_frontier_budget,
+        frontier_depth=normalized_frontier_depth,
+    )
     _emit("frontier_complete", seed_count=len(seeds))
+    discovery_snapshot = _record_discovery_metadata(
+        query,
+        seeds,
+        extra_seeds=extra_seeds,
+        budget=budget,
+        frontier_budget=normalized_frontier_budget,
+        frontier_depth=normalized_frontier_depth,
+        output_path=discovery_metadata_path,
+    )
     print(f"[focused] query='{query}' budget={budget} seeds={len(seeds)}")
     for candidate in seeds[:10]:
         print(f"[focused] seed -> {candidate.url} ({candidate.source})")
@@ -93,18 +116,65 @@ def run_focused_crawl(
             _emit("index_skipped", reason="no_new_documents")
 
     duration = time.perf_counter() - start
+    new_domains = discovery_snapshot.get("new_domains_count", 0) if discovery_snapshot else 0
     stats = {
         "query": query,
         "pages_fetched": len(pages),
         "docs_indexed": added,
         "skipped": skipped,
         "deduped": deduped,
+        "embedded": len(normalized_docs),
+        "new_domains": new_domains,
         "duration": duration,
         "normalized_docs": normalized_docs,
         "raw_path": str(raw_path) if raw_path else None,
+        "discovery": discovery_snapshot,
     }
     print(f"[focused] completed in {duration:.2f}s -> indexed={added} skipped={skipped} deduped={deduped}")
     return stats
+
+
+def _record_discovery_metadata(
+    query: str,
+    seeds: Sequence[Candidate],
+    *,
+    extra_seeds: Optional[Sequence[str]],
+    budget: int,
+    frontier_budget: int,
+    frontier_depth: int,
+    output_path: Optional[Path],
+) -> dict:
+    seed_payload = [
+        {
+            "url": candidate.url,
+            "source": candidate.source,
+            "weight": candidate.weight,
+        }
+        for candidate in seeds
+    ]
+    domain_set = set()
+    for candidate in seeds:
+        parsed = urlparse(candidate.url)
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host:
+            domain_set.add(host)
+    metadata = {
+        "query": query,
+        "timestamp": time.time(),
+        "budget": int(budget),
+        "frontier_budget": int(frontier_budget),
+        "frontier_depth": int(frontier_depth),
+        "seed_count": len(seeds),
+        "seed_candidates": seed_payload,
+        "extra_seeds": list(extra_seeds or []),
+        "new_domains": sorted(domain_set),
+        "new_domains_count": len(domain_set),
+    }
+    if output_path:
+        metadata["persist_path"] = str(output_path)
+    return metadata
 
 
 def _load_curated_values(path: Path) -> dict[str, float]:
@@ -145,10 +215,15 @@ def _get_seed_candidates(
     config: AppConfig,
     *,
     extra_seeds: Optional[Sequence[str]] = None,
+    frontier_budget: Optional[int] = None,
+    frontier_depth: Optional[int] = None,
 ) -> List[Candidate]:
     q = (query or "").strip()
     if not q:
         return []
+    frontier_limit = max(int(frontier_budget or budget), 1)
+    depth_limit = max(int(frontier_depth or 1), 1)
+    candidate_limit = max(frontier_limit * depth_limit, frontier_limit)
     try:
         seed_domains = get_top_domains(limit=25)
     except Exception:  # pragma: no cover - defensive
@@ -194,7 +269,7 @@ def _get_seed_candidates(
         q,
         extra_urls=merged_extra,
         seed_domains=seed_domains,
-        budget=max(budget * 4, 40),
+        budget=max(candidate_limit * 4, 40),
         value_overrides=value_overrides,
     )
     if not candidates:
@@ -203,7 +278,7 @@ def _get_seed_candidates(
             f"https://{q.replace(' ', '')}.io",
         ]
         candidates = [Candidate(url=url, source="fallback", weight=0.1) for url in fallback]
-    return candidates
+    return candidates[:candidate_limit]
 
 
 def _crawl(
@@ -280,6 +355,9 @@ class FocusedCrawlManager:
                     use_llm,
                     model,
                     config=self.config,
+                    frontier_budget=self.config.focused_budget,
+                    frontier_depth=self.config.focused_depth,
+                    discovery_metadata_path=self.config.discovery_metadata_path,
                 )
 
             job_id = self.runner.submit(_job)

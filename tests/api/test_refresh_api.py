@@ -19,6 +19,9 @@ def _patch_refresh_worker(monkeypatch: pytest.MonkeyPatch):
         *,
         config,
         extra_seeds=None,
+        frontier_budget=None,
+        frontier_depth=None,
+        discovery_metadata_path=None,
         progress_callback=None,
     ):
         if progress_callback:
@@ -39,9 +42,16 @@ def _patch_refresh_worker(monkeypatch: pytest.MonkeyPatch):
             "docs_indexed": 1,
             "skipped": 0,
             "deduped": 0,
+            "embedded": 1,
+            "new_domains": 1,
             "duration": 0.05,
             "normalized_docs": [{}],
             "raw_path": None,
+            "discovery": {
+                "query": query,
+                "seed_count": 3,
+                "new_domains_count": 1,
+            },
         }
 
     monkeypatch.setattr(refresh_worker, "run_focused_crawl", fake_run)
@@ -73,6 +83,10 @@ def test_refresh_flow_and_status_polling():
     assert final["state"] == "done"
     assert final["stats"]["docs_indexed"] == 1
     assert final["stats"]["pages_fetched"] == 2
+    assert final["stats"]["fetched"] == 2
+    assert final["stats"]["updated"] == 1
+    assert final["stats"]["embedded"] == 1
+    assert final["stats"]["new_domains"] == 1
 
 
 def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
@@ -87,6 +101,9 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
         *,
         config,
         extra_seeds=None,
+        frontier_budget=None,
+        frontier_depth=None,
+        discovery_metadata_path=None,
         progress_callback=None,
     ):
         if progress_callback:
@@ -101,9 +118,12 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
             "docs_indexed": 0,
             "skipped": 0,
             "deduped": 0,
+            "embedded": 0,
+            "new_domains": 0,
             "duration": 0.01,
             "normalized_docs": [],
             "raw_path": None,
+            "discovery": {"query": query, "seed_count": 0, "new_domains_count": 0},
         }
 
     monkeypatch.setattr(refresh_worker, "run_focused_crawl", slow_run)

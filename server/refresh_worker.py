@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import queue
 import threading
 import time
 import uuid
 from collections import deque
-from typing import Deque, Dict, Optional
+from pathlib import Path
+from typing import Deque, Dict, Optional, Sequence
 
 from backend.app.config import AppConfig
 from backend.app.jobs.focused_crawl import run_focused_crawl
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class RefreshWorker:
     """Track and execute manual refresh jobs serially."""
 
-    def __init__(self, config: AppConfig, *, max_history: int = 20) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        max_history: int = 20,
+        search_service=None,
+    ) -> None:
         self.config = config
         self.max_history = max_history
+        self._search_service = search_service
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._jobs: Dict[str, dict] = {}
         self._query_to_job: Dict[str, str] = {}
@@ -30,16 +43,36 @@ class RefreshWorker:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def enqueue(self, query: str, *, use_llm: bool = False, model: Optional[str] = None) -> tuple[str, dict, bool]:
+    def enqueue(
+        self,
+        query: str,
+        *,
+        budget: Optional[int] = None,
+        depth: Optional[int] = None,
+        force: bool = False,
+        seeds: Optional[Sequence[str]] = None,
+        use_llm: bool = False,
+        model: Optional[str] = None,
+    ) -> tuple[str, dict, bool]:
         """Queue a refresh for *query*; return (job_id, status, created)."""
 
         normalized = self._normalize_query(query)
         if not normalized:
             raise ValueError("Query must be a non-empty string")
 
+        crawl_budget = max(1, int(budget or self.config.focused_budget))
+        frontier_depth = max(1, int(depth or self.config.focused_depth))
+        sanitized_seeds = []
+        for item in seeds or []:
+            if isinstance(item, str):
+                candidate = item.strip()
+                if candidate:
+                    sanitized_seeds.append(candidate)
+        use_discovery = len(sanitized_seeds) == 0
+
         with self._lock:
             existing_id = self._query_to_job.get(normalized)
-            if existing_id:
+            if existing_id and not force:
                 existing = self._jobs.get(existing_id)
                 if existing and existing.get("state") in {"queued", "running"}:
                     return existing_id, self._snapshot(existing), False
@@ -67,6 +100,18 @@ class RefreshWorker:
                     "docs_indexed": 0,
                     "skipped": 0,
                     "deduped": 0,
+                    "fetched": 0,
+                    "updated": 0,
+                    "embedded": 0,
+                    "new_domains": 0,
+                },
+                "options": {
+                    "budget": crawl_budget,
+                    "frontier_budget": crawl_budget,
+                    "frontier_depth": frontier_depth,
+                    "force": bool(force),
+                    "seeds": sanitized_seeds,
+                    "strategy": "discovery" if use_discovery else "seeded",
                 },
                 "result": None,
                 "error": None,
@@ -120,6 +165,12 @@ class RefreshWorker:
             job["message"] = "Starting refresh…"
             job["started_at"] = time.time()
             job["updated_at"] = job["started_at"]
+            options = dict(job.get("options", {}))
+
+        crawl_budget = max(1, int(options.get("budget") or self.config.focused_budget))
+        frontier_budget = max(1, int(options.get("frontier_budget") or crawl_budget))
+        frontier_depth = max(1, int(options.get("frontier_depth") or self.config.focused_depth))
+        seeds: list[str] = list(options.get("seeds") or [])
 
         def _progress(stage: str, payload: dict) -> None:
             self._handle_progress(job_id, stage, payload)
@@ -127,10 +178,14 @@ class RefreshWorker:
         try:
             result = run_focused_crawl(
                 job["query"],
-                self.config.focused_budget,
+                crawl_budget,
                 job.get("use_llm", False),
                 job.get("model"),
                 config=self.config,
+                extra_seeds=seeds or None,
+                frontier_budget=frontier_budget,
+                frontier_depth=frontier_depth,
+                discovery_metadata_path=self.config.discovery_metadata_path,
                 progress_callback=_progress,
             )
         except Exception as exc:  # pragma: no cover - defensive path
@@ -149,9 +204,18 @@ class RefreshWorker:
                     "skipped": result.get("skipped", stats.get("skipped", 0)),
                     "deduped": result.get("deduped", stats.get("deduped", 0)),
                     "normalized_docs": len(result.get("normalized_docs", [])),
+                    "fetched": result.get("pages_fetched", stats.get("fetched", 0)),
+                    "updated": result.get("docs_indexed", stats.get("updated", 0)),
+                    "embedded": result.get("embedded", stats.get("embedded", 0)),
+                    "new_domains": result.get("new_domains", stats.get("new_domains", 0)),
                 }
             )
             job["stats"] = stats
+            job_options = job.get("options", {})
+            job_options["frontier_budget"] = frontier_budget
+            job_options["frontier_depth"] = frontier_depth
+            job_options["seeds"] = seeds
+            job["options"] = job_options
             job["state"] = "done"
             job["stage"] = "complete"
             job["message"] = "Refresh complete."
@@ -163,6 +227,9 @@ class RefreshWorker:
             normalized = job.get("normalized_query")
             if normalized:
                 self._query_to_job.pop(normalized, None)
+
+        self._persist_discovery_snapshot(result.get("discovery"))
+        self._refresh_index()
 
     def _mark_error(self, job_id: str, error: str) -> None:
         with self._lock:
@@ -198,11 +265,17 @@ class RefreshWorker:
             if stage == "frontier_complete":
                 stats["seed_count"] = int(payload.get("seed_count", 0) or 0)
             elif stage == "crawl_complete":
-                stats["pages_fetched"] = int(payload.get("pages_fetched", 0) or 0)
+                fetched = int(payload.get("pages_fetched", 0) or 0)
+                stats["pages_fetched"] = fetched
+                stats["fetched"] = fetched
             elif stage == "normalize_complete":
-                stats["normalized_docs"] = int(payload.get("docs", 0) or 0)
+                normalized = int(payload.get("docs", 0) or 0)
+                stats["normalized_docs"] = normalized
+                stats["embedded"] = normalized
             elif stage == "index_complete":
-                stats["docs_indexed"] = int(payload.get("docs_indexed", 0) or 0)
+                indexed = int(payload.get("docs_indexed", 0) or 0)
+                stats["docs_indexed"] = indexed
+                stats["updated"] = indexed
                 stats["skipped"] = int(payload.get("skipped", 0) or 0)
                 stats["deduped"] = int(payload.get("deduped", 0) or 0)
             job["stats"] = stats
@@ -210,6 +283,33 @@ class RefreshWorker:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _persist_discovery_snapshot(self, payload: Optional[dict]) -> None:
+        if not payload:
+            return
+        record = dict(payload)
+        path_hint = record.pop("persist_path", None)
+        target: Path
+        try:
+            target = Path(path_hint) if path_hint else self.config.discovery_metadata_path
+        except TypeError:
+            target = self.config.discovery_metadata_path
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            LOGGER.warning("failed to persist discovery metadata to %s", target)
+
+    def _refresh_index(self) -> None:
+        if not self._search_service:
+            return
+        try:
+            refresh = getattr(self._search_service, "refresh_index", None)
+            if callable(refresh):
+                refresh()
+        except Exception:  # pragma: no cover - defensive refresh guard
+            LOGGER.warning("search index refresh failed", exc_info=True)
+
     def _snapshot(self, job: dict) -> dict:
         payload = {
             "job_id": job.get("id"),
@@ -226,6 +326,8 @@ class RefreshWorker:
             "completed_at": job.get("completed_at"),
             "stats": dict(job.get("stats", {})),
         }
+        if job.get("options"):
+            payload["options"] = dict(job.get("options", {}))
         if job.get("error"):
             payload["error"] = job.get("error")
         if job.get("result") is not None:

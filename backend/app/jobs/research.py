@@ -95,6 +95,9 @@ def run_research(query: str, model: Optional[str], budget: int, *, config: AppCo
         model=model,
         config=config,
         extra_seeds=extra_sources,
+        frontier_budget=budget,
+        frontier_depth=config.focused_depth,
+        discovery_metadata_path=config.discovery_metadata_path,
     )
 
     docs = stats.get("normalized_docs", [])
