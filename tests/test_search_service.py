@@ -5,65 +5,161 @@ from types import SimpleNamespace
 from backend.app.search.service import SearchService
 
 
-def test_run_query_always_schedules_refresh(monkeypatch, tmp_path):
-    config = SimpleNamespace(
-        index_dir=tmp_path / "index",
-        search_max_limit=20,
-        max_query_length=256,
-        smart_min_results=1,
-        use_llm_rerank=True,
+def _base_config(tmp_path, **overrides):
+    defaults = {
+        "index_dir": tmp_path / "index",
+        "search_max_limit": 20,
+        "max_query_length": 256,
+        "smart_min_results": 1,
+        "use_llm_rerank": True,
+        "smart_confidence_threshold": 0.35,
+        "smart_seed_min_similarity": 0.2,
+        "smart_seed_limit": 5,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _stub_search(monkeypatch, hits):
+    monkeypatch.setattr(
+        "backend.app.search.service.query_module.search",
+        lambda ix, query, limit, max_limit, max_query_length: list(hits),
     )
+    monkeypatch.setattr(
+        "backend.app.search.service.blend_results",
+        lambda results: list(results),
+    )
+    monkeypatch.setattr(
+        "backend.app.search.service.maybe_rerank",
+        lambda query, results, enabled, model: results,
+    )
+
+
+def _mute_metrics(monkeypatch):
+    monkeypatch.setattr("backend.app.search.service.metrics.record_search_latency", lambda ms: None)
+    monkeypatch.setattr("backend.app.search.service.metrics.record_llm_usage_event", lambda count=1: None)
+    monkeypatch.setattr("backend.app.search.service.metrics.record_query_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr("backend.app.search.service.metrics.record_focused_enqueue", lambda count=1: None)
+
+
+def test_run_query_triggers_when_no_results(monkeypatch, tmp_path):
+    config = _base_config(tmp_path)
 
     class StubManager:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, bool, str | None]] = []
+            self.calls: list[dict] = []
+            self.db = SimpleNamespace(similar_discovery_seeds=lambda *args, **kwargs: ["https://seed.one"])
 
-        def schedule(self, query: str, use_llm: bool, model: str | None):
-            self.calls.append((query, use_llm, model))
-            return f"job-{len(self.calls)}"
+        def schedule(self, query, use_llm, model, *, frontier_seeds=None, query_embedding=None):
+            self.calls.append(
+                {
+                    "query": query,
+                    "use_llm": use_llm,
+                    "model": model,
+                    "frontier_seeds": list(frontier_seeds or []),
+                    "embedding": list(query_embedding or []),
+                }
+            )
+            return "job-1"
 
-        def last_index_time(self) -> int:  # pragma: no cover - not exercised
+        def last_index_time(self) -> int:
             return 0
 
     manager = StubManager()
     service = SearchService(config, manager)
     service._get_index = lambda: object()
 
-    monkeypatch.setattr(
-        "backend.app.search.service.query_module.search",
-        lambda ix, query, limit, max_limit, max_query_length: [
-            {
-                "url": "https://example.com",
-                "title": "Example",
-                "snippet": "",
-                "score": 1.0,
-                "lang": "en",
-            }
-        ],
-    )
-    monkeypatch.setattr("backend.app.search.service.blend_results", lambda results: results)
-    monkeypatch.setattr(
-        "backend.app.search.service.maybe_rerank",
-        lambda query, results, enabled, model: results,
-    )
+    _stub_search(monkeypatch, [])
+    _mute_metrics(monkeypatch)
 
-    query_events: list[tuple[int, bool]] = []
-    monkeypatch.setattr(
-        "backend.app.search.service.metrics.record_query_event",
-        lambda results_count, triggered, latency_ms: query_events.append((results_count, triggered)),
-    )
-    focused_calls: list[int] = []
-    monkeypatch.setattr(
-        "backend.app.search.service.metrics.record_focused_enqueue",
-        lambda count=1: focused_calls.append(count),
-    )
-    monkeypatch.setattr("backend.app.search.service.metrics.record_search_latency", lambda ms: None)
-    monkeypatch.setattr("backend.app.search.service.metrics.record_llm_usage_event", lambda count=1: None)
+    results, job_id, context = service.run_query("docs", limit=5, use_llm=None, model="llama2")
 
-    results, job_id = service.run_query("docs", limit=5, use_llm=None, model="llama2")
-
-    assert results
+    assert results == []
     assert job_id == "job-1"
-    assert manager.calls == [("docs", True, "llama2")]
-    assert query_events and query_events[0][1] is True
-    assert focused_calls == [1]
+    assert context["trigger_reason"] == "no_results"
+    assert manager.calls and manager.calls[0]["frontier_seeds"] == ["https://seed.one"]
+
+
+def test_run_query_skips_when_confident(monkeypatch, tmp_path):
+    config = _base_config(tmp_path)
+
+    class StubManager:
+        def __init__(self) -> None:
+            self.calls = []
+            self.db = SimpleNamespace(similar_discovery_seeds=lambda *args, **kwargs: [])
+
+        def schedule(self, *args, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("schedule should not be invoked for confident hits")
+
+        def last_index_time(self) -> int:
+            return 0
+
+    manager = StubManager()
+    service = SearchService(config, manager)
+    service._get_index = lambda: object()
+
+    hits = [
+        {
+            "url": "https://example.com",
+            "title": "Example",
+            "snippet": "",
+            "score": 1.2,
+            "blended_score": 1.2,
+            "lang": "en",
+        }
+    ]
+    _stub_search(monkeypatch, hits)
+    _mute_metrics(monkeypatch)
+
+    results, job_id, context = service.run_query("docs", limit=5, use_llm=None, model=None)
+
+    assert job_id is None
+    assert context["triggered"] is False
+    assert context["confidence"] > config.smart_confidence_threshold
+
+
+def test_run_query_triggers_for_low_confidence(monkeypatch, tmp_path):
+    config = _base_config(tmp_path)
+
+    class StubManager:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.db = SimpleNamespace(similar_discovery_seeds=lambda *args, **kwargs: ["https://seed.one", "https://seed.two"])
+
+        def schedule(self, query, use_llm, model, *, frontier_seeds=None, query_embedding=None):
+            self.calls.append(
+                {
+                    "query": query,
+                    "frontier": list(frontier_seeds or []),
+                    "embedding": list(query_embedding or []),
+                }
+            )
+            return "job-low"
+
+        def last_index_time(self) -> int:
+            return 0
+
+    manager = StubManager()
+    service = SearchService(config, manager)
+    service._get_index = lambda: object()
+
+    hits = [
+        {
+            "url": "https://example.com",
+            "title": "Example",
+            "snippet": "",
+            "score": 0.05,
+            "blended_score": 0.05,
+            "lang": "en",
+        }
+    ]
+
+    _stub_search(monkeypatch, hits)
+    _mute_metrics(monkeypatch)
+
+    results, job_id, context = service.run_query("docs", limit=5, use_llm=None, model=None)
+
+    assert job_id == "job-low"
+    assert context["trigger_reason"] == "low_confidence"
+    assert context["seed_count"] == 2
+    assert manager.calls and manager.calls[0]["frontier"] == ["https://seed.one", "https://seed.two"]

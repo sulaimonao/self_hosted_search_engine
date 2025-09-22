@@ -8,13 +8,17 @@ the crawler and search components.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
+
+from backend.app.search.embedding import cosine_similarity
 from urllib.parse import urlparse
 
 __all__ = [
@@ -54,6 +58,29 @@ def _normalize_url(url: str) -> Optional[str]:
 
 def _ts(value: Optional[float]) -> float:
     return float(value if value is not None else time.time())
+
+
+def _normalize_embedding(embedding: Sequence[float]) -> list[float]:
+    vector = [float(value) for value in embedding]
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0.0:
+        return [0.0 for value in vector]
+    return [value / norm for value in vector]
+
+
+def _serialize_embedding(embedding: Sequence[float]) -> str:
+    normalized = _normalize_embedding(embedding)
+    return json.dumps([round(value, 6) for value in normalized])
+
+
+def _deserialize_embedding(payload: str) -> list[float]:
+    try:
+        data = json.loads(payload or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [float(value) for value in data]
 
 
 @dataclass
@@ -155,6 +182,12 @@ class LearnedWebDB:
         CREATE INDEX IF NOT EXISTS idx_pages_domain_id ON pages(domain_id);
         CREATE INDEX IF NOT EXISTS idx_links_to_url ON links(to_url);
         CREATE INDEX IF NOT EXISTS idx_discoveries_query ON discoveries(query);
+
+        CREATE TABLE IF NOT EXISTS query_embeddings (
+            query TEXT PRIMARY KEY,
+            embedding TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
         """
         with self._lock:
             self._conn.executescript(ddl)
@@ -357,6 +390,79 @@ class LearnedWebDB:
                 (query, domain_id, normalized_url, reason, source, float(score), ts, crawl_id),
             )
         return domain_id
+
+    def upsert_query_embedding(
+        self,
+        query: str,
+        embedding: Sequence[float],
+        *,
+        updated_at: Optional[float] = None,
+    ) -> None:
+        normalized_query = (query or "").strip()
+        if not normalized_query:
+            return
+        serialized = _serialize_embedding(embedding)
+        ts = _ts(updated_at)
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO query_embeddings (query, embedding, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(query) DO UPDATE SET
+                    embedding = excluded.embedding,
+                    updated_at = excluded.updated_at
+                """,
+                (normalized_query, serialized, ts),
+            )
+
+    def similar_discovery_seeds(
+        self,
+        embedding: Sequence[float],
+        *,
+        limit: int = 10,
+        min_similarity: float = 0.35,
+        per_query: int = 5,
+    ) -> list[str]:
+        if not embedding:
+            return []
+        target = _normalize_embedding(embedding)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT query, embedding FROM query_embeddings"
+            ).fetchall()
+        candidates: list[tuple[float, str]] = []
+        for row in rows:
+            stored = _deserialize_embedding(row["embedding"])
+            if not stored or len(stored) != len(target):
+                continue
+            similarity = cosine_similarity(target, stored)
+            if similarity >= min_similarity:
+                candidates.append((similarity, row["query"]))
+        candidates.sort(reverse=True)
+        seeds: list[str] = []
+        seen: set[str] = set()
+        for similarity, query in candidates:
+            with self._lock:
+                urls = self._conn.execute(
+                    """
+                    SELECT url, MAX(score) AS best_score
+                    FROM discoveries
+                    WHERE query = ?
+                    GROUP BY url
+                    ORDER BY best_score DESC
+                    LIMIT ?
+                    """,
+                    (query, int(per_query)),
+                ).fetchall()
+            for row in urls:
+                url = row["url"]
+                if url in seen:
+                    continue
+                seen.add(url)
+                seeds.append(url)
+                if len(seeds) >= limit:
+                    return seeds
+        return seeds
 
     # -- pages & links -----------------------------------------------------------
 

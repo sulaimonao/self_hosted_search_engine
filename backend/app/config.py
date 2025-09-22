@@ -30,6 +30,9 @@ class AppConfig:
     focused_budget: int
     smart_min_results: int
     smart_trigger_cooldown: int
+    smart_confidence_threshold: float
+    smart_seed_min_similarity: float
+    smart_seed_limit: int
     search_default_limit: int
     search_max_limit: int
     max_query_length: int
@@ -54,6 +57,9 @@ class AppConfig:
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
         smart_min_results = max(0, int(os.getenv("SMART_MIN_RESULTS", "1")))
         smart_trigger_cooldown = max(0, int(os.getenv("SMART_TRIGGER_COOLDOWN", "900")))
+        smart_confidence_threshold = float(os.getenv("SMART_CONFIDENCE_THRESHOLD", "0.35"))
+        smart_seed_min_similarity = float(os.getenv("SMART_SEED_MIN_SIMILARITY", "0.35"))
+        smart_seed_limit = max(0, int(os.getenv("SMART_SEED_LIMIT", "12")))
         search_default_limit = max(1, int(os.getenv("SEARCH_DEFAULT_LIMIT", "20")))
         search_max_limit = max(search_default_limit, int(os.getenv("SEARCH_MAX_LIMIT", "50")))
         max_query_length = max(32, int(os.getenv("SEARCH_MAX_QUERY_LENGTH", "256")))
@@ -74,6 +80,9 @@ class AppConfig:
             focused_budget=focused_budget,
             smart_min_results=smart_min_results,
             smart_trigger_cooldown=smart_trigger_cooldown,
+            smart_confidence_threshold=smart_confidence_threshold,
+            smart_seed_min_similarity=smart_seed_min_similarity,
+            smart_seed_limit=smart_seed_limit,
             search_default_limit=search_default_limit,
             search_max_limit=search_max_limit,
             max_query_length=max_query_length,
@@ -102,6 +111,9 @@ class AppConfig:
             "focused_budget": self.focused_budget,
             "smart_min_results": self.smart_min_results,
             "smart_trigger_cooldown": self.smart_trigger_cooldown,
+            "smart_confidence_threshold": self.smart_confidence_threshold,
+            "smart_seed_min_similarity": self.smart_seed_min_similarity,
+            "smart_seed_limit": self.smart_seed_limit,
             "search_default_limit": self.search_default_limit,
             "search_max_limit": self.search_max_limit,
             "max_query_length": self.max_query_length,
