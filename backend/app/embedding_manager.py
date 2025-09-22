@@ -60,10 +60,51 @@ class EmbeddingManager:
     # ------------------------------------------------------------------
     def ollama_alive(self, timeout: float = 1.0) -> bool:
         try:
-            response = requests.get(f"{self.base_url}/api/version", timeout=timeout)
-            return response.ok
-        except requests.RequestException:
+            result = subprocess.run(
+                ["ollama", "ps"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(timeout, 0.1),
+            )
+        except subprocess.TimeoutExpired:
             return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        if result.returncode != 0:
+            return False
+
+        output = (result.stdout or "").strip()
+        if not output:
+            return True
+
+        lines = [line for line in output.splitlines() if line.strip()]
+        if not lines:
+            return True
+
+        header_line = lines[0]
+        status_pos = header_line.upper().find("STATUS")
+        header_tokens = header_line.upper().split()
+        token_index = header_tokens.index("STATUS") if "STATUS" in header_tokens else None
+
+        for line in lines[1:]:
+            status_text: str = ""
+            if token_index is not None:
+                parts = line.split()
+                if len(parts) > token_index:
+                    status_text = " ".join(parts[token_index:])
+            if not status_text and status_pos != -1 and len(line) > status_pos:
+                status_text = line[status_pos:].strip()
+            status_text = status_text.strip()
+            if not status_text:
+                continue
+            lowered = status_text.lower()
+            if any(term in lowered for term in ("error", "offline", "fail")):
+                return False
+            return True
+
+        return True
 
     def try_start_ollama(self) -> Optional[str]:
         system = platform.system().lower()
@@ -140,20 +181,32 @@ class EmbeddingManager:
 
     def list_models(self) -> list[str]:
         try:
-            response = requests.get(f"{self.base_url}/api/tags", timeout=3)
-            response.raise_for_status()
-        except requests.RequestException:
+            result = subprocess.run(
+                ["ollama", "list"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except subprocess.TimeoutExpired:
             return []
-        try:
-            payload = response.json()
-        except ValueError:
+        except (OSError, subprocess.SubprocessError):
             return []
+
+        if result.returncode != 0:
+            return []
+
+        output = result.stdout or ""
         models: list[str] = []
-        for entry in payload.get("models", []):
-            if isinstance(entry, dict):
-                name = entry.get("name")
-                if isinstance(name, str) and name:
-                    models.append(name)
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line or line.lower().startswith("name"):
+                continue
+            if line.lower().startswith("no models"):
+                continue
+            name = line.split()[0]
+            if name:
+                models.append(name.rstrip("*"))
         return models
 
     def model_present(self, name: str) -> bool:

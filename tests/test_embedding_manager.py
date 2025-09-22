@@ -1,45 +1,63 @@
 from __future__ import annotations
 
+import subprocess
 import threading
-from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
 from backend.app.embedding_manager import EmbeddingManager
 
 
-class DummyResponse:
-    def __init__(self, payload: dict[str, Any], *, status_code: int = 200) -> None:
-        self._payload = payload
-        self.status_code = status_code
-        self.ok = status_code == 200
+def test_ollama_alive_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
 
-    def raise_for_status(self) -> None:
-        if not self.ok:
-            raise RuntimeError("http error")
+    sample_output = "NAME       STATUS\nembedding  Running\n"
 
-    def json(self) -> dict[str, Any]:
-        return self._payload
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["ollama", "ps"]
+        assert kwargs.get("capture_output")
+        assert kwargs.get("text")
+        return SimpleNamespace(stdout=sample_output, returncode=0)
+
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
+    assert manager.ollama_alive(timeout=0.5) is True
+
+
+def test_ollama_alive_handles_cli_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
+    assert manager.ollama_alive(timeout=0.2) is False
 
 
 def test_list_models_parses_names(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
 
-    def fake_get(url: str, timeout: float = 0) -> DummyResponse:
-        assert url.endswith("/api/tags")
-        payload = {
-            "models": [
-                {"name": "embeddinggemma"},
-                {"name": "nomic-embed-text"},
-                {"name": ""},
-                {"invalid": "entry"},
-            ]
-        }
-        return DummyResponse(payload)
+    sample_output = "NAME       ID      SIZE\nembeddinggemma  123  1GB\nnomic-embed-text* 456  2GB\n"
 
-    monkeypatch.setattr("backend.app.embedding_manager.requests.get", fake_get)
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["ollama", "list"]
+        assert kwargs.get("capture_output")
+        assert kwargs.get("text")
+        return SimpleNamespace(stdout=sample_output, returncode=0)
+
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
     names = manager.list_models()
     assert names == ["embeddinggemma", "nomic-embed-text"]
+
+
+def test_list_models_handles_cli_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(stdout="", returncode=1)
+
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
+    assert manager.list_models() == []
 
 
 def test_ensure_transitions_to_ready(monkeypatch: pytest.MonkeyPatch) -> None:
