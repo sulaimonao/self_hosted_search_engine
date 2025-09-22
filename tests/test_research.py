@@ -24,7 +24,20 @@ def fake_ollama_request(url, model, system, prompt):
     return "# Research Report\n\n- Key point one[^1]\n- Key point two[^2]\n- Key point three[^3]\n\n[^1]: https://example.com/one\n[^2]: https://example.com/two\n[^3]: https://example.com/three"
 
 
-def fake_run_focused_crawl(query, budget, use_llm, model, *, config: AppConfig, extra_seeds=None):
+def fake_run_focused_crawl(
+    query,
+    budget,
+    use_llm,
+    model,
+    *,
+    config: AppConfig,
+    extra_seeds=None,
+    manual_seeds=None,
+    frontier_depth=None,
+    query_embedding=None,
+    progress_callback=None,
+    db=None,
+):
     config.ensure_dirs()
     doc = {
         "url": "https://example.com/one",
@@ -49,6 +62,16 @@ def fake_run_focused_crawl(query, budget, use_llm, model, *, config: AppConfig, 
         "duration": 0.01,
         "normalized_docs": [doc],
         "raw_path": None,
+        "embedded": 0,
+        "new_domains": 0,
+        "discovery": {
+            "mode": "manual" if manual_seeds else "discovery",
+            "seed_count": 1,
+            "sources": {"manual" if manual_seeds else "registry": 1},
+            "seeds": [doc["url"]],
+            "budget": budget,
+            "depth": frontier_depth,
+        },
     }
 
 

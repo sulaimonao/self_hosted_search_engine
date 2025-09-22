@@ -14,7 +14,7 @@ def test_learned_web_db_persists_discovery_and_pages(tmp_path) -> None:
 
     assert db.domain_value_map() == {}
 
-    domain_id = db.record_discovery(
+    domain_info = db.record_discovery(
         "test query",
         "https://example.com/docs",
         reason="frontier",
@@ -22,7 +22,9 @@ def test_learned_web_db_persists_discovery_and_pages(tmp_path) -> None:
         source="seed",
         discovered_at=123.0,
     )
-    assert domain_id is not None
+    assert domain_info is not None
+    domain_id, created = domain_info
+    assert created is True
 
     value_map = db.domain_value_map()
     assert value_map["example.com"] >= 1.2

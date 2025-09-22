@@ -34,6 +34,13 @@ class SearchService:
             self._index_dir = self.config.index_dir
             return self._index
 
+    def reload_index(self) -> None:
+        """Force the Whoosh index handle to be refreshed."""
+
+        with self._lock:
+            self._index = ensure_index(self.config.index_dir)
+            self._index_dir = self.config.index_dir
+
     def _estimate_confidence(self, results: Sequence[dict]) -> float:
         if not results:
             return 0.0
