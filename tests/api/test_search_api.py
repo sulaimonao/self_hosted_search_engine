@@ -100,6 +100,50 @@ def _build_app(store, coldstart, rag_agent, *, embed_manager=None, engine_config
     return app
 
 
+def test_search_service_endpoint_returns_job_id_with_results():
+    class StubSearchService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int, bool, str | None]] = []
+
+        def run_query(self, query: str, *, limit: int, use_llm: bool, model: str | None):
+            self.calls.append((query, limit, use_llm, model))
+            return (
+                [
+                    {
+                        "url": "https://docs.example.com",
+                        "title": "Example Doc",
+                        "snippet": "Sample snippet",
+                        "score": 1.0,
+                        "lang": "en",
+                    }
+                ],
+                "job-123",
+            )
+
+        def last_index_time(self) -> int:
+            return 1700000000
+
+    search_service = StubSearchService()
+    app = Flask(__name__)
+    app.register_blueprint(search_bp)
+    app.config.update(
+        SEARCH_SERVICE=search_service,
+        APP_CONFIG=SimpleNamespace(search_default_limit=5, smart_min_results=1),
+    )
+    app.testing = True
+
+    client = app.test_client()
+    response = client.get("/api/search", query_string={"q": "docs"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    assert payload["job_id"] == "job-123"
+    assert payload["results"][0]["url"] == "https://docs.example.com"
+    assert payload["last_index_time"] == search_service.last_index_time()
+    assert search_service.calls == [("docs", 5, False, None)]
+
+
 def test_search_returns_answer_and_results():
     chunks = [
         RetrievedChunk(
