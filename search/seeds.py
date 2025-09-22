@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional
 from urllib.parse import urlparse
 
+from server.learned_web_db import get_db
+
 DEFAULT_SEEDS_PATH = Path(os.getenv("SEEDS_PATH", "data/seeds.jsonl"))
 
 __all__ = [
@@ -100,6 +102,15 @@ def get_top_domains(limit: int = 20, path: Optional[Path] = None) -> list[str]:
         return []
 
     scores = _domain_weight(entries)
+    try:
+        for domain, value in get_db().domain_value_map().items():
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            scores[domain] = max(scores.get(domain, 0.0), numeric)
+    except Exception:  # pragma: no cover - defensive fallback
+        pass
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     return [domain for domain, _ in ordered[:limit]]
 

@@ -14,6 +14,8 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
+from server.learned_web_db import get_db
+
 LOGGER = logging.getLogger(__name__)
 
 PATTERN_BANK = [
@@ -165,11 +167,24 @@ def build_frontier(
     cooldown_value = DEFAULT_COOLDOWN if cooldown_seconds is None else max(0, int(cooldown_seconds))
 
     override_map: Dict[str, float] = {}
+    try:
+        for domain, score in get_db().domain_value_map().items():
+            try:
+                numeric = float(score)
+            except (TypeError, ValueError):
+                continue
+            override_map[domain] = max(override_map.get(domain, 0.0), numeric)
+    except Exception:  # pragma: no cover - defensive logging only
+        LOGGER.debug("failed to load learned domain priors", exc_info=True)
     for domain, score in (value_overrides or {}).items():
         normalized = _normalize_host(domain)
         if not normalized:
             continue
-        override_map[normalized] = max(override_map.get(normalized, 0.0), float(score))
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            continue
+        override_map[normalized] = max(override_map.get(normalized, 0.0), numeric)
 
     def _add(url: str, source: str, weight: float) -> None:
         sanitized = _sanitize(url)

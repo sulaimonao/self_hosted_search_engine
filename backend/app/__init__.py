@@ -24,6 +24,7 @@ from .jobs.runner import JobRunner
 from .metrics import metrics
 from .search.service import SearchService
 from server.refresh_worker import RefreshWorker
+from server.learned_web_db import get_db
 
 LOGGER = logging.getLogger(__name__)
 EMBEDDING_MODEL_PATTERNS = [
@@ -53,8 +54,9 @@ def create_app() -> Flask:
     config.ensure_dirs()
     config.log_summary()
 
+    db = get_db(config.learned_web_db_path)
     runner = JobRunner(config.logs_dir)
-    manager = FocusedCrawlManager(config, runner)
+    manager = FocusedCrawlManager(config, runner, db)
     search_service = SearchService(config, manager)
     refresh_worker = RefreshWorker(config)
 
@@ -64,6 +66,7 @@ def create_app() -> Flask:
         FOCUSED_MANAGER=manager,
         SEARCH_SERVICE=search_service,
         REFRESH_WORKER=refresh_worker,
+        LEARNED_WEB_DB=db,
     )
 
     app.register_blueprint(search_api.bp)

@@ -15,6 +15,8 @@ from urllib.parse import quote, urlparse, urlunparse
 from frontier.dedupe import UrlBloom
 from rank.authority import AuthorityIndex
 
+from server.learned_web_db import get_db
+
 from . import seeds as seed_store
 
 LOGGER = logging.getLogger(__name__)
@@ -193,6 +195,17 @@ def _domain_from_url(url: str) -> str:
 @lru_cache(maxsize=1)
 def _load_value_map() -> Dict[str, float]:
     mapping: Dict[str, float] = {}
+    try:
+        db_map = get_db().domain_value_map()
+    except Exception:  # pragma: no cover - defensive logging only
+        LOGGER.debug("learned web db unavailable during frontier build", exc_info=True)
+        db_map = {}
+    for domain, score in db_map.items():
+        try:
+            numeric = float(score)
+        except (TypeError, ValueError):
+            continue
+        mapping[domain] = max(mapping.get(domain, 0.0), numeric)
     # Curated seeds first.
     if CURATED_PATH.exists():
         with CURATED_PATH.open("r", encoding="utf-8") as handle:

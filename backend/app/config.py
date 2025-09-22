@@ -25,6 +25,7 @@ class AppConfig:
     simhash_path: Path
     last_index_time_path: Path
     logs_dir: Path
+    learned_web_db_path: Path
     focused_enabled: bool
     focused_budget: int
     smart_min_results: int
@@ -47,6 +48,7 @@ class AppConfig:
         simhash_path = Path(os.getenv("SIMHASH_PATH", data_dir / "simhash_index.json"))
         last_index_time_path = Path(os.getenv("LAST_INDEX_TIME_PATH", data_dir / ".last_index_time"))
         logs_dir = Path(os.getenv("LOGS_DIR", data_dir / "logs"))
+        learned_web_db_path = Path(os.getenv("LEARNED_WEB_DB_PATH", data_dir / "learned_web.sqlite3"))
 
         focused_enabled = os.getenv("FOCUSED_CRAWL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
@@ -67,6 +69,7 @@ class AppConfig:
             simhash_path=simhash_path,
             last_index_time_path=last_index_time_path,
             logs_dir=logs_dir,
+            learned_web_db_path=learned_web_db_path,
             focused_enabled=focused_enabled,
             focused_budget=focused_budget,
             smart_min_results=smart_min_results,
@@ -89,6 +92,7 @@ class AppConfig:
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self.simhash_path.parent.mkdir(parents=True, exist_ok=True)
         self.last_index_time_path.parent.mkdir(parents=True, exist_ok=True)
+        self.learned_web_db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def log_summary(self) -> None:
         """Log environment-derived flags for observability."""
@@ -104,6 +108,7 @@ class AppConfig:
             "ollama_url": self.ollama_url,
             "crawl_use_playwright": self.crawl_use_playwright,
             "use_llm_rerank": self.use_llm_rerank,
+            "learned_web_db_path": str(self.learned_web_db_path),
         }
         LOGGER.info("runtime configuration: %s", json.dumps(payload, sort_keys=True))
 
