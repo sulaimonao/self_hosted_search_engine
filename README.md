@@ -112,7 +112,7 @@ The web UI now includes an "LLM Assist" panel:
 
 - The status row checks `ollama --version` and the Ollama HTTP API (`/api/tags`) to report whether the runtime is installed and
   reachable.
-- A model dropdown lists locally available models. The selection is stored in `localStorage` and passed to the focused crawl.
+- A model dropdown lists locally available chat-capable models. Embedding-only entries are hidden to keep the picker focused on conversational models. The selection is stored in `localStorage` and passed to the focused crawl.
 - The "Use LLM for discovery" toggle persists in `localStorage` and controls whether `smart_search` adds the `--use-llm` flag.
 - Inline guidance appears when Ollama is missing, stopped, or running without any pulled models.
 

@@ -215,6 +215,13 @@ ollama pull llama3.1:8b-instruct</code></pre>
   const SMART_MIN_RESULTS = Number(document.body.dataset.smartMinResults || "1");
   const STORAGE_MODEL_KEY = "ollama_model";
   const STORAGE_TOGGLE_KEY = "smart_use_llm";
+  const EMBEDDING_MODEL_PATTERNS = [
+    /(?:^|[-_:])embed(?:ding)?/i,
+    /(?:^|[-_:])gte[-_:]/i,
+    /(?:^|[-_:])bge[-_:]/i,
+    /(?:^|[-_:])text2vec/i,
+    /(?:^|[-_:])e5[-_:]/i,
+  ];
 
   const state = {
     searchJobId: null,
@@ -234,6 +241,35 @@ ollama pull llama3.1:8b-instruct</code></pre>
       pendingSearch: null,
     },
   };
+
+  function isEmbeddingModelName(name) {
+    if (!name || typeof name !== "string") {
+      return false;
+    }
+    return EMBEDDING_MODEL_PATTERNS.some((pattern) => pattern.test(name));
+  }
+
+  function filterChatCapableModels(models) {
+    if (!Array.isArray(models)) {
+      return [];
+    }
+    return models
+      .map((model) => {
+        if (typeof model === "string") {
+          const trimmed = model.trim();
+          return trimmed ? { name: trimmed } : null;
+        }
+        if (model && typeof model.name === "string") {
+          const trimmed = model.name.trim();
+          if (!trimmed) {
+            return null;
+          }
+          return { ...model, name: trimmed };
+        }
+        return null;
+      })
+      .filter((model) => model && model.name && !isEmbeddingModelName(model.name));
+  }
 
   function setTab(tabId) {
     const panels = { chat: chatPanel, research: researchPanel };
@@ -895,16 +931,21 @@ ollama pull llama3.1:8b-instruct</code></pre>
 
   function populateModelSelect(models) {
     llmModelSelect.innerHTML = "";
+    const availableModels = filterChatCapableModels(models);
+    const hadRawModels = Array.isArray(models) && models.length > 0;
     const storedModel = localStorage.getItem(STORAGE_MODEL_KEY) || "";
-    if (!models.length) {
+    if (!availableModels.length) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "No local models detected";
+      option.textContent = hadRawModels
+        ? "No chat-capable models detected"
+        : "No local models detected";
       llmModelSelect.appendChild(option);
       llmModelSelect.disabled = true;
       if (llmInstructionsText) {
-        llmInstructionsText.textContent =
-          'Ollama is running but no models were found. Pull one (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:';
+        llmInstructionsText.textContent = hadRawModels
+          ? 'Only embedding models were found. Pull a chat model (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:'
+          : 'Ollama is running but no models were found. Pull one (e.g. "ollama pull llama3.1:8b-instruct") to enable discovery:';
       }
       llmInstructions.hidden = false;
       return;
@@ -919,10 +960,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
     llmModelSelect.appendChild(placeholder);
 
     let matched = false;
-    models.forEach((model) => {
-      if (!model || !model.name) {
-        return;
-      }
+    availableModels.forEach((model) => {
       const option = document.createElement("option");
       option.value = model.name;
       option.textContent = model.name;

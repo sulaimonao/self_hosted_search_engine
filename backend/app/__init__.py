@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -23,6 +24,17 @@ from .metrics import metrics
 from .search.service import SearchService
 
 LOGGER = logging.getLogger(__name__)
+EMBEDDING_MODEL_PATTERNS = [
+    re.compile(r"(?:^|[-_:])embed(?:ding)?", re.IGNORECASE),
+    re.compile(r"(?:^|[-_:])gte[-_:]", re.IGNORECASE),
+    re.compile(r"(?:^|[-_:])bge[-_:]", re.IGNORECASE),
+    re.compile(r"(?:^|[-_:])text2vec", re.IGNORECASE),
+    re.compile(r"(?:^|[-_:])e5[-_:]", re.IGNORECASE),
+]
+
+
+def _is_embedding_model(name: str) -> bool:
+    return any(pattern.search(name) for pattern in EMBEDDING_MODEL_PATTERNS)
 
 
 def create_app() -> Flask:
@@ -111,9 +123,19 @@ def create_app() -> Flask:
         models: list[dict] = []
         if tags:
             for model in tags.get("models", []):
-                name = model.get("name") if isinstance(model, dict) else None
-                if isinstance(name, str) and name:
-                    models.append({"name": name})
+                name: Optional[str]
+                if isinstance(model, str):
+                    name = model
+                elif isinstance(model, dict):
+                    candidate = model.get("name")
+                    name = candidate if isinstance(candidate, str) else None
+                else:
+                    name = None
+                if not name:
+                    continue
+                cleaned = name.strip()
+                if cleaned and not _is_embedding_model(cleaned):
+                    models.append({"name": cleaned})
         return jsonify({"models": models})
 
     @app.post("/api/llm/guess-seeds")
