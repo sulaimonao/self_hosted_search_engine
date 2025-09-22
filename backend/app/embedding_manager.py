@@ -10,6 +10,8 @@ import threading
 import time
 from typing import Callable, Optional
 
+from urllib.parse import urlparse
+
 import requests
 
 
@@ -63,8 +65,47 @@ class EmbeddingManager:
         except requests.RequestException:
             return False
 
-    def try_start_ollama(self) -> None:
+    def try_start_ollama(self) -> Optional[str]:
         system = platform.system().lower()
+        parsed = urlparse(self.base_url)
+        serve_cmd = ["ollama", "serve"]
+        host = parsed.hostname
+        port = parsed.port
+        host_arg: Optional[str] = None
+        if host and port:
+            if host not in {"127.0.0.1", "localhost"} or port != 11434:
+                host_arg = f"{host}:{port}"
+        elif host:
+            if host not in {"127.0.0.1", "localhost"}:
+                host_arg = host
+        elif port and port != 11434:
+            host_arg = f"127.0.0.1:{port}"
+        if host_arg:
+            serve_cmd.extend(["--host", host_arg])
+
+        errors: list[str] = []
+        popen_kwargs: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if system == "windows":
+            creationflags = 0
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                creationflags |= getattr(subprocess, "DETACHED_PROCESS")
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP")
+            if creationflags:
+                popen_kwargs["creationflags"] = creationflags
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        try:
+            subprocess.Popen(serve_cmd, **popen_kwargs)
+            return None
+        except Exception as exc:  # pragma: no cover - depends on environment
+            errors.append(f"ollama serve spawn failed: {exc}")
+
         commands: list[list[str]] = []
         if system == "darwin":
             commands = [["brew", "services", "start", "ollama"]]
@@ -74,9 +115,28 @@ class EmbeddingManager:
             commands = [["powershell", "-Command", "Start-Service Ollama"]]
         for cmd in commands:
             try:
-                subprocess.run(cmd, check=False, timeout=10)
-            except Exception:  # pragma: no cover - best effort per platform
-                pass
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    timeout=10,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            except Exception as exc:  # pragma: no cover - best effort per platform
+                errors.append(f"{' '.join(cmd)} invocation failed: {exc}")
+                continue
+            if result.returncode == 0:
+                return None
+            message = (result.stderr or result.stdout or "").strip()
+            if message:
+                errors.append(f"{' '.join(cmd)} exited with code {result.returncode}: {message}")
+            else:
+                errors.append(f"{' '.join(cmd)} exited with code {result.returncode}")
+
+        if errors:
+            return "; ".join(errors)
+        return None
 
     def list_models(self) -> list[str]:
         try:
@@ -234,17 +294,21 @@ class EmbeddingManager:
     def ensure(self, preferred_model: str | None = None) -> dict:
         target = preferred_model or self.embed_model
         alive = self.ollama_alive()
+        start_detail: Optional[str] = None
         if not alive:
-            self.try_start_ollama()
+            start_detail = self.try_start_ollama()
             time.sleep(1.5)
             alive = self.ollama_alive()
             if not alive:
+                detail_message = "Ollama service is not reachable."
+                if start_detail:
+                    detail_message = f"{detail_message} ({start_detail})"
                 return self._update_status(
                     state="error",
                     progress=0,
                     model=target,
                     error="ollama_offline",
-                    detail="Ollama service is not reachable.",
+                    detail=detail_message,
                     alive=False,
                 )
         if self.model_present(target):

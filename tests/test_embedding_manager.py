@@ -143,3 +143,27 @@ def test_ensure_is_idempotent_during_install(monkeypatch: pytest.MonkeyPatch) ->
     assert results["first"]["state"] == "error"
     assert pull_calls["count"] == 1
 
+
+def test_try_start_attempts_ollama_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
+
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append(cmd)
+        raise FileNotFoundError("ollama not installed")
+
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError("service manager unavailable")
+
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
+    monkeypatch.setattr("backend.app.embedding_manager.time.sleep", lambda *_: None)
+    monkeypatch.setattr("backend.app.embedding_manager.platform.system", lambda: "Linux")
+    monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: False)
+
+    status = manager.ensure()
+
+    assert popen_calls and popen_calls[0] == ["ollama", "serve"]
+    assert status["detail"] and "ollama serve spawn failed" in status["detail"]
+
