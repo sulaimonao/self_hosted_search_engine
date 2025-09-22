@@ -20,6 +20,7 @@ from ..config import AppConfig
 from ..indexer.incremental import incremental_index
 from ..pipeline.normalize import normalize
 from .runner import JobRunner
+from server.learned_web_db import LearnedWebDB, get_db
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def run_focused_crawl(
     config: AppConfig,
     extra_seeds: Optional[Sequence[str]] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
+    db: Optional[LearnedWebDB] = None,
 ) -> dict:
     """Execute the full focused crawl pipeline and return summary statistics."""
 
@@ -45,13 +47,47 @@ def run_focused_crawl(
             LOGGER.exception("focused crawl progress callback failed", exc_info=True)
 
     start = time.perf_counter()
+    start_ts = time.time()
     config.ensure_dirs()
+    learned_db: Optional[LearnedWebDB]
+    try:
+        learned_db = db or get_db(config.learned_web_db_path)
+    except Exception:  # pragma: no cover - defensive fallback
+        LOGGER.exception("unable to open learned web database", exc_info=True)
+        learned_db = None
     _emit("frontier_start", query=query)
     seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
     _emit("frontier_complete", seed_count=len(seeds))
     print(f"[focused] query='{query}' budget={budget} seeds={len(seeds)}")
     for candidate in seeds[:10]:
         print(f"[focused] seed -> {candidate.url} ({candidate.source})")
+
+    crawl_id: Optional[int] = None
+    if learned_db is not None:
+        try:
+            crawl_id = learned_db.start_crawl(
+                query=q,
+                started_at=start_ts,
+                budget=budget,
+                seed_count=len(seeds),
+                use_llm=use_llm,
+                model=model,
+            )
+            for candidate in seeds:
+                try:
+                    learned_db.record_discovery(
+                        q,
+                        candidate.url,
+                        reason="frontier",
+                        score=float(candidate.priority),
+                        source=candidate.source,
+                        discovered_at=start_ts,
+                        crawl_id=crawl_id,
+                    )
+                except Exception:  # pragma: no cover - logging only
+                    LOGGER.debug("failed to persist frontier discovery for %s", candidate.url, exc_info=True)
+        except Exception:  # pragma: no cover - logging only
+            LOGGER.exception("failed to record crawl bootstrap", exc_info=True)
 
     _emit("crawl_start", seed_count=len(seeds))
     raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
@@ -79,6 +115,12 @@ def run_focused_crawl(
             config.last_index_time_path,
             normalized_docs,
         )
+        if learned_db is not None:
+            try:
+                urls_to_mark = [doc.get("url") for doc in normalized_docs if isinstance(doc.get("url"), str)]
+                learned_db.mark_pages_indexed(urls_to_mark, indexed_at=time.time())
+            except Exception:  # pragma: no cover - logging only
+                LOGGER.debug("failed to mark pages indexed", exc_info=True)
         _emit(
             "index_complete",
             docs_indexed=added,
@@ -92,6 +134,41 @@ def run_focused_crawl(
         else:
             _emit("index_skipped", reason="no_new_documents")
 
+    if learned_db is not None:
+        try:
+            for page in pages:
+                try:
+                    simhash = getattr(page.fingerprint, "simhash", None)
+                    md5 = getattr(page.fingerprint, "md5", None)
+                    page_id = learned_db.record_page(
+                        crawl_id,
+                        url=page.url,
+                        status=page.status,
+                        title=page.title,
+                        fetched_at=page.fetched_at,
+                        fingerprint_simhash=simhash,
+                        fingerprint_md5=md5,
+                    )
+                    if page_id:
+                        learned_db.record_links(
+                            page_id,
+                            page.outlinks,
+                            discovered_at=page.fetched_at,
+                            crawl_id=crawl_id,
+                        )
+                except Exception:  # pragma: no cover - logging only
+                    LOGGER.debug("failed to persist page %s", getattr(page, "url", "<unknown>"), exc_info=True)
+            if crawl_id is not None:
+                learned_db.complete_crawl(
+                    crawl_id,
+                    completed_at=time.time(),
+                    pages_fetched=len(pages),
+                    docs_indexed=added,
+                    raw_path=str(raw_path) if raw_path else None,
+                )
+        except Exception:  # pragma: no cover - logging only
+            LOGGER.exception("failed to persist crawl summary", exc_info=True)
+
     duration = time.perf_counter() - start
     stats = {
         "query": query,
@@ -102,6 +179,7 @@ def run_focused_crawl(
         "duration": duration,
         "normalized_docs": normalized_docs,
         "raw_path": str(raw_path) if raw_path else None,
+        "crawl_id": crawl_id,
     }
     print(f"[focused] completed in {duration:.2f}s -> indexed={added} skipped={skipped} deduped={deduped}")
     return stats
@@ -237,6 +315,7 @@ def _crawl(
 class FocusedCrawlManager:
     config: AppConfig
     runner: JobRunner
+    db: LearnedWebDB
 
     def __post_init__(self) -> None:
         import threading
@@ -274,13 +353,25 @@ class FocusedCrawlManager:
                     return None
 
             def _job() -> dict:
-                return run_focused_crawl(
-                    q,
-                    self.config.focused_budget,
-                    use_llm,
-                    model,
-                    config=self.config,
-                )
+                try:
+                    return run_focused_crawl(
+                        q,
+                        self.config.focused_budget,
+                        use_llm,
+                        model,
+                        config=self.config,
+                        db=self.db,
+                    )
+                except TypeError as exc:
+                    if "unexpected keyword argument 'db'" not in str(exc):
+                        raise
+                    return run_focused_crawl(
+                        q,
+                        self.config.focused_budget,
+                        use_llm,
+                        model,
+                        config=self.config,
+                    )
 
             job_id = self.runner.submit(_job)
             self._history[q] = now
