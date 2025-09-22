@@ -20,10 +20,13 @@ def _patch_refresh_worker(monkeypatch: pytest.MonkeyPatch):
         config,
         extra_seeds=None,
         progress_callback=None,
+        db=None,
+        frontier_depth=None,
+        seed_candidates=None,
     ):
         if progress_callback:
-            progress_callback("frontier_start", {"query": query})
-            progress_callback("frontier_complete", {"seed_count": 3})
+            progress_callback("frontier_start", {"query": query, "budget": budget, "depth": frontier_depth or 4})
+            progress_callback("frontier_complete", {"seed_count": 3, "new_domains": 2})
             progress_callback("crawl_start", {"seed_count": 3})
         time.sleep(0.01)
         if progress_callback:
@@ -42,6 +45,15 @@ def _patch_refresh_worker(monkeypatch: pytest.MonkeyPatch):
             "duration": 0.05,
             "normalized_docs": [{}],
             "raw_path": None,
+            "discovery": {
+                "seed_count": 3,
+                "new_domains": 2,
+                "mode": "manual" if seed_candidates else "discovery",
+                "depth": frontier_depth or 4,
+                "budget": budget,
+                "seeds": [],
+            },
+            "embedded": 0,
         }
 
     monkeypatch.setattr(refresh_worker, "run_focused_crawl", fake_run)
@@ -73,6 +85,10 @@ def test_refresh_flow_and_status_polling():
     assert final["state"] == "done"
     assert final["stats"]["docs_indexed"] == 1
     assert final["stats"]["pages_fetched"] == 2
+    assert final["stats"]["fetched"] == 2
+    assert final["stats"]["updated"] == 1
+    assert final["stats"]["embedded"] == 0
+    assert final["stats"]["new_domains"] == 2
 
 
 def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
@@ -88,9 +104,13 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
         config,
         extra_seeds=None,
         progress_callback=None,
+        db=None,
+        frontier_depth=None,
+        seed_candidates=None,
     ):
         if progress_callback:
-            progress_callback("frontier_start", {"query": query})
+            progress_callback("frontier_start", {"query": query, "budget": budget, "depth": frontier_depth or 4})
+            progress_callback("frontier_complete", {"seed_count": 0, "new_domains": 0})
         gate.set()
         release.wait(timeout=2)
         if progress_callback:
@@ -104,6 +124,15 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
             "duration": 0.01,
             "normalized_docs": [],
             "raw_path": None,
+            "discovery": {
+                "seed_count": 0,
+                "new_domains": 0,
+                "mode": "manual" if seed_candidates else "discovery",
+                "depth": frontier_depth or 4,
+                "budget": budget,
+                "seeds": [],
+            },
+            "embedded": 0,
         }
 
     monkeypatch.setattr(refresh_worker, "run_focused_crawl", slow_run)

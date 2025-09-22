@@ -7,7 +7,19 @@ from backend.app.config import AppConfig
 from backend.app.indexer.incremental import incremental_index
 
 
-def fake_run_focused_crawl(query, budget, use_llm, model, *, config: AppConfig, extra_seeds=None):
+def fake_run_focused_crawl(
+    query,
+    budget,
+    use_llm,
+    model,
+    *,
+    config: AppConfig,
+    extra_seeds=None,
+    progress_callback=None,
+    db=None,
+    frontier_depth=None,
+    seed_candidates=None,
+):
     config.ensure_dirs()
     doc = {
         "url": f"https://local-doc/{query.replace(' ', '-')}",
@@ -33,6 +45,15 @@ def fake_run_focused_crawl(query, budget, use_llm, model, *, config: AppConfig, 
         "duration": 0.01,
         "normalized_docs": [doc],
         "raw_path": None,
+        "discovery": {
+            "seed_count": 1,
+            "new_domains": 1,
+            "mode": "manual" if seed_candidates else "discovery",
+            "depth": frontier_depth or 4,
+            "budget": budget,
+            "seeds": [],
+        },
+        "embedded": 0,
     }
 
 

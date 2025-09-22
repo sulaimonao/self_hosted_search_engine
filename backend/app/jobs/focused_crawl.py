@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
+from urllib.parse import urlparse
 
 from crawler.frontier import Candidate
 from crawler.run import FocusedCrawler
@@ -33,6 +34,8 @@ def run_focused_crawl(
     extra_seeds: Optional[Sequence[str]] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
     db: Optional[LearnedWebDB] = None,
+    frontier_depth: Optional[int] = None,
+    seed_candidates: Optional[Sequence[Candidate]] = None,
 ) -> dict:
     """Execute the full focused crawl pipeline and return summary statistics."""
 
@@ -53,10 +56,60 @@ def run_focused_crawl(
     except Exception:  # pragma: no cover - defensive fallback
         LOGGER.exception("unable to open learned web database", exc_info=True)
         learned_db = None
-    _emit("frontier_start", query=query)
-    seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
-    _emit("frontier_complete", seed_count=len(seeds))
-    print(f"[focused] query='{query}' budget={budget} seeds={len(seeds)}")
+    q = (query or "").strip()
+    depth = max(1, int(frontier_depth) if frontier_depth is not None else 4)
+    _emit("frontier_start", query=query, budget=budget, depth=depth)
+    if seed_candidates is not None:
+        seeds = [Candidate(url=candidate.url, source=candidate.source, weight=candidate.weight, available_at=candidate.available_at, score=candidate.score) for candidate in seed_candidates]
+        discovery_mode = "manual"
+    else:
+        seeds = _get_seed_candidates(
+            query,
+            budget,
+            use_llm,
+            model,
+            config,
+            extra_seeds=extra_seeds,
+            frontier_depth=depth,
+        )
+        discovery_mode = "discovery"
+    domain_set = set()
+    for candidate in seeds:
+        try:
+            parsed = urlparse(candidate.url)
+        except Exception:
+            continue
+        host = (parsed.netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host:
+            domain_set.add(host)
+    discovery_meta = {
+        "mode": discovery_mode,
+        "budget": budget,
+        "depth": depth,
+        "seed_count": len(seeds),
+        "new_domains": len(domain_set),
+        "seeds": [
+            {
+                "url": candidate.url,
+                "source": candidate.source,
+                "score": candidate.score,
+                "weight": candidate.weight,
+            }
+            for candidate in seeds[: min(len(seeds), 50)]
+        ],
+    }
+    _emit(
+        "frontier_complete",
+        seed_count=discovery_meta["seed_count"],
+        new_domains=discovery_meta["new_domains"],
+        mode=discovery_mode,
+        depth=depth,
+    )
+    print(
+        f"[focused] query='{query}' budget={budget} depth={depth} seeds={discovery_meta['seed_count']} mode={discovery_mode}"
+    )
     for candidate in seeds[:10]:
         print(f"[focused] seed -> {candidate.url} ({candidate.source})")
 
@@ -178,6 +231,8 @@ def run_focused_crawl(
         "normalized_docs": normalized_docs,
         "raw_path": str(raw_path) if raw_path else None,
         "crawl_id": crawl_id,
+        "discovery": discovery_meta,
+        "embedded": 0,
     }
     print(f"[focused] completed in {duration:.2f}s -> indexed={added} skipped={skipped} deduped={deduped}")
     return stats
@@ -191,6 +246,7 @@ def _get_seed_candidates(
     config: AppConfig,
     *,
     extra_seeds: Optional[Sequence[str]] = None,
+    frontier_depth: Optional[int] = None,
 ) -> List[Candidate]:
     q = (query or "").strip()
     if not q:
@@ -209,10 +265,11 @@ def _get_seed_candidates(
             merged_extra.append(source)
     merged_extra.extend(llm_urls)
 
+    depth = max(1, int(frontier_depth) if frontier_depth is not None else 4)
     engine = DiscoveryEngine()
     candidates = engine.discover(
         q,
-        limit=max(budget * 4, 40),
+        limit=max(budget * depth, depth * 10),
         extra_seeds=merged_extra,
         use_llm=use_llm,
         model=model,

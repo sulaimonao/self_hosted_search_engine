@@ -75,3 +75,10 @@ class SearchService:
 
     def last_index_time(self) -> int:
         return self.manager.last_index_time()
+
+    def invalidate_index(self) -> None:
+        """Drop cached Whoosh index handle so future queries reopen it."""
+
+        with self._lock:
+            self._index = None
+            self._index_dir = None

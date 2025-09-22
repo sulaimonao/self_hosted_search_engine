@@ -121,6 +121,17 @@ app.config.update(
     RAG_EMBED_MANAGER=embed_manager,
 )
 
+worker = app.config.get("REFRESH_WORKER")
+if worker is not None:
+    try:
+        worker.configure_vector_pipeline(
+            vector_store=vector_store,
+            embedder=embedder,
+            chunker=chunker,
+        )
+    except AttributeError:  # pragma: no cover - defensive guard for legacy worker
+        logging.getLogger(__name__).debug("Refresh worker does not support vector pipeline configuration", exc_info=True)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
