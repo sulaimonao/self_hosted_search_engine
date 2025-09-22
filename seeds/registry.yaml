@@ -1,0 +1,41 @@
+sources:
+  - id: developer_docs
+    kind: curated
+    strategy: sitemap
+    entrypoints:
+      - https://developer.mozilla.org/
+      - https://docs.python.org/3/
+      - https://developer.apple.com/documentation/
+    trust: high
+  - id: open_source_hubs
+    kind: aggregator
+    strategy: feed
+    entrypoints:
+      - https://github.com/trending
+      - https://gitlab.com/explore
+      - https://bitbucket.org/product/discover
+    trust: medium
+  - id: technical_news
+    kind: editorial
+    strategy: headlines
+    entrypoints:
+      - https://news.ycombinator.com/
+      - https://www.theverge.com/tech
+      - https://www.techmeme.com/
+    trust: medium
+  - id: community_qna
+    kind: forum
+    strategy: crawl
+    entrypoints:
+      - https://stackoverflow.com/questions
+      - https://superuser.com/questions
+      - https://serverfault.com/questions
+    trust: medium
+  - id: government_open_data
+    kind: public_sector
+    strategy: catalog
+    entrypoints:
+      - https://data.gov/
+      - https://data.europa.eu/en
+      - https://www.data.gov.uk/
+    trust: high
