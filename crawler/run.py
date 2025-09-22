@@ -237,7 +237,15 @@ class FocusedCrawler:
                 continue
             sitemap_urls = await discover_sitemaps(client, candidate.url, limit=5)
             for url in sitemap_urls:
-                enriched.append(Candidate(url=url, source="sitemap", weight=candidate.weight * 0.8))
+                base = candidate.score if candidate.score is not None else candidate.weight
+                enriched.append(
+                    Candidate(
+                        url=url,
+                        source="sitemap",
+                        weight=candidate.weight * 0.8,
+                        score=base * 0.8,
+                    )
+                )
         return enriched
 
     async def _crawl(self, client: httpx.AsyncClient, seeds: List[Candidate]) -> None:
@@ -249,7 +257,7 @@ class FocusedCrawler:
         await queue.join()
         stop_event.set()
         for _ in workers:
-            await queue.put(Candidate(url="", source="stop", weight=0))
+            await queue.put(Candidate(url="", source="stop", weight=0, score=0.0))
         await asyncio.gather(*workers, return_exceptions=True)
 
     async def _worker(
