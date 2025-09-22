@@ -14,6 +14,7 @@ from engine.data.store import VectorStore
 from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.indexing.coldstart import ColdStartIndexer
 from engine.llm.ollama_client import OllamaClientError
+from backend.app.embedding_manager import EmbeddingManager
 
 bp = Blueprint("search_api", __name__, url_prefix="/api")
 
@@ -44,21 +45,61 @@ def _serialize_chunk(chunk: RetrievedChunk) -> dict:
     }
 
 
-def _embedding_unavailable_response(message: str) -> tuple:
-    model_name = current_app.config.get("RAG_EMBED_MODEL_NAME")
+def _embedding_unavailable_response(message: str, *, status: dict | None = None) -> tuple:
+    embed_config_name = current_app.config.get("RAG_EMBED_MODEL_NAME")
     host = current_app.config.get("RAG_OLLAMA_HOST")
-    action = f"ollama pull {model_name}" if model_name else None
+    status_model = (status or {}).get("model") if status else None
+    target_model = status_model or embed_config_name or "embeddinggemma"
+    action = f"ollama pull {target_model}" if target_model else None
     payload = {
         "status": _EMBEDDING_ERROR_CODE,
         "error": "Embedding model unavailable",
         "detail": message,
         "code": _EMBEDDING_ERROR_CODE,
-        "model": model_name,
+        "model": target_model,
         "host": host,
     }
     if action:
         payload["action"] = action
+    if status:
+        payload["embedder_status"] = status
+        if status.get("fallbacks"):
+            payload["fallbacks"] = status.get("fallbacks")
     return jsonify(payload), 503
+
+
+@bp.get("/embedder/status")
+def embedder_status_endpoint():
+    manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
+    model_name = current_app.config.get("RAG_EMBED_MODEL_NAME")
+    host = current_app.config.get("RAG_OLLAMA_HOST")
+    if manager is None:
+        payload = {
+            "state": "unknown",
+            "progress": 0,
+            "model": model_name,
+            "error": "manager_unavailable",
+            "auto_install": False,
+            "fallbacks": [],
+            "ollama": {"base_url": host, "alive": False},
+        }
+        return jsonify(payload)
+    status = manager.get_status(refresh=True)
+    return jsonify(status)
+
+
+@bp.post("/embedder/ensure")
+def embedder_ensure_endpoint():
+    manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
+    if manager is None:
+        return jsonify({"error": "manager_unavailable"}), 503
+    payload = request.get_json(silent=True) or {}
+    requested_model = payload.get("model")
+    if isinstance(requested_model, str) and requested_model.strip():
+        status = manager.ensure(requested_model.strip())
+    else:
+        status = manager.ensure()
+    return jsonify(status)
 
 
 @bp.get("/search")
@@ -103,17 +144,23 @@ def search_endpoint():
     embedder: OllamaEmbedder = current_app.config["RAG_EMBEDDER"]
     coldstart: ColdStartIndexer = current_app.config["RAG_COLDSTART"]
     rag_agent: RagAgent = current_app.config["RAG_AGENT"]
+    embed_manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
 
     embed_model_name = (
         current_app.config.get("RAG_EMBED_MODEL_NAME") or engine_config.models.embed
     )
 
-    if not current_app.config.get("RAG_EMBEDDING_READY", True):
-        message = (
-            "Semantic search requires a local embedding model. Install it with "
-            f"`ollama pull {embed_model_name}` and retry."
-        )
-        return _embedding_unavailable_response(message)
+    embed_status: dict | None = None
+    if embed_manager is not None:
+        embed_status = embed_manager.wait_until_ready()
+        state = embed_status.get("state") if embed_status else "unknown"
+        if state != "ready":
+            detail = embed_status.get("detail") or embed_status.get("error") or "Embedding model is not ready."
+            return _embedding_unavailable_response(detail, status=embed_status)
+        active_model = embed_status.get("model") or embed_model_name
+        if active_model:
+            embedder.set_model(active_model)
+            embed_model_name = active_model
 
     try:
         query_vector = embedder.embed_query(query)

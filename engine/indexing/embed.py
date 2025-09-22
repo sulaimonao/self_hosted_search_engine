@@ -18,6 +18,17 @@ class OllamaEmbedder:
         self._client = client
         self._model = model
 
+    @property
+    def model(self) -> str:
+        """Return the active embedding model name."""
+
+        return self._model
+
+    def set_model(self, model: str) -> None:
+        """Update the active embedding model name."""
+
+        self._model = model
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []

@@ -28,6 +28,41 @@
             <input type="checkbox" id="llm-toggle" />
             <span>Use LLM for discovery (focused crawl)</span>
           </label>
+          <section
+            id="embedder-status"
+            class="embedder-status"
+            aria-live="polite"
+            aria-busy="false"
+          >
+            <div class="embedder-header">
+              <h2>Embedding model</h2>
+              <p id="embedder-status-text">Checking Ollama…</p>
+            </div>
+            <div
+              id="embedder-progress"
+              class="embedder-progress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              hidden
+            >
+              <div id="embedder-progress-bar"></div>
+            </div>
+            <div class="embedder-actions">
+              <button type="button" id="embedder-retry" hidden>Retry</button>
+              <div id="embedder-fallback-group" class="fallback-group" hidden>
+                <label for="embedder-fallback-select">Use fallback</label>
+                <select id="embedder-fallback-select"></select>
+                <button type="button" id="embedder-fallback-apply">Apply</button>
+              </div>
+              <button type="button" id="embedder-start" hidden>Start Ollama</button>
+            </div>
+            <p class="embedder-help" id="embedder-help-text">
+              We'll install <code>embeddinggemma</code> automatically. Manual command:
+              <code>ollama pull embeddinggemma</code>
+            </p>
+          </section>
           <section id="status" aria-live="polite" aria-busy="false"></section>
           <section id="focused-status" class="focused-status" aria-live="polite" aria-busy="false" hidden>
             <h2>Focused crawl activity</h2>
@@ -152,6 +187,16 @@ ollama pull llama3.1:8b-instruct</code></pre>
   const llmInstructions = document.getElementById("llm-instructions");
   const llmInstructionsText = document.getElementById("llm-instructions-text");
   const defaultInstructionsText = llmInstructionsText ? llmInstructionsText.textContent : "";
+  const embedderContainer = document.getElementById("embedder-status");
+  const embedderStatusText = document.getElementById("embedder-status-text");
+  const embedderProgress = document.getElementById("embedder-progress");
+  const embedderProgressBar = document.getElementById("embedder-progress-bar");
+  const embedderRetryBtn = document.getElementById("embedder-retry");
+  const embedderFallbackGroup = document.getElementById("embedder-fallback-group");
+  const embedderFallbackSelect = document.getElementById("embedder-fallback-select");
+  const embedderFallbackApply = document.getElementById("embedder-fallback-apply");
+  const embedderStartBtn = document.getElementById("embedder-start");
+  const embedderHelpText = document.getElementById("embedder-help-text");
   const chatTabs = document.querySelectorAll(".assist-tab");
   const chatPanel = document.getElementById("chat-panel");
   const researchPanel = document.getElementById("research-panel");
@@ -183,6 +228,11 @@ ollama pull llama3.1:8b-instruct</code></pre>
     chatMessages: [],
     researchJobId: null,
     researchPollTimer: null,
+    embedder: {
+      status: null,
+      pollTimer: null,
+      pendingSearch: null,
+    },
   };
 
   function setTab(tabId) {
@@ -216,9 +266,237 @@ ollama pull llama3.1:8b-instruct</code></pre>
     localStorage.setItem(STORAGE_MODEL_KEY, llmModelSelect.value);
   });
 
+  if (embedderRetryBtn) {
+    embedderRetryBtn.addEventListener("click", () => {
+      refreshEmbedderStatus({ triggerInstall: true });
+    });
+  }
+
+  if (embedderStartBtn) {
+    embedderStartBtn.addEventListener("click", () => {
+      refreshEmbedderStatus({ triggerInstall: true });
+    });
+  }
+
+  if (embedderFallbackApply) {
+    embedderFallbackApply.addEventListener("click", () => {
+      if (!embedderFallbackSelect) {
+        return;
+      }
+      const selection = embedderFallbackSelect.value;
+      if (!selection) {
+        return;
+      }
+      refreshEmbedderStatus({ triggerInstall: true, model: selection });
+    });
+  }
+
   function updateStatus(text, busy = false) {
     statusEl.textContent = text;
     statusEl.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
+  function populateFallbackOptions(fallbacks) {
+    if (!embedderFallbackSelect) {
+      return;
+    }
+    embedderFallbackSelect.innerHTML = "";
+    fallbacks.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      embedderFallbackSelect.appendChild(option);
+    });
+  }
+
+  function manageEmbedderPolling(status) {
+    if (state.embedder.pollTimer) {
+      clearInterval(state.embedder.pollTimer);
+      state.embedder.pollTimer = null;
+    }
+    if (status && status.state === "installing") {
+      state.embedder.pollTimer = setInterval(() => {
+        refreshEmbedderStatus({ triggerInstall: false });
+      }, 1500);
+    }
+  }
+
+  function updateEmbedderUI(status) {
+    if (!embedderContainer) {
+      return;
+    }
+    const stateName = status?.state || "unknown";
+    const modelName = status?.model || "embeddinggemma";
+    const progress = Number(status?.progress ?? 0);
+    embedderContainer.hidden = false;
+    embedderContainer.setAttribute("aria-busy", stateName === "installing" ? "true" : "false");
+
+    if (embedderStatusText) {
+      let message = "Checking Ollama…";
+      if (stateName === "ready") {
+        message = `Ready: ${modelName}`;
+      } else if (stateName === "installing") {
+        message = `Installing ${modelName}… ${Math.max(0, Math.min(100, progress))}%`;
+      } else if (stateName === "missing") {
+        message = `Model ${modelName} is not installed yet.`;
+      } else if (stateName === "absent") {
+        message = "Automatic installation is disabled in configuration.";
+      } else if (stateName === "error") {
+        message = status?.detail || status?.error || `Unable to prepare ${modelName}.`;
+      }
+      embedderStatusText.textContent = message;
+    }
+
+    if (embedderProgress && embedderProgressBar) {
+      if (stateName === "installing") {
+        const safe = Math.max(0, Math.min(100, progress || 0));
+        embedderProgress.hidden = false;
+        embedderProgress.setAttribute("aria-valuenow", String(safe));
+        embedderProgressBar.style.width = `${safe}%`;
+        embedderProgressBar.textContent = `${safe}%`;
+      } else {
+        embedderProgress.hidden = true;
+        embedderProgress.setAttribute("aria-valuenow", String(progress || 0));
+        embedderProgressBar.style.width = `${Math.max(0, Math.min(100, progress || 0))}%`;
+        embedderProgressBar.textContent = "";
+      }
+    }
+
+    if (embedderRetryBtn) {
+      const allowRetry = stateName === "error" || stateName === "missing";
+      embedderRetryBtn.hidden = !allowRetry;
+      embedderRetryBtn.disabled = stateName === "installing";
+    }
+
+    if (embedderStartBtn) {
+      const offline = status?.error === "ollama_offline" || status?.ollama?.alive === false;
+      embedderStartBtn.hidden = !offline;
+      embedderStartBtn.disabled = stateName === "installing";
+    }
+
+    const fallbackList = Array.isArray(status?.fallbacks)
+      ? status.fallbacks.filter((name) => Boolean(name))
+      : [];
+    if (embedderFallbackGroup) {
+      if (fallbackList.length && stateName === "error") {
+        embedderFallbackGroup.hidden = false;
+        populateFallbackOptions(fallbackList);
+      } else {
+        embedderFallbackGroup.hidden = true;
+        if (embedderFallbackSelect) {
+          embedderFallbackSelect.innerHTML = "";
+        }
+      }
+    }
+
+    if (embedderHelpText) {
+      embedderHelpText.hidden = false;
+    }
+  }
+
+  function handleEmbedderStatus(status) {
+    state.embedder.status = status;
+    updateEmbedderUI(status);
+    manageEmbedderPolling(status);
+    if (status && status.state === "ready" && state.embedder.pendingSearch) {
+      const pending = state.embedder.pendingSearch;
+      state.embedder.pendingSearch = null;
+      updateStatus("Embedding ready. Running your query…", true);
+      runSearch({ auto: pending.auto, skipEmbedCheck: true });
+    }
+  }
+
+  async function refreshEmbedderStatus({ triggerInstall = false, model } = {}) {
+    try {
+      let response;
+      if (triggerInstall) {
+        const headers = { "Content-Type": "application/json" };
+        const body = model ? JSON.stringify({ model }) : JSON.stringify({});
+        response = await fetch("/api/embedder/ensure", {
+          method: "POST",
+          headers,
+          body,
+        });
+      } else {
+        response = await fetch("/api/embedder/status");
+      }
+      if (!response.ok) {
+        throw new Error(`Embedder request failed: ${response.status}`);
+      }
+      const status = await response.json();
+      handleEmbedderStatus(status);
+      return status;
+    } catch (error) {
+      console.error(error);
+      const fallbackStatus = {
+        state: "error",
+        error: "request_failed",
+        detail: "Unable to reach embedder API.",
+        model: (state.embedder.status && state.embedder.status.model) || "embeddinggemma",
+        progress: 0,
+        fallbacks: [],
+      };
+      handleEmbedderStatus(fallbackStatus);
+      return null;
+    }
+  }
+
+  async function ensureEmbedderReady({ auto = false } = {}) {
+    let status = state.embedder.status;
+    if (!status) {
+      status = await refreshEmbedderStatus({ triggerInstall: false });
+      if (!status) {
+        updateStatus("Unable to determine embedding status.");
+        return false;
+      }
+    }
+    const modelName = status.model || "embeddinggemma";
+    if (status.state === "ready") {
+      return true;
+    }
+    if (status.state === "installing") {
+      if (!state.embedder.pendingSearch) {
+        state.embedder.pendingSearch = { auto };
+      }
+      updateStatus(`Installing ${modelName}… We'll run your query as soon as the model is ready.`, true);
+      return false;
+    }
+    if (status.state === "error") {
+      updateStatus("Embedding model unavailable. Resolve the issue above and retry.");
+      return false;
+    }
+    if (status.state === "absent") {
+      updateStatus('Auto-install disabled. Run "ollama pull embeddinggemma" manually and retry.');
+      return false;
+    }
+    const ensured = await refreshEmbedderStatus({ triggerInstall: true });
+    if (!ensured) {
+      return false;
+    }
+    if (ensured.state === "ready") {
+      return true;
+    }
+    if (ensured.state === "installing") {
+      if (!state.embedder.pendingSearch) {
+        state.embedder.pendingSearch = { auto };
+      }
+      updateStatus(`Installing ${ensured.model || modelName}… We'll run your query as soon as the model is ready.`, true);
+      return false;
+    }
+    if (ensured.state === "error") {
+      updateStatus("Embedding model unavailable. Resolve the issue above and retry.");
+      return false;
+    }
+    return ensured.state === "ready";
+  }
+
+  async function initEmbedderStatus() {
+    const status = await refreshEmbedderStatus({ triggerInstall: false });
+    if (status && status.state === "missing" && status.auto_install) {
+      await refreshEmbedderStatus({ triggerInstall: true });
+    } else if (status && status.state === "unknown" && status.auto_install !== false) {
+      await refreshEmbedderStatus({ triggerInstall: true });
+    }
   }
 
   function escapeHTML(text) {
@@ -516,7 +794,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
     return params;
   }
 
-  async function runSearch({ auto = false } = {}) {
+  async function runSearch({ auto = false, skipEmbedCheck = false } = {}) {
     const query = auto ? state.lastQuery : queryInput.value.trim();
     if (!query) {
       updateStatus("Enter a query to search your local index.");
@@ -527,6 +805,13 @@ ollama pull llama3.1:8b-instruct</code></pre>
     const params = buildParams(auto);
     params.set("q", query);
     state.lastQuery = query;
+
+    if (!skipEmbedCheck) {
+      const ready = await ensureEmbedderReady({ auto });
+      if (!ready) {
+        return;
+      }
+    }
 
     updateStatus(auto ? "Refreshing results…" : "Searching index…", true);
     try {
@@ -884,6 +1169,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
     runSearch();
   });
 
+  initEmbedderStatus();
   setTab("chat");
   fetchLLMStatus();
   fetchLLMModels();

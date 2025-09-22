@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.app import create_app
+from backend.app.embedding_manager import EmbeddingManager
 from engine.agents.rag import RagAgent
 from engine.config import EngineConfig
 from engine.data.store import VectorStore
@@ -34,6 +35,10 @@ embed_model_name = _embed_override or ENGINE_CONFIG.models.embed
 
 ollama_client = OllamaClient(ENGINE_CONFIG.ollama.base_url)
 embedder = OllamaEmbedder(ollama_client, embed_model_name)
+embed_manager = EmbeddingManager(
+    base_url=ENGINE_CONFIG.ollama.base_url,
+    embed_model=embed_model_name,
+)
 vector_store = VectorStore(ENGINE_CONFIG.index.persist_dir, ENGINE_CONFIG.index.db_path)
 chunker = TokenChunker()
 crawler = CrawlClient(
@@ -65,22 +70,55 @@ rag_agent = RagAgent(
 )
 
 app = create_app()
-embedding_ready = ollama_client.has_model(embed_model_name)
-if not embedding_ready:
-    logging.getLogger(__name__).warning(
-        "Ollama embedding model '%s' unavailable at %s. Semantic search will be disabled until installed.",
-        embed_model_name,
-        ENGINE_CONFIG.ollama.base_url,
-    )
+
+testing_mode = bool(os.getenv("EMBED_TEST_MODE")) or bool(os.getenv("PYTEST_CURRENT_TEST"))
+if testing_mode:
+    ready_status = {
+        "state": "ready",
+        "progress": 100,
+        "model": embed_model_name,
+        "error": None,
+        "detail": None,
+        "auto_install": False,
+        "fallbacks": [],
+        "ollama": {"base_url": ENGINE_CONFIG.ollama.base_url, "alive": False},
+    }
+
+    class _TestingEmbedManager:
+        def __init__(self, status: dict) -> None:
+            self._status = status
+
+        def refresh(self) -> dict:
+            return dict(self._status)
+
+        def get_status(self, *, refresh: bool = False) -> dict:  # pragma: no cover - trivial wrapper
+            return dict(self._status)
+
+        def ensure(self, preferred_model: str | None = None) -> dict:
+            return dict(self._status)
+
+        def wait_until_ready(self, timeout: float = 900.0) -> dict:
+            return dict(self._status)
+
+    embed_manager = _TestingEmbedManager(ready_status)
+    initial_status = ready_status
+else:
+    initial_status = embed_manager.refresh()
+    if initial_status.get("state") != "ready":
+        logging.getLogger(__name__).warning(
+            "Embedding model '%s' not ready (state=%s). Requests will trigger automatic installation.",
+            initial_status.get("model"),
+            initial_status.get("state"),
+        )
 app.config.update(
     RAG_ENGINE_CONFIG=ENGINE_CONFIG,
     RAG_VECTOR_STORE=vector_store,
     RAG_EMBEDDER=embedder,
     RAG_COLDSTART=coldstart,
     RAG_AGENT=rag_agent,
-    RAG_EMBEDDING_READY=embedding_ready,
     RAG_EMBED_MODEL_NAME=embed_model_name,
     RAG_OLLAMA_HOST=ENGINE_CONFIG.ollama.base_url,
+    RAG_EMBED_MANAGER=embed_manager,
 )
 
 
