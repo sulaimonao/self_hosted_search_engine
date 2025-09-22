@@ -213,6 +213,9 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `APP_ENV` | `development` | Controls environment-specific behaviour such as telemetry defaults |
+| `TELEMETRY_ENABLED` | _(auto)_ | Override to force telemetry on/off (`1`/`0`); defaults to disabled in development |
+| `TELEMETRY_LOG_LOCAL` | _(empty)_ | When set, append JSONL telemetry events to `/tmp/telemetry.log` |
 | `INDEX_DIR` | `./data/index` | Location of the Whoosh index |
 | `CRAWL_STORE` | `./data/crawl` | Where crawler JSONL data is persisted |
 | `CRAWL_MAX_PAGES` | `100` | Stop after visiting this many pages |
