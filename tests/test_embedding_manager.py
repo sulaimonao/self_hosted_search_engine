@@ -60,49 +60,86 @@ def test_list_models_handles_cli_failure(monkeypatch: pytest.MonkeyPatch) -> Non
     assert manager.list_models() == []
 
 
+def test_resolve_model_tag_prefers_colon_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "models": [
+                    {"model": "primary:latest"},
+                    {"model": "primary:Q4"},
+                    {"model": "secondary"},
+                ]
+            }
+
+    monkeypatch.setattr("backend.app.embedding_manager.requests.get", lambda url, timeout=3: FakeResponse())
+    monkeypatch.setattr(manager, "list_models", lambda: [])
+
+    resolved, present = manager.resolve_model_tag("primary")
+    assert present is True
+    assert resolved == "primary:latest"
+
+
+def test_refresh_marks_ready_with_resolved_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
+
+    monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: True)
+    monkeypatch.setattr(manager, "resolve_model_tag", lambda name: ("primary:latest", True))
+
+    status = manager.refresh()
+    assert status["state"] == "ready"
+    assert status["model"] == "primary:latest"
+    assert manager.active_model == "primary:latest"
+
+
 def test_ensure_transitions_to_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
     manager.fallbacks = []
 
     monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: True)
-    present_calls = {"count": 0}
+    state = {"installed": False}
 
-    def fake_present(name: str) -> bool:
-        present_calls["count"] += 1
-        return present_calls["count"] > 1
+    def fake_resolve(name: str):
+        assert name == "primary"
+        if state["installed"]:
+            return "primary:latest", True
+        return None, False
 
     def fake_pull(name: str, on_progress=None) -> None:
         if on_progress:
             on_progress(25, "downloading")
             on_progress(80, "verifying")
+        state["installed"] = True
 
-    monkeypatch.setattr(manager, "model_present", fake_present)
+    monkeypatch.setattr(manager, "resolve_model_tag", fake_resolve)
     monkeypatch.setattr(manager, "pull_model", fake_pull)
     monkeypatch.setattr("backend.app.embedding_manager.time.sleep", lambda *_: None)
 
     status = manager.ensure()
     assert status["state"] == "ready"
     assert status["progress"] == 100
-    assert manager.active_model == "primary"
+    assert status["model"] == "primary:latest"
+    assert manager.active_model == "primary:latest"
 
 
 def test_fallback_used_when_primary_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary", fallbacks=["fallback"])
 
     monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: True)
+    state = {"fallback_installed": False}
 
-    present_state = {
-        "primary": [False, False],
-        "fallback": [False, True],
-    }
-
-    def fake_present(name: str) -> bool:
-        states = present_state.get(name, [True])
-        if states:
-            value = states.pop(0)
-            present_state[name] = states
-            return value
-        return True
+    def fake_resolve(name: str):
+        if name == "primary":
+            return None, False
+        if name == "fallback":
+            if state["fallback_installed"]:
+                return "fallback:latest", True
+            return None, False
+        raise AssertionError(f"unexpected model lookup: {name}")
 
     call_order: list[str] = []
 
@@ -112,14 +149,15 @@ def test_fallback_used_when_primary_fails(monkeypatch: pytest.MonkeyPatch) -> No
             raise RuntimeError("download failed")
         if on_progress:
             on_progress(100, "complete")
+        state["fallback_installed"] = True
 
-    monkeypatch.setattr(manager, "model_present", fake_present)
+    monkeypatch.setattr(manager, "resolve_model_tag", fake_resolve)
     monkeypatch.setattr(manager, "pull_model", fake_pull)
     monkeypatch.setattr("backend.app.embedding_manager.time.sleep", lambda *_: None)
 
     status = manager.ensure()
     assert status["state"] == "ready"
-    assert status["model"] == "fallback"
+    assert status["model"] == "fallback:latest"
     assert call_order == ["primary", "fallback"]
 
 
@@ -128,7 +166,7 @@ def test_ensure_is_idempotent_during_install(monkeypatch: pytest.MonkeyPatch) ->
     manager.fallbacks = []
 
     monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: True)
-    monkeypatch.setattr(manager, "model_present", lambda name: False)
+    monkeypatch.setattr(manager, "resolve_model_tag", lambda name: (None, False))
 
     start = threading.Event()
     release = threading.Event()
@@ -178,6 +216,7 @@ def test_try_start_attempts_ollama_serve(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("backend.app.embedding_manager.subprocess.run", fake_run)
     monkeypatch.setattr("backend.app.embedding_manager.time.sleep", lambda *_: None)
     monkeypatch.setattr("backend.app.embedding_manager.platform.system", lambda: "Linux")
+    monkeypatch.setattr(manager, "resolve_model_tag", lambda name: (None, False))
     monkeypatch.setattr(manager, "ollama_alive", lambda timeout=1.0: False)
 
     status = manager.ensure()

@@ -209,10 +209,63 @@ class EmbeddingManager:
                 models.append(name.rstrip("*"))
         return models
 
-    def model_present(self, name: str) -> bool:
+    def _collect_available_tags(self) -> dict[str, list[str]]:
+        tags: dict[str, list[str]] = {}
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=3)
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            models = payload.get("models")
+            if isinstance(models, list):
+                for entry in models:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = entry.get("model") or entry.get("name") or entry.get("tag")
+                    if not isinstance(name, str):
+                        continue
+                    tag_name = name.strip()
+                    if not tag_name:
+                        continue
+                    base = tag_name.split(":", 1)[0]
+                    bucket = tags.setdefault(base, [])
+                    if tag_name not in bucket:
+                        bucket.append(tag_name)
+        if not tags:
+            for name in self.list_models():
+                tag_name = (name or "").strip()
+                if not tag_name:
+                    continue
+                base = tag_name.split(":", 1)[0]
+                bucket = tags.setdefault(base, [])
+                if tag_name not in bucket:
+                    bucket.append(tag_name)
+        return tags
+
+    def resolve_model_tag(self, name: str) -> tuple[Optional[str], bool]:
         if not name:
-            return False
-        return name in set(self.list_models())
+            return None, False
+        base = name.split(":", 1)[0]
+        inventory = self._collect_available_tags()
+        matches = inventory.get(base, [])
+        if not matches:
+            return None, False
+        for candidate in matches:
+            if candidate == name:
+                return candidate, True
+        preferred = next((item for item in matches if item == f"{base}:latest"), None)
+        if preferred:
+            return preferred, True
+        preferred = next((item for item in matches if item.startswith(f"{base}:")), None)
+        if preferred:
+            return preferred, True
+        return matches[0], True
+
+    def model_present(self, name: str) -> bool:
+        _, present = self.resolve_model_tag(name)
+        return present
 
     # ------------------------------------------------------------------
     # Installation logic
@@ -326,15 +379,19 @@ class EmbeddingManager:
     def refresh(self) -> dict:
         alive = self.ollama_alive()
         model = self.active_model
-        if alive and self.model_present(model):
-            return self._update_status(state="ready", progress=100, model=model, error=None, alive=True)
+        resolved_name, present = self.resolve_model_tag(model) if alive else (None, False)
+        active_name = resolved_name or model
+        if alive and present:
+            with self._lock:
+                self._active_model = active_name
+            return self._update_status(state="ready", progress=100, model=active_name, error=None, alive=True)
         if self._installing:
             return self._status_copy()
         if not alive:
-            return self._update_status(state="error", progress=0, model=model, error="ollama_offline", alive=False)
+            return self._update_status(state="error", progress=0, model=active_name, error="ollama_offline", alive=False)
         if not self.auto_install:
-            return self._update_status(state="absent", progress=0, model=model, error="auto_install_disabled", alive=True)
-        return self._update_status(state="missing", progress=0, model=model, error=None, alive=True)
+            return self._update_status(state="absent", progress=0, model=active_name, error="auto_install_disabled", alive=True)
+        return self._update_status(state="missing", progress=0, model=active_name, error=None, alive=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -364,16 +421,18 @@ class EmbeddingManager:
                     detail=detail_message,
                     alive=False,
                 )
-        if self.model_present(target):
+        resolved_name, present = self.resolve_model_tag(target)
+        active_name = resolved_name or target
+        if present:
             with self._lock:
-                self._active_model = target
-            return self._update_status(state="ready", progress=100, model=target, error=None, alive=True)
+                self._active_model = active_name
+            return self._update_status(state="ready", progress=100, model=active_name, error=None, alive=True)
 
         if not self.auto_install and preferred_model is None:
             return self._update_status(
                 state="absent",
                 progress=0,
-                model=target,
+                model=active_name,
                 error="auto_install_disabled",
                 detail="Automatic installation disabled via configuration.",
                 alive=True,
@@ -383,22 +442,29 @@ class EmbeddingManager:
             if self._installing:
                 return self._status_copy()
             self._installing = True
-            self._active_model = target
-        self._update_status(state="installing", progress=0, model=target, error=None, detail=None, alive=True)
+            self._active_model = active_name
+        self._update_status(state="installing", progress=0, model=active_name, error=None, detail=None, alive=True)
 
         def _progress(pct: int, message: str) -> None:
-            self._update_status(state="installing", progress=pct, model=target, error=None, detail=message, alive=True)
+            self._update_status(state="installing", progress=pct, model=self.active_model, error=None, detail=message, alive=True)
 
         last_error: Optional[str] = None
         try:
             self.pull_model(target, on_progress=_progress)
             deadline = time.time() + 1200
             while time.time() < deadline:
-                if self.model_present(target):
+                resolved_name, present = self.resolve_model_tag(target)
+                if present:
+                    final_name = resolved_name or target
                     with self._lock:
-                        self._active_model = target
+                        self._active_model = final_name
                     return self._update_status(
-                        state="ready", progress=100, model=target, error=None, detail=None, alive=True
+                        state="ready",
+                        progress=100,
+                        model=final_name,
+                        error=None,
+                        detail=None,
+                        alive=True,
                     )
                 time.sleep(1)
             raise RuntimeError("model_not_listed_after_pull")
@@ -413,7 +479,7 @@ class EmbeddingManager:
             self._update_status(
                 state="error",
                 progress=0,
-                model=target,
+                model=active_name,
                 error=last_error,
                 detail=last_error,
                 alive=True,
