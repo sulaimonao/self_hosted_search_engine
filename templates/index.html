@@ -64,6 +64,32 @@
             </p>
           </section>
           <section id="status" aria-live="polite" aria-busy="false"></section>
+          <section
+            id="manual-refresh"
+            class="refresh-panel"
+            aria-live="polite"
+            aria-busy="false"
+            hidden
+          >
+            <div class="refresh-controls">
+              <button type="button" id="refresh-button" disabled>Refresh now</button>
+              <p id="refresh-status-text" class="refresh-status-text">Trigger a focused crawl for this query.</p>
+            </div>
+            <div
+              id="refresh-progress"
+              class="refresh-progress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              hidden
+            >
+              <div id="refresh-progress-bar"></div>
+            </div>
+            <p class="refresh-help">
+              Run a one-off focused crawl without waiting for smart search thresholds.
+            </p>
+          </section>
           <section id="focused-status" class="focused-status" aria-live="polite" aria-busy="false" hidden>
             <h2>Focused crawl activity</h2>
             <p id="focused-message">Searching deeper…</p>
@@ -197,6 +223,11 @@ ollama pull llama3.1:8b-instruct</code></pre>
   const embedderFallbackApply = document.getElementById("embedder-fallback-apply");
   const embedderStartBtn = document.getElementById("embedder-start");
   const embedderHelpText = document.getElementById("embedder-help-text");
+  const refreshSection = document.getElementById("manual-refresh");
+  const refreshButton = document.getElementById("refresh-button");
+  const refreshStatusText = document.getElementById("refresh-status-text");
+  const refreshProgress = document.getElementById("refresh-progress");
+  const refreshProgressBar = document.getElementById("refresh-progress-bar");
   const chatTabs = document.querySelectorAll(".assist-tab");
   const chatPanel = document.getElementById("chat-panel");
   const researchPanel = document.getElementById("research-panel");
@@ -235,6 +266,12 @@ ollama pull llama3.1:8b-instruct</code></pre>
     chatMessages: [],
     researchJobId: null,
     researchPollTimer: null,
+    refresh: {
+      jobId: null,
+      pollTimer: null,
+      lastQuery: queryInput.value.trim(),
+      lastStatus: null,
+    },
     embedder: {
       status: null,
       pollTimer: null,
@@ -533,6 +570,246 @@ ollama pull llama3.1:8b-instruct</code></pre>
     } else if (status && status.state === "unknown" && status.auto_install !== false) {
       await refreshEmbedderStatus({ triggerInstall: true });
     }
+  }
+
+  function renderRefreshIdle(message = "Trigger a focused crawl for this query.") {
+    if (!refreshSection || !refreshStatusText) {
+      return;
+    }
+    refreshSection.hidden = false;
+    refreshSection.setAttribute("aria-busy", "false");
+    refreshStatusText.textContent = message;
+    if (refreshProgress) {
+      refreshProgress.hidden = true;
+      refreshProgress.setAttribute("aria-valuenow", "0");
+    }
+    if (refreshProgressBar) {
+      refreshProgressBar.style.width = "0%";
+    }
+  }
+
+  function stopManualRefreshPolling({ reset = false } = {}) {
+    if (state.refresh.pollTimer) {
+      clearInterval(state.refresh.pollTimer);
+      state.refresh.pollTimer = null;
+    }
+    if (reset) {
+      state.refresh.jobId = null;
+      state.refresh.lastStatus = null;
+    }
+  }
+
+  function updateRefreshAvailability() {
+    if (!refreshButton) {
+      return;
+    }
+    const rawQuery = queryInput.value.trim();
+    const normalized = rawQuery.toLowerCase();
+    const activeNormalized = (state.refresh.lastQuery || "").toLowerCase();
+    const hasQuery = Boolean(rawQuery);
+    if (!hasQuery) {
+      if (!state.refresh.jobId) {
+        renderRefreshIdle("Enter a query to refresh your index.");
+      }
+      refreshButton.disabled = true;
+      return;
+    }
+    if (state.refresh.jobId && normalized !== activeNormalized) {
+      stopManualRefreshPolling({ reset: true });
+      renderRefreshIdle("Ready to refresh the new query.");
+    } else if (!state.refresh.jobId) {
+      renderRefreshIdle();
+    }
+    refreshButton.disabled = Boolean(state.refresh.jobId);
+  }
+
+  function handleRefreshStatus(status) {
+    if (!refreshSection || !refreshStatusText) {
+      return;
+    }
+    state.refresh.lastStatus = status || null;
+    if (!status) {
+      renderRefreshIdle("No refresh activity yet.");
+      refreshButton.disabled = queryInput.value.trim() === "";
+      return;
+    }
+
+    const stateName = status.state || "unknown";
+    const stats = status.stats || {};
+    let message = status.message || `Refresh ${stateName}`;
+    if (stateName === "done") {
+      const docs = Number(stats.docs_indexed || 0);
+      const pages = Number(stats.pages_fetched || 0);
+      message = `Refresh complete. Indexed ${docs} document${docs === 1 ? "" : "s"} from ${pages} page${pages === 1 ? "" : "s"}.`;
+    } else if (stateName === "error" && status.error) {
+      message = `Refresh failed: ${status.error}`;
+    }
+
+    refreshSection.hidden = false;
+    const busy = stateName === "running" || stateName === "queued";
+    refreshSection.setAttribute("aria-busy", busy ? "true" : "false");
+    refreshStatusText.textContent = message;
+
+    const progressValue = Number(status.progress || 0);
+    if (refreshProgress) {
+      if (busy || progressValue > 0) {
+        refreshProgress.hidden = false;
+        refreshProgress.setAttribute("aria-valuenow", String(progressValue));
+      } else {
+        refreshProgress.hidden = true;
+        refreshProgress.setAttribute("aria-valuenow", "0");
+      }
+    }
+    if (refreshProgressBar) {
+      const width = Math.min(Math.max(progressValue, 0), 100);
+      refreshProgressBar.style.width = `${width}%`;
+    }
+
+    if (status.job_id) {
+      state.refresh.jobId = status.job_id;
+    }
+    if (status.query) {
+      state.refresh.lastQuery = status.query;
+    }
+
+    if (stateName === "done" || stateName === "error") {
+      stopManualRefreshPolling();
+      state.refresh.jobId = null;
+      if (refreshProgress) {
+        refreshProgress.hidden = true;
+        refreshProgress.setAttribute("aria-valuenow", "0");
+      }
+      if (refreshProgressBar) {
+        refreshProgressBar.style.width = "0%";
+      }
+      refreshButton.disabled = queryInput.value.trim() === "";
+    } else {
+      refreshButton.disabled = true;
+    }
+  }
+
+  async function pollRefreshStatus({ jobId, query } = {}) {
+    const activeJobId = jobId || state.refresh.jobId;
+    const lookupQuery = query || state.refresh.lastQuery;
+    if (!activeJobId && !lookupQuery) {
+      return;
+    }
+    const params = new URLSearchParams();
+    if (activeJobId) {
+      params.set("job_id", activeJobId);
+    }
+    if (lookupQuery) {
+      params.set("query", lookupQuery);
+    }
+    try {
+      const response = await fetch(`/api/refresh/status?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Refresh status failed: ${response.status}`);
+      }
+      const payload = await response.json();
+      handleRefreshStatus(payload.job || null);
+    } catch (error) {
+      console.error(error);
+      if (refreshStatusText) {
+        refreshStatusText.textContent = `Unable to read refresh status: ${error.message}`;
+      }
+      if (refreshSection) {
+        refreshSection.setAttribute("aria-busy", "false");
+      }
+      stopManualRefreshPolling();
+      state.refresh.jobId = null;
+      if (refreshButton) {
+        refreshButton.disabled = queryInput.value.trim() === "";
+      }
+    }
+  }
+
+  async function triggerManualRefresh() {
+    if (!refreshButton) {
+      return;
+    }
+    const query = queryInput.value.trim();
+    if (!query) {
+      renderRefreshIdle("Enter a query to refresh your index.");
+      return;
+    }
+    const payload = { query };
+    if (llmToggle.checked) {
+      payload.use_llm = true;
+      if (llmModelSelect.value) {
+        payload.model = llmModelSelect.value;
+      }
+    }
+
+    refreshButton.disabled = true;
+    if (refreshSection) {
+      refreshSection.hidden = false;
+      refreshSection.setAttribute("aria-busy", "true");
+    }
+    if (refreshProgress) {
+      refreshProgress.hidden = false;
+      refreshProgress.setAttribute("aria-valuenow", "5");
+    }
+    if (refreshProgressBar) {
+      refreshProgressBar.style.width = "5%";
+    }
+    if (refreshStatusText) {
+      refreshStatusText.textContent = "Queueing refresh…";
+    }
+
+    try {
+      const response = await fetch("/api/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      state.refresh.jobId = data.job_id || null;
+      state.refresh.lastQuery = query;
+      handleRefreshStatus(data.status || null);
+      if (state.refresh.pollTimer) {
+        clearInterval(state.refresh.pollTimer);
+      }
+      state.refresh.pollTimer = setInterval(() => {
+        pollRefreshStatus({ jobId: state.refresh.jobId });
+      }, 3000);
+      await pollRefreshStatus({ jobId: state.refresh.jobId });
+    } catch (error) {
+      console.error(error);
+      if (refreshStatusText) {
+        refreshStatusText.textContent = `Unable to trigger refresh: ${error.message}`;
+      }
+      if (refreshSection) {
+        refreshSection.setAttribute("aria-busy", "false");
+      }
+      if (refreshProgress) {
+        refreshProgress.hidden = true;
+        refreshProgress.setAttribute("aria-valuenow", "0");
+      }
+      if (refreshProgressBar) {
+        refreshProgressBar.style.width = "0%";
+      }
+      stopManualRefreshPolling({ reset: true });
+      refreshButton.disabled = queryInput.value.trim() === "";
+    }
+  }
+
+  function initManualRefresh() {
+    if (!refreshSection || !refreshButton) {
+      return;
+    }
+    refreshSection.hidden = false;
+    renderRefreshIdle();
+    refreshButton.addEventListener("click", () => {
+      triggerManualRefresh();
+    });
+    queryInput.addEventListener("input", () => {
+      updateRefreshAvailability();
+    });
+    updateRefreshAvailability();
   }
 
   function escapeHTML(text) {
@@ -841,6 +1118,10 @@ ollama pull llama3.1:8b-instruct</code></pre>
     const params = buildParams(auto);
     params.set("q", query);
     state.lastQuery = query;
+    state.refresh.lastQuery = query;
+    if (!state.refresh.jobId) {
+      updateRefreshAvailability();
+    }
 
     if (!skipEmbedCheck) {
       const ready = await ensureEmbedderReady({ auto });
@@ -1207,6 +1488,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
     runSearch();
   });
 
+  initManualRefresh();
   initEmbedderStatus();
   setTab("chat");
   fetchLLMStatus();

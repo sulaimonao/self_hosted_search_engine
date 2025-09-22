@@ -95,6 +95,25 @@ With the cold-start upgrades the pipeline no longer requires a manual `make craw
 - Normalizes every newly fetched page with Trafilatura + language detection and incrementally indexes changed documents.
 - Emits `last_index_time` so the browser can auto-refresh results as soon as new hits land.
 
+### Manual refresh controls
+
+When you want to trigger a focused crawl on demand, open the web UI and click **Refresh now**. The button lives under the status banner and:
+
+- Calls `POST /api/refresh` with the current query, LLM toggle, and optional model override.
+- Streams progress from the background worker (`queued → crawling → indexing`) into a compact progress bar.
+- Unlocks once the run finishes so you can retry with a different prompt.
+
+The refresh API is also available for automation:
+
+```
+POST /api/refresh
+{ "query": "postgres vacuum best practices", "use_llm": true, "model": "llama3.1:8b-instruct" }
+
+GET /api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices
+```
+
+`POST` returns `{ job_id, status, created }` so callers can deduplicate concurrent requests. `GET` yields the current snapshot (`state`, `progress`, and counters for seeds/pages/docs). When no `job_id` is supplied the endpoint falls back to the most recent run for the supplied query or lists all active jobs.
+
 You can tail progress from the CLI with `make tail` or fetch metrics from `/metrics` to verify crawl/index counters.
 
 To trigger a run manually, supply a query via `make focused`:

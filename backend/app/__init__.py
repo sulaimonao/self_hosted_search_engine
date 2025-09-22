@@ -15,6 +15,7 @@ from flask import Flask, jsonify, render_template, request
 from .api import chat as chat_api
 from .api import jobs as jobs_api
 from .api import metrics as metrics_api
+from .api import refresh as refresh_api
 from .api import research as research_api
 from .api import search as search_api
 from .config import AppConfig
@@ -22,6 +23,7 @@ from .jobs.focused_crawl import FocusedCrawlManager
 from .jobs.runner import JobRunner
 from .metrics import metrics
 from .search.service import SearchService
+from server.refresh_worker import RefreshWorker
 
 LOGGER = logging.getLogger(__name__)
 EMBEDDING_MODEL_PATTERNS = [
@@ -54,12 +56,14 @@ def create_app() -> Flask:
     runner = JobRunner(config.logs_dir)
     manager = FocusedCrawlManager(config, runner)
     search_service = SearchService(config, manager)
+    refresh_worker = RefreshWorker(config)
 
     app.config.update(
         APP_CONFIG=config,
         JOB_RUNNER=runner,
         FOCUSED_MANAGER=manager,
         SEARCH_SERVICE=search_service,
+        REFRESH_WORKER=refresh_worker,
     )
 
     app.register_blueprint(search_api.bp)
@@ -67,6 +71,7 @@ def create_app() -> Flask:
     app.register_blueprint(chat_api.bp)
     app.register_blueprint(research_api.bp)
     app.register_blueprint(metrics_api.bp)
+    app.register_blueprint(refresh_api.bp)
 
     @app.get("/healthz")
     def healthz():
