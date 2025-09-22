@@ -128,13 +128,10 @@ def search_endpoint():
                 "llm_used": bool(llm_enabled),
             }
             if job_id:
-                payload.update(
-                    {
-                        "status": "focused_crawl_running",
-                        "job_id": job_id,
-                        "last_index_time": search_service.last_index_time(),
-                    }
-                )
+                payload["job_id"] = job_id
+                payload["last_index_time"] = search_service.last_index_time()
+                if len(results) < app_config.smart_min_results:
+                    payload["status"] = "focused_crawl_running"
             if llm_model:
                 payload["llm_model"] = llm_model
             return jsonify(payload)

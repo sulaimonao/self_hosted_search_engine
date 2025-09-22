@@ -64,11 +64,11 @@ class SearchService:
 
         job_id: Optional[str] = None
         triggered = False
-        if q and len(blended) < self.config.smart_min_results:
-            effective_use_llm = bool(use_llm)
+        if q:
+            effective_use_llm = llm_enabled
             job_id = self.manager.schedule(q, effective_use_llm, model)
-            if job_id:
-                triggered = True
+            triggered = bool(job_id)
+            if triggered:
                 metrics.record_focused_enqueue()
         metrics.record_query_event(len(blended), triggered, duration_ms)
         return blended, job_id
