@@ -95,6 +95,29 @@ With the cold-start upgrades the pipeline no longer requires a manual `make craw
 - Normalizes every newly fetched page with Trafilatura + language detection and incrementally indexes changed documents.
 - Emits `last_index_time` so the browser can auto-refresh results as soon as new hits land.
 
+### Cold-start discovery flow
+
+The Flask API now wires the cold-start indexer directly into `server.discover.DiscoveryEngine`. Every time a query triggers the bootstrap flow the engine:
+
+- Loads curated registry entries (YAML + JSONL) and previously learned domain hints from `data/learned_web.sqlite3`.
+- Adds optional LLM plans from `llm/seed_guesser.py` when the **Use LLM for discovery** toggle is on.
+- Calls `DiscoveryEngine.discover()` to score and rank `crawler.frontier.Candidate` objects, automatically falling back to the registry frontier instead of Wikipedia.
+- Walks each candidate through the crawler → chunker → embedder pipeline and writes embeddings into the vector store.
+- Persists the discovery metadata (query, URL, source, score) to the Learned Web database so subsequent searches can reuse the same domains without a fresh crawl.
+
+Hot reload verification checklist:
+
+1. Start the dev server with `make dev` (or `FLASK_ENV=development make dev` for live reloads).
+2. Issue a search from the UI with the LLM toggle in both states to exercise the planner path.
+3. Inspect the learned database to confirm discoveries are persisted:
+
+   ```bash
+   sqlite3 data/learned_web.sqlite3 "SELECT query, url, reason, score FROM discoveries ORDER BY discovered_at DESC LIMIT 5;"
+   ```
+
+4. Re-run the same query in the UI. The hot reload path reuses the cached discoveries so new hits surface immediately without rerunning the crawler.
+5. Tail `data/logs/focused.log` with `make tail` if you want to watch the crawl complete in real time.
+
 ### Manual refresh controls
 
 When you want to trigger a focused crawl on demand, open the web UI and click **Refresh now**. The button lives under the status banner and:
