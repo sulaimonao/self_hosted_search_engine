@@ -101,7 +101,7 @@ class LearnedWebDB:
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._initialize_schema()
 
     # -- schema -----------------------------------------------------------------
@@ -205,6 +205,28 @@ class LearnedWebDB:
         last_crawl_at: Optional[float] = None,
         last_index_at: Optional[float] = None,
     ) -> Optional[int]:
+        with self._lock:
+            return self._upsert_domain_locked(
+                host,
+                seen_at=seen_at,
+                learned_score=learned_score,
+                increment_discovery=increment_discovery,
+                discovery_reason=discovery_reason,
+                last_crawl_at=last_crawl_at,
+                last_index_at=last_index_at,
+            )
+
+    def _upsert_domain_locked(
+        self,
+        host: str,
+        *,
+        seen_at: Optional[float],
+        learned_score: Optional[float],
+        increment_discovery: bool,
+        discovery_reason: Optional[str],
+        last_crawl_at: Optional[float],
+        last_index_at: Optional[float],
+    ) -> Optional[int]:
         normalized = _normalize_host(host)
         if not normalized:
             return None
@@ -212,62 +234,61 @@ class LearnedWebDB:
         score = float(learned_score or 0.0)
         discovery_count = 1 if increment_discovery else 0
         reason = discovery_reason if increment_discovery else None
-        with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO domains (
-                    host,
-                    first_seen,
-                    last_seen,
-                    learned_score,
-                    discovery_count,
-                    last_discovery_reason,
-                    last_crawl_at,
-                    last_index_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(host) DO UPDATE SET
-                    last_seen = CASE
-                        WHEN excluded.last_seen > domains.last_seen THEN excluded.last_seen
-                        ELSE domains.last_seen
-                    END,
-                    learned_score = CASE
-                        WHEN excluded.learned_score > domains.learned_score THEN excluded.learned_score
-                        ELSE domains.learned_score
-                    END,
-                    discovery_count = domains.discovery_count + excluded.discovery_count,
-                    last_discovery_reason = CASE
-                        WHEN excluded.discovery_count > 0 THEN excluded.last_discovery_reason
-                        ELSE domains.last_discovery_reason
-                    END,
-                    last_crawl_at = CASE
-                        WHEN excluded.last_crawl_at IS NULL THEN domains.last_crawl_at
-                        WHEN domains.last_crawl_at IS NULL THEN excluded.last_crawl_at
-                        WHEN excluded.last_crawl_at > domains.last_crawl_at THEN excluded.last_crawl_at
-                        ELSE domains.last_crawl_at
-                    END,
-                    last_index_at = CASE
-                        WHEN excluded.last_index_at IS NULL THEN domains.last_index_at
-                        WHEN domains.last_index_at IS NULL THEN excluded.last_index_at
-                        WHEN excluded.last_index_at > domains.last_index_at THEN excluded.last_index_at
-                        ELSE domains.last_index_at
-                    END
-                ;
-                """,
-                (
-                    normalized,
-                    ts,
-                    ts,
-                    score,
-                    discovery_count,
-                    reason,
-                    last_crawl_at,
-                    last_index_at,
-                ),
-            )
-            row = self._conn.execute(
-                "SELECT id FROM domains WHERE host = ?",
-                (normalized,),
-            ).fetchone()
+        self._conn.execute(
+            """
+            INSERT INTO domains (
+                host,
+                first_seen,
+                last_seen,
+                learned_score,
+                discovery_count,
+                last_discovery_reason,
+                last_crawl_at,
+                last_index_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(host) DO UPDATE SET
+                last_seen = CASE
+                    WHEN excluded.last_seen > domains.last_seen THEN excluded.last_seen
+                    ELSE domains.last_seen
+                END,
+                learned_score = CASE
+                    WHEN excluded.learned_score > domains.learned_score THEN excluded.learned_score
+                    ELSE domains.learned_score
+                END,
+                discovery_count = domains.discovery_count + excluded.discovery_count,
+                last_discovery_reason = CASE
+                    WHEN excluded.discovery_count > 0 THEN excluded.last_discovery_reason
+                    ELSE domains.last_discovery_reason
+                END,
+                last_crawl_at = CASE
+                    WHEN excluded.last_crawl_at IS NULL THEN domains.last_crawl_at
+                    WHEN domains.last_crawl_at IS NULL THEN excluded.last_crawl_at
+                    WHEN excluded.last_crawl_at > domains.last_crawl_at THEN excluded.last_crawl_at
+                    ELSE domains.last_crawl_at
+                END,
+                last_index_at = CASE
+                    WHEN excluded.last_index_at IS NULL THEN domains.last_index_at
+                    WHEN domains.last_index_at IS NULL THEN excluded.last_index_at
+                    WHEN excluded.last_index_at > domains.last_index_at THEN excluded.last_index_at
+                    ELSE domains.last_index_at
+                END
+            ;
+            """,
+            (
+                normalized,
+                ts,
+                ts,
+                score,
+                discovery_count,
+                reason,
+                last_crawl_at,
+                last_index_at,
+            ),
+        )
+        row = self._conn.execute(
+            "SELECT id FROM domains WHERE host = ?",
+            (normalized,),
+        ).fetchone()
         return int(row[0]) if row else None
 
     def domain_value_map(self) -> dict[str, float]:
@@ -356,7 +377,7 @@ class LearnedWebDB:
         source: Optional[str] = None,
         discovered_at: Optional[float] = None,
         crawl_id: Optional[int] = None,
-    ) -> Optional[int]:
+    ) -> Optional[tuple[int, bool]]:
         normalized_url = _normalize_url(url)
         if not normalized_url:
             return None
@@ -364,16 +385,22 @@ class LearnedWebDB:
         if not host:
             return None
         ts = _ts(discovered_at)
-        domain_id = self.upsert_domain(
-            host,
-            seen_at=ts,
-            learned_score=score,
-            increment_discovery=True,
-            discovery_reason=reason,
-        )
-        if domain_id is None:
-            return None
         with self._lock:
+            existing = self._conn.execute(
+                "SELECT 1 FROM domains WHERE host = ?",
+                (host,),
+            ).fetchone()
+            domain_id = self._upsert_domain_locked(
+                host,
+                seen_at=ts,
+                learned_score=score,
+                increment_discovery=True,
+                discovery_reason=reason,
+                last_crawl_at=None,
+                last_index_at=None,
+            )
+            if domain_id is None:
+                return None
             self._conn.execute(
                 """
                 INSERT INTO discoveries (
@@ -389,7 +416,8 @@ class LearnedWebDB:
                 """,
                 (query, domain_id, normalized_url, reason, source, float(score), ts, crawl_id),
             )
-        return domain_id
+            created = existing is None
+        return domain_id, created
 
     def upsert_query_embedding(
         self,

@@ -8,7 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 from crawler.frontier import Candidate
 from crawler.run import FocusedCrawler
@@ -23,6 +23,8 @@ from backend.app.search.embedding import embed_query
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_DISCOVERY_DEPTH = 4
+
 
 def run_focused_crawl(
     query: str,
@@ -32,6 +34,8 @@ def run_focused_crawl(
     *,
     config: AppConfig,
     extra_seeds: Optional[Sequence[str]] = None,
+    manual_seeds: Optional[Sequence[str]] = None,
+    frontier_depth: Optional[int] = None,
     query_embedding: Optional[Sequence[float]] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
     db: Optional[LearnedWebDB] = None,
@@ -56,20 +60,46 @@ def run_focused_crawl(
         LOGGER.exception("unable to open learned web database", exc_info=True)
         learned_db = None
     q = (query or "").strip()
+    depth_value = frontier_depth if frontier_depth and frontier_depth > 0 else DEFAULT_DISCOVERY_DEPTH
+    embedded_count = 0
     if q and learned_db is not None:
         try:
             vector = query_embedding or embed_query(q)
             learned_db.upsert_query_embedding(q, vector)
+            embedded_count = 1 if vector else 0
         except Exception:  # pragma: no cover - logging only
             LOGGER.debug("failed to persist query embedding for '%s'", q, exc_info=True)
-    _emit("frontier_start", query=query)
-    seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
-    _emit("frontier_complete", seed_count=len(seeds))
-    print(f"[focused] query='{query}' budget={budget} seeds={len(seeds)}")
+    discovery_mode = "manual" if manual_seeds else "discovery"
+    manual_candidates = _build_manual_candidates(manual_seeds) if manual_seeds else []
+    _emit("frontier_start", query=query, mode=discovery_mode, depth=depth_value, budget=budget)
+    if manual_candidates:
+        seeds = manual_candidates
+    else:
+        seeds = _get_seed_candidates(
+            query,
+            budget,
+            use_llm,
+            model,
+            config,
+            extra_seeds=extra_seeds,
+            depth=depth_value,
+        )
+
+    seed_urls: List[str] = []
+    source_counts: Dict[str, int] = {}
+    for candidate in seeds:
+        seed_urls.append(candidate.url)
+        source = candidate.source or ("manual" if manual_candidates else "frontier")
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    print(
+        f"[focused] query='{query}' budget={budget} depth={depth_value} mode={discovery_mode} seeds={len(seeds)}"
+    )
     for candidate in seeds[:10]:
         print(f"[focused] seed -> {candidate.url} ({candidate.source})")
 
     crawl_id: Optional[int] = None
+    new_domains = 0
     if learned_db is not None:
         try:
             crawl_id = learned_db.start_crawl(
@@ -82,19 +112,33 @@ def run_focused_crawl(
             )
             for candidate in seeds:
                 try:
-                    learned_db.record_discovery(
+                    record = learned_db.record_discovery(
                         q,
                         candidate.url,
-                        reason="frontier",
+                        reason="manual" if discovery_mode == "manual" else "frontier",
                         score=float(candidate.priority),
                         source=candidate.source,
                         discovered_at=start_ts,
                         crawl_id=crawl_id,
                     )
+                    if record and record[1]:
+                        new_domains += 1
                 except Exception:  # pragma: no cover - logging only
                     LOGGER.debug("failed to persist frontier discovery for %s", candidate.url, exc_info=True)
         except Exception:  # pragma: no cover - logging only
             LOGGER.exception("failed to record crawl bootstrap", exc_info=True)
+
+    _emit(
+        "frontier_complete",
+        seed_count=len(seeds),
+        mode=discovery_mode,
+        seeds=seed_urls,
+        sources=source_counts,
+        new_domains=new_domains,
+        embedded=embedded_count,
+        depth=depth_value,
+        budget=budget,
+    )
 
     _emit("crawl_start", seed_count=len(seeds))
     raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
@@ -137,7 +181,7 @@ def run_focused_crawl(
     else:
         added = skipped = deduped = 0
         if not seeds:
-            _emit("frontier_empty")
+            _emit("frontier_empty", mode=discovery_mode)
         else:
             _emit("index_skipped", reason="no_new_documents")
 
@@ -187,6 +231,17 @@ def run_focused_crawl(
         "normalized_docs": normalized_docs,
         "raw_path": str(raw_path) if raw_path else None,
         "crawl_id": crawl_id,
+        "embedded": embedded_count,
+        "new_domains": new_domains,
+        "discovery": {
+            "mode": discovery_mode,
+            "seed_count": len(seeds),
+            "sources": source_counts,
+            "seeds": seed_urls,
+            "budget": budget,
+            "depth": depth_value,
+        },
+        "frontier_depth": depth_value,
     }
     print(f"[focused] completed in {duration:.2f}s -> indexed={added} skipped={skipped} deduped={deduped}")
     return stats
@@ -200,6 +255,7 @@ def _get_seed_candidates(
     config: AppConfig,
     *,
     extra_seeds: Optional[Sequence[str]] = None,
+    depth: Optional[int] = None,
 ) -> List[Candidate]:
     q = (query or "").strip()
     if not q:
@@ -219,9 +275,11 @@ def _get_seed_candidates(
     merged_extra.extend(llm_urls)
 
     engine = DiscoveryEngine()
+    depth_value = depth if depth and depth > 0 else DEFAULT_DISCOVERY_DEPTH
+    limit = max(budget * depth_value, budget, 40)
     candidates = engine.discover(
         q,
-        limit=max(budget * 4, 40),
+        limit=limit,
         extra_seeds=merged_extra,
         use_llm=use_llm,
         model=model,
@@ -234,6 +292,26 @@ def _get_seed_candidates(
         candidates = [
             Candidate(url=url, source="fallback", weight=0.1, score=0.1) for url in fallback
         ]
+    return candidates
+
+
+def _build_manual_candidates(seed_urls: Optional[Sequence[str]]) -> List[Candidate]:
+    if not seed_urls:
+        return []
+    candidates: List[Candidate] = []
+    seen: set[str] = set()
+    for raw in seed_urls:
+        if not isinstance(raw, str):
+            continue
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        if not candidate.startswith(("http://", "https://")):
+            candidate = "https://" + candidate.lstrip("/")
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(Candidate(url=candidate, source="manual", weight=1.0, score=1.0))
     return candidates
 
 

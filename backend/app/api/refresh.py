@@ -30,8 +30,59 @@ def trigger_refresh():
     else:
         model = None
 
+    budget_raw = payload.get("budget")
+    budget: int | None
+    if budget_raw is None:
+        budget = None
+    else:
+        try:
+            budget = int(budget_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid_budget"}), 400
+        if budget <= 0:
+            return jsonify({"error": "invalid_budget"}), 400
+
+    depth_raw = payload.get("depth")
+    depth: int | None
+    if depth_raw is None:
+        depth = None
+    else:
+        try:
+            depth = int(depth_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid_depth"}), 400
+        if depth <= 0:
+            return jsonify({"error": "invalid_depth"}), 400
+
+    force_raw = payload.get("force")
+    force = bool(force_raw) if force_raw is not None else False
+
+    seeds_payload = payload.get("seeds")
+    seeds: list[str] | None = None
+    if seeds_payload is not None:
+        cleaned: list[str] = []
+        if isinstance(seeds_payload, str):
+            cleaned.append(seeds_payload)
+        elif isinstance(seeds_payload, (list, tuple, set)):
+            for item in seeds_payload:
+                if isinstance(item, str):
+                    value = item.strip()
+                    if value:
+                        cleaned.append(value)
+        else:
+            return jsonify({"error": "invalid_seeds"}), 400
+        seeds = cleaned if cleaned else None
+
     try:
-        job_id, status, created = worker.enqueue(query, use_llm=use_llm, model=model)
+        job_id, status, created = worker.enqueue(
+            query,
+            use_llm=use_llm,
+            model=model,
+            budget=budget,
+            depth=depth,
+            force=force,
+            seeds=seeds,
+        )
     except ValueError as exc:
         return jsonify({"error": "invalid_query", "detail": str(exc)}), 400
 
