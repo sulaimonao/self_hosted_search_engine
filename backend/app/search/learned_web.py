@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
-
-import re
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -49,10 +49,25 @@ def _tokenize(text: str) -> List[str]:
     return [token.lower() for token in _TOKEN_RE.findall(text or "") if token]
 
 
+def _bucket_for_token(token: str, *, dimension: int) -> int:
+    """Map ``token`` to a stable bucket within ``dimension`` slots."""
+
+    if dimension <= 0:
+        return 0
+    digest = hashlib.blake2b(token.encode("utf-8"), digest_size=16).digest()
+    value = int.from_bytes(digest, "big")
+    return value % dimension
+
+
 def _hashed_embedding(tokens: Iterable[str], *, dimension: int) -> List[float]:
+    if dimension <= 0:
+        return []
+
     vector = [0.0] * dimension
     for token in tokens:
-        bucket = hash(token) % dimension
+        if not token:
+            continue
+        bucket = _bucket_for_token(token, dimension=dimension)
         vector[bucket] += 1.0
     norm = _norm(vector)
     if norm == 0.0:
@@ -92,6 +107,8 @@ class LearnedWebStore:
     dimension: int = 256
 
     def __post_init__(self) -> None:
+        if self.dimension <= 0:
+            raise ValueError("dimension must be positive")
         self._lock = threading.Lock()
 
     def embed(self, text: str) -> List[float]:

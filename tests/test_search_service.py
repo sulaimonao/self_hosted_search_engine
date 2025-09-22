@@ -190,3 +190,47 @@ def test_run_query_uses_learned_web_seeds(monkeypatch, tmp_path):
     ]
     assert learned_store.calls == [("docs", 3, 0.3)]
     assert focused_calls == [1]
+
+
+def test_run_query_preserves_reason_when_schedule_rejected(monkeypatch, tmp_path):
+    config = _config(tmp_path, smart_min_confidence=0.9)
+    manager = StubManager(job_ids=[None])
+    learned_store = StubLearnedStore(["https://seed.one"])
+    service = SearchService(config, manager, learned_store=learned_store)
+    service._get_index = lambda: object()
+
+    _patch_search(
+        monkeypatch,
+        [
+            {
+                "url": "https://example.com/a",
+                "title": "A",
+                "snippet": "",
+                "score": 1.0,
+                "lang": "en",
+                "blended_score": 1.0,
+            },
+            {
+                "url": "https://example.com/b",
+                "title": "B",
+                "snippet": "",
+                "score": 1.0,
+                "lang": "en",
+                "blended_score": 1.0,
+            },
+        ],
+    )
+
+    monkeypatch.setattr(
+        "backend.app.search.service.metrics.record_query_event",
+        lambda results_count, triggered, latency_ms: None,
+    )
+
+    run = service.run_query("docs", limit=5, use_llm=None, model=None)
+
+    assert run.trigger_attempted is True
+    assert run.triggered is False
+    assert run.trigger_reason == "low_confidence"
+    assert run.frontier_seeds == ()
+    assert manager.calls == [("docs", True, None, ("https://seed.one",))]
+    assert learned_store.calls == [("docs", 5, 0.3)]

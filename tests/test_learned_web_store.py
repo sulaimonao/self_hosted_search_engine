@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import sqlite3
+
+import pytest
 
 from backend.app.search.learned_web import LearnedWebStore
 
@@ -10,6 +14,24 @@ def test_learned_web_returns_empty_when_db_missing(tmp_path):
     store = LearnedWebStore(tmp_path / "missing.sqlite3")
     results = store.similar_urls("python packaging", limit=5, min_similarity=0.2)
     assert results == []
+
+
+def test_hashed_embedding_is_stable(tmp_path):
+    store = LearnedWebStore(tmp_path / "unused.sqlite3", dimension=8)
+    vector = store.embed("alpha beta alpha")
+
+    assert len(vector) == 8
+
+    bucket_alpha = int.from_bytes(hashlib.blake2b(b"alpha", digest_size=16).digest(), "big") % 8
+    bucket_beta = int.from_bytes(hashlib.blake2b(b"beta", digest_size=16).digest(), "big") % 8
+
+    expected = [0.0] * 8
+    expected[bucket_alpha] = 2.0
+    expected[bucket_beta] = 1.0
+    norm = math.sqrt(sum(component * component for component in expected))
+    expected = [component / norm for component in expected]
+
+    assert vector == pytest.approx(expected)
 
 
 def test_learned_web_similarity_and_limit(tmp_path):

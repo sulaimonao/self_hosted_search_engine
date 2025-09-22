@@ -132,7 +132,7 @@ class SearchService:
             job_id=job_id,
             triggered=triggered,
             confidence=confidence,
-            trigger_reason=trigger_reason if triggered else None,
+            trigger_reason=trigger_reason if trigger_attempted else None,
             trigger_attempted=trigger_attempted,
             frontier_seeds=tuple(seeds),
         )
