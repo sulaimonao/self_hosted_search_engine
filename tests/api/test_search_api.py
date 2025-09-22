@@ -12,10 +12,36 @@ from engine.data.store import RetrievedChunk
 class StubEmbedder:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.model = "test-embed"
+        self.model_updates: list[str] = []
+
+    def set_model(self, model: str) -> None:
+        self.model = model
+        self.model_updates.append(model)
 
     def embed_query(self, text: str):
         self.calls.append(text)
         return [0.1, 0.2]
+
+
+class StubEmbeddingManager:
+    def __init__(self, status: dict | None = None) -> None:
+        self.status = status or {"state": "ready", "model": "test-embed", "progress": 100}
+        self.wait_calls = 0
+        self.ensure_calls = 0
+        self.status_calls = 0
+
+    def wait_until_ready(self):
+        self.wait_calls += 1
+        return self.status
+
+    def ensure(self, model: str | None = None):
+        self.ensure_calls += 1
+        return self.status
+
+    def get_status(self, refresh: bool = False):
+        self.status_calls += 1
+        return self.status
 
 
 class StubStore:
@@ -54,19 +80,21 @@ def _base_config():
     )
 
 
-def _build_app(store, coldstart, rag_agent, *, embedding_ready: bool = True, engine_config=None):
+def _build_app(store, coldstart, rag_agent, *, embed_manager=None, engine_config=None):
     app = Flask(__name__)
     app.register_blueprint(search_bp)
     config = engine_config or _base_config()
+    manager = embed_manager or StubEmbeddingManager()
+    embedder = StubEmbedder()
     app.config.update(
         RAG_ENGINE_CONFIG=config,
         RAG_VECTOR_STORE=store,
-        RAG_EMBEDDER=StubEmbedder(),
+        RAG_EMBEDDER=embedder,
         RAG_COLDSTART=coldstart,
         RAG_AGENT=rag_agent,
-        RAG_EMBEDDING_READY=embedding_ready,
         RAG_EMBED_MODEL_NAME=config.models.embed,
         RAG_OLLAMA_HOST=config.ollama.base_url,
+        RAG_EMBED_MANAGER=manager,
     )
     app.testing = True
     return app
@@ -132,7 +160,15 @@ def test_search_reports_embedding_unavailable():
     store = StubStore([])
     coldstart = ColdStartSpy()
     rag_agent = StubRagAgent()
-    app = _build_app(store, coldstart, rag_agent, embedding_ready=False)
+    status = {
+        "state": "error",
+        "model": "test-embed",
+        "error": "ollama_offline",
+        "detail": "offline",
+        "fallbacks": ["alt-model"],
+    }
+    manager = StubEmbeddingManager(status)
+    app = _build_app(store, coldstart, rag_agent, embed_manager=manager)
     client = app.test_client()
 
     response = client.get("/api/search", query_string={"q": "test"})
@@ -140,4 +176,37 @@ def test_search_reports_embedding_unavailable():
     payload = response.get_json()
     assert payload["code"] == "embedding_unavailable"
     assert payload["action"] == "ollama pull test-embed"
+    assert payload["embedder_status"]["state"] == "error"
+    assert payload["fallbacks"] == ["alt-model"]
     assert "detail" in payload
+
+
+def test_embedder_status_endpoint_returns_manager_state():
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    status = {"state": "installing", "progress": 42, "model": "test-embed"}
+    manager = StubEmbeddingManager(status)
+    app = _build_app(store, coldstart, rag_agent, embed_manager=manager)
+    client = app.test_client()
+
+    response = client.get("/api/embedder/status")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["state"] == "installing"
+    assert manager.status_calls >= 1
+
+
+def test_embedder_ensure_endpoint_triggers_manager():
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    manager = StubEmbeddingManager({"state": "ready", "model": "fallback"})
+    app = _build_app(store, coldstart, rag_agent, embed_manager=manager)
+    client = app.test_client()
+
+    response = client.post("/api/embedder/ensure", json={"model": "fallback"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["model"] == "fallback"
+    assert manager.ensure_calls >= 1

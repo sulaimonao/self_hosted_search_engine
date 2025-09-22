@@ -122,36 +122,29 @@ Install and start Ollama locally (macOS example):
 brew install --cask ollama
 ollama serve
 ollama pull llama3.1:8b-instruct
-ollama pull nomic-embed-text
 ```
 
-The embedding model used for semantic search lives in `config.yaml` under `models.embed`:
-
-```yaml
-models:
-  llm_primary: "gemma2:latest"
-  llm_fallback: "gpt-oss:latest"
-  embed: "nomic-embed-text"
-```
-
-That `embed` entry is mandatory—without a pulled embedding model the Flask app logs a startup warning (`Ollama embedding model 'nomic-embed-text' unavailable …`) and every `/api/search` request returns HTTP 503 with an `embedding_unavailable` payload until the model is installed.
-
-To switch to [EmbeddingGemma](https://ollama.com/library/embedding-gemma):
+The semantic search stack now bootstraps embeddings automatically. On the first search request the Flask backend checks for the canonical `embeddinggemma` model, streams `ollama pull` progress to the browser, and queues concurrent queries until the model is ready. Manual preparation is still a single command:
 
 ```bash
-ollama pull embedding-gemma:latest
+ollama pull embeddinggemma
 ```
 
-Then either edit `config.yaml` to set `models.embed: "embedding-gemma:latest"`, or add an environment override before starting the app:
+Configure overrides through environment variables when needed:
 
-```bash
-export RAG_EMBED_MODEL_NAME=embedding-gemma:latest
-make dev
-```
+- `EMBED_MODEL` – alternate embedding model name (defaults to `embeddinggemma`).
+- `EMBED_AUTO_INSTALL` – set to `false` to disable automatic pulls.
+- `EMBED_FALLBACKS` – comma-separated list of fallback embedding models (`nomic-embed-text,gte-small` by default).
 
-Adding the override to `.env` works as well; the `app.py` loader reads it on boot. Once the embedding model is present and `ollama serve` is running, the warning disappears and `/api/search` responses return to `200`.
+Troubleshooting tips:
 
-Then point your browser at the UI. You can verify connectivity via:
+- **Disk space** – Ollama needs several GB free before it can unpack models. Clear older models with `ollama rm <name>` if the pull fails with `no space left on device`.
+- **Network stalls** – the UI exposes a retry button and fallback picker. Ensure the host can reach `https://registry.ollama.ai` or pre-download the model and import it into the Ollama cache.
+- **Runtime offline** – the “Start Ollama” button issues `brew services start ollama`/`systemctl start ollama` depending on the platform and surfaces errors when the daemon stays offline.
+
+Once the embedding model is present and `ollama serve` is running, `/api/search` responses return to `200` and repeat queries reuse the local cache immediately.
+
+You can verify connectivity via:
 
 ```bash
 make llm-status   # reports installed/running/host
@@ -213,7 +206,11 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 | `FOCUSED_CRAWL_ENABLED` | `1` | Enable the cold-start focused crawl pipeline |
 | `FOCUSED_CRAWL_BUDGET` | `10` | Page budget for each focused crawl run |
 | `SMART_TRIGGER_COOLDOWN` | `900` | Seconds to wait before re-running a crawl for the same query |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Base URL for the local Ollama API (aliased as `OLLAMA_URL`) |
+| `EMBED_MODEL` | `embeddinggemma` | Embedding model to install and use for semantic search |
+| `EMBED_AUTO_INSTALL` | `true` | Automatically pull the embedding model when missing |
+| `EMBED_FALLBACKS` | `nomic-embed-text,gte-small` | Ordered list of fallback embedding models to try if the primary pull fails |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Legacy alias for the Ollama base URL |
 | `SMART_USE_LLM` | `false` | Default toggle for LLM-assisted discovery |
 | `USE_LLM_RERANK` | `false` | Enable LLM reranking of the top N results |
 | `SEED_QUOTA_NON_EN` | `0.30` | Minimum non-English share in curated seeds |
