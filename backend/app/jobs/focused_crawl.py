@@ -9,7 +9,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 from urllib.parse import urlparse
 
 from crawler.frontier import Candidate, build_frontier
@@ -32,30 +32,46 @@ def run_focused_crawl(
     *,
     config: AppConfig,
     extra_seeds: Optional[Sequence[str]] = None,
+    progress_callback: Optional[Callable[[str, dict], None]] = None,
 ) -> dict:
     """Execute the full focused crawl pipeline and return summary statistics."""
 
+    def _emit(stage: str, **payload: object) -> None:
+        if not progress_callback:
+            return
+        try:
+            progress_callback(stage, dict(payload))
+        except Exception:  # pragma: no cover - defensive logging only
+            LOGGER.exception("focused crawl progress callback failed", exc_info=True)
+
     start = time.perf_counter()
     config.ensure_dirs()
+    _emit("frontier_start", query=query)
     seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
+    _emit("frontier_complete", seed_count=len(seeds))
     print(f"[focused] query='{query}' budget={budget} seeds={len(seeds)}")
     for candidate in seeds[:10]:
         print(f"[focused] seed -> {candidate.url} ({candidate.source})")
 
+    _emit("crawl_start", seed_count=len(seeds))
     raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
+    _emit("crawl_complete", pages_fetched=len(pages), raw_path=str(raw_path) if raw_path else None)
     print(f"[focused] crawl fetched {len(pages)} page(s)")
     if raw_path:
         print(f"[focused] raw capture written to {raw_path}")
 
     normalized_docs = []
     if pages and raw_path:
+        _emit("normalize_start", pages=len(pages))
         normalized_docs = normalize(
             config.crawl_raw_dir,
             config.normalized_path,
             append=True,
             sources=[raw_path],
         )
+        _emit("normalize_complete", docs=len(normalized_docs))
         print(f"[focused] normalized {len(normalized_docs)} document(s)")
+        _emit("index_start", docs=len(normalized_docs))
         added, skipped, deduped = incremental_index(
             config.index_dir,
             config.ledger_path,
@@ -63,8 +79,18 @@ def run_focused_crawl(
             config.last_index_time_path,
             normalized_docs,
         )
+        _emit(
+            "index_complete",
+            docs_indexed=added,
+            skipped=skipped,
+            deduped=deduped,
+        )
     else:
         added = skipped = deduped = 0
+        if not seeds:
+            _emit("frontier_empty")
+        else:
+            _emit("index_skipped", reason="no_new_documents")
 
     duration = time.perf_counter() - start
     stats = {

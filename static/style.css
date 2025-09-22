@@ -97,6 +97,59 @@ button {
   min-height: 1.5rem;
 }
 
+.refresh-panel {
+  background: rgba(20, 184, 166, 0.08);
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.refresh-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.refresh-controls button {
+  padding: 0.6rem 1.1rem;
+  font-size: 0.95rem;
+  background: #0f766e;
+}
+
+.refresh-controls button:hover,
+.refresh-controls button:focus {
+  background: #0d5f59;
+}
+
+.refresh-status-text {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.refresh-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.2);
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.refresh-progress div {
+  height: 100%;
+  width: 0%;
+  background: #0f766e;
+  transition: width 0.3s ease;
+}
+
+.refresh-help {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(15, 118, 110, 0.85);
+}
+
 .embedder-status {
   background: rgba(37, 99, 235, 0.05);
   border: 1px solid rgba(37, 99, 235, 0.15);
@@ -192,6 +245,19 @@ button {
 
   .embedder-progress {
     background: rgba(37, 99, 235, 0.25);
+  }
+
+  .refresh-panel {
+    background: rgba(15, 118, 110, 0.18);
+    border-color: rgba(45, 212, 191, 0.35);
+  }
+
+  .refresh-progress {
+    background: rgba(45, 212, 191, 0.25);
+  }
+
+  .refresh-help {
+    color: rgba(94, 234, 212, 0.8);
   }
 
   .fallback-group select {
