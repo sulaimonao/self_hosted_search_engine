@@ -15,7 +15,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from rank.authority import AuthorityIndex
-from seed_loader.sources import SeedSource, discover_sources
+from seed_loader.sources import SeedSource
+from server.seeds_loader import SeedRegistryEntry, load_seed_registry
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ BASE_WEIGHT = float(os.getenv("DISCOVER_BASE_WEIGHT", "1.0"))
 DEFAULT_PER_HOST = int(os.getenv("FRONTIER_PER_HOST", "3"))
 DEFAULT_POLITENESS_DELAY = float(os.getenv("FRONTIER_POLITENESS_DELAY", "1.0"))
 DEFAULT_RERANK_MARGIN = float(os.getenv("FRONTIER_RERANK_MARGIN", "0.15"))
+REGISTRY_BASE_BOOST = float(os.getenv("DISCOVER_REGISTRY_BASE_BOOST", "1.05"))
 
 DEFAULT_LLM_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b-instruct")
 DEFAULT_LLM_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "30"))
@@ -138,6 +140,108 @@ def _default_learned_loader() -> Iterable[Mapping[str, object]]:
     except ImportError:  # pragma: no cover - circular import guard
         return []
     return seed_store.load_entries()
+
+
+def _trust_multiplier(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return max(0.1, float(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 1.0
+        lowered = text.lower()
+        if lowered == "low":
+            return 0.85
+        if lowered == "medium":
+            return 1.0
+        if lowered == "high":
+            return 1.2
+        try:
+            return max(0.1, float(text))
+        except ValueError:
+            return 1.0
+    return 1.0
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _registry_entry_sources(entry: SeedRegistryEntry) -> List[SeedSource]:
+    extras = dict(entry.extras)
+    tag_payload = extras.pop("tags", None)
+    tags = {"registry"}
+    if entry.kind:
+        tags.add(str(entry.kind))
+    if entry.strategy:
+        tags.add(str(entry.strategy))
+    if isinstance(tag_payload, (list, tuple, set)):
+        for tag in tag_payload:
+            text = str(tag).strip()
+            if text:
+                tags.add(text)
+    metadata: Dict[str, object] = {
+        "registry_id": entry.id,
+        "kind": entry.kind,
+        "strategy": entry.strategy,
+        "trust": entry.trust,
+    }
+    metadata.update(extras)
+    seeds: List[SeedSource] = []
+    for url in entry.entrypoints:
+        seeds.append(
+            SeedSource(
+                url=url,
+                source=f"registry:{entry.id}",
+                tags=set(tags),
+                metadata=dict(metadata),
+            )
+        )
+    return seeds
+
+
+def _load_registry_sources(_: Sequence[str] | None) -> List[SeedSource]:
+    seeds: List[SeedSource] = []
+    for entry in load_seed_registry():
+        seeds.extend(_registry_entry_sources(entry))
+    return seeds
+
+
+def _registry_hit_from_source(source: SeedSource) -> DiscoveryHit | None:
+    url = getattr(source, "url", None)
+    if not isinstance(url, str):
+        return None
+    metadata = getattr(source, "metadata", {}) or {}
+    multiplier = _trust_multiplier(metadata.get("trust")) if isinstance(metadata, Mapping) else 1.0
+    boost = REGISTRY_BASE_BOOST * multiplier
+    if isinstance(metadata, Mapping):
+        extra_boost = _coerce_float(metadata.get("boost"))
+    else:
+        extra_boost = None
+    if extra_boost is not None and extra_boost > 0:
+        boost *= extra_boost
+    value_prior = _coerce_float(metadata.get("value_prior")) if isinstance(metadata, Mapping) else None
+    freshness = _coerce_float(metadata.get("freshness")) if isinstance(metadata, Mapping) else None
+    authority = _coerce_float(metadata.get("authority")) if isinstance(metadata, Mapping) else None
+    source_name = getattr(source, "source", None) or "seed"
+    return DiscoveryHit(
+        url=url,
+        source=source_name,
+        boost=boost,
+        value_prior=value_prior,
+        freshness=freshness,
+        authority=authority,
+    )
 
 
 @dataclass(slots=True)
@@ -317,7 +421,7 @@ class DiscoveryEngine:
     def __init__(
         self,
         *,
-        registry_loader: Callable[[Sequence[str] | None], List[SeedSource]] = discover_sources,
+        registry_loader: Callable[[Sequence[str] | None], List[SeedSource]] = _load_registry_sources,
         learned_loader: Callable[[], Iterable[Mapping[str, object]]] = _default_learned_loader,
         authority_factory: Callable[[], AuthorityIndex] = AuthorityIndex.load_default,
         per_host_cap: int | None = None,
@@ -352,6 +456,12 @@ class DiscoveryEngine:
                 self._registry_cache = []
         return list(self._registry_cache)
 
+    def _iter_registry_hits(self) -> Iterator[DiscoveryHit]:
+        for source in self._registry():
+            hit = _registry_hit_from_source(source)
+            if hit is not None:
+                yield hit
+
     def _learned(self) -> List[Mapping[str, object]]:
         if self._learned_cache is None:
             try:
@@ -376,6 +486,70 @@ class DiscoveryEngine:
                 mapping[domain] = max(mapping.get(domain, 0.0), score)
             self._value_map = mapping
         return dict(self._value_map)
+
+    def _finalize_hits(self, hits: Iterable[DiscoveryHit]) -> List[DiscoveryHit]:
+        authority = self._authority_index()
+        value_map = self._value_map_cached()
+        deduped: Dict[str, DiscoveryHit] = {}
+        for hit in hits:
+            try:
+                finalized = hit.finalize(value_map, authority)
+            except ValueError:
+                continue
+            existing = deduped.get(finalized.url)
+            if existing is None or (finalized.score or 0.0) > (existing.score or 0.0):
+                deduped[finalized.url] = finalized
+        return list(deduped.values())
+
+    def _build_frontier(
+        self,
+        query: str,
+        limit: int,
+        discovery_hints: Sequence[DiscoveryHit],
+        rerank_fn: Optional[Callable[[str, List["Candidate"]], List["Candidate"]]],
+    ) -> List["Candidate"]:
+        from crawler.frontier import build_frontier  # local import to avoid cycles
+
+        return build_frontier(
+            query,
+            budget=limit,
+            discovery_hints=discovery_hints,
+            per_host_cap=self._per_host_cap,
+            politeness_delay=self._politeness_delay,
+            rerank_fn=rerank_fn,
+            rerank_margin=self._rerank_margin,
+        )
+
+    def _resolve_rerank_fn(
+        self,
+        use_llm: bool,
+        model: Optional[str],
+        rerank_fn: Optional[Callable[[str, List["Candidate"]], List["Candidate"]]],
+    ) -> Optional[Callable[[str, List["Candidate"]], List["Candidate"]]]:
+        if rerank_fn is not None:
+            return rerank_fn
+        if use_llm:
+            return LLMReranker(
+                os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")),
+                model=model,
+            )
+        return None
+
+    def registry_frontier(
+        self,
+        query: str,
+        *,
+        limit: int,
+        use_llm: bool = False,
+        model: Optional[str] = None,
+        rerank_fn: Optional[Callable[[str, List["Candidate"]], List["Candidate"]]] = None,
+    ) -> List["Candidate"]:
+        hits = list(self._iter_registry_hits())
+        finalized = self._finalize_hits(hits)
+        if not finalized:
+            return []
+        reranker = self._resolve_rerank_fn(use_llm, model, rerank_fn)
+        return self._build_frontier(query, limit, finalized, reranker)
 
     @staticmethod
     def _load_curated_values() -> Dict[str, float]:
@@ -431,14 +605,13 @@ class DiscoveryEngine:
         keywords = set(_keywords(q))
 
         hits: List[DiscoveryHit] = []
+        registry_fallback: List[DiscoveryHit] = []
 
-        for source in self._registry():
-            url = getattr(source, "url", None)
-            if not isinstance(url, str):
+        for hit in self._iter_registry_hits():
+            registry_fallback.append(hit)
+            if keywords and not any(token in hit.url.lower() for token in keywords):
                 continue
-            if keywords and not any(token in url.lower() for token in keywords):
-                continue
-            hits.append(DiscoveryHit(url=url, source=source.source or "seed", boost=1.05))
+            hits.append(hit)
 
         for entry in self._learned():
             domain = (entry.get("domain") or "").strip()
@@ -474,38 +647,15 @@ class DiscoveryEngine:
             for group in sitemap_urls:
                 hits.extend(list(sitemap_candidates(group)))
 
-        authority = self._authority_index()
-        value_map = self._value_map_cached()
+        if not hits and registry_fallback:
+            hits.extend(registry_fallback)
 
-        deduped: Dict[str, DiscoveryHit] = {}
-        for hit in hits:
-            try:
-                finalized = hit.finalize(value_map, authority)
-            except ValueError:
-                continue
-            existing = deduped.get(finalized.url)
-            if existing is None or (finalized.score or 0.0) > (existing.score or 0.0):
-                deduped[finalized.url] = finalized
-
-        discovery_hints = list(deduped.values())
+        discovery_hints = self._finalize_hits(hits)
         if not discovery_hints:
             return []
 
-        if rerank_fn is None and use_llm:
-            rerank_fn = LLMReranker(os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")), model=model)
-
-        from crawler.frontier import build_frontier  # local import to avoid cycles
-
-        frontier = build_frontier(
-            q,
-            budget=limit,
-            discovery_hints=discovery_hints,
-            per_host_cap=self._per_host_cap,
-            politeness_delay=self._politeness_delay,
-            rerank_fn=rerank_fn,
-            rerank_margin=self._rerank_margin,
-        )
-        return frontier
+        reranker = self._resolve_rerank_fn(use_llm, model, rerank_fn)
+        return self._build_frontier(q, limit, discovery_hints, reranker)
 
 
 __all__ = [

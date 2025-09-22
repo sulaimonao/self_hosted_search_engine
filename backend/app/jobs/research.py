@@ -11,9 +11,6 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from ..config import AppConfig
-from .focused_crawl import run_focused_crawl
-
-
 def _ollama_request(url: str, model: Optional[str], system: str, prompt: str) -> str:
     payload = {
         "messages": [
@@ -88,6 +85,8 @@ def run_research(query: str, model: Optional[str], budget: int, *, config: AppCo
     print(f"[research] plan: {json.dumps(plan, ensure_ascii=False)}")
 
     extra_sources = [url for url in plan.get("sources", []) if isinstance(url, str)]
+    from .focused_crawl import run_focused_crawl
+
     stats = run_focused_crawl(
         query,
         budget,

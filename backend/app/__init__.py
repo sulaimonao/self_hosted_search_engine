@@ -12,19 +12,6 @@ from typing import Optional
 import requests
 from flask import Flask, jsonify, render_template, request
 
-from .api import chat as chat_api
-from .api import jobs as jobs_api
-from .api import metrics as metrics_api
-from .api import refresh as refresh_api
-from .api import research as research_api
-from .api import search as search_api
-from .config import AppConfig
-from .jobs.focused_crawl import FocusedCrawlManager
-from .jobs.runner import JobRunner
-from .metrics import metrics
-from .search.service import SearchService
-from server.refresh_worker import RefreshWorker
-from server.learned_web_db import get_db
 
 LOGGER = logging.getLogger(__name__)
 EMBEDDING_MODEL_PATTERNS = [
@@ -41,6 +28,22 @@ def _is_embedding_model(name: str) -> bool:
 
 
 def create_app() -> Flask:
+    from .api import chat as chat_api
+    from .api import jobs as jobs_api
+    from .api import metrics as metrics_api
+    from .api import refresh as refresh_api
+    from .api import research as research_api
+    from .api import search as search_api
+    from .config import AppConfig
+    from .jobs.focused_crawl import FocusedCrawlManager
+    from .jobs.runner import JobRunner
+    from .metrics import metrics as metrics_module
+    from .search.service import SearchService
+    from server.refresh_worker import RefreshWorker
+    from server.learned_web_db import get_db
+
+    metrics = metrics_module
+
     package_root = Path(__file__).resolve().parents[2]
     static_folder = package_root / "static"
     template_folder = package_root / "templates"

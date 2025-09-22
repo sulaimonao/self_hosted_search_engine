@@ -8,9 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
-
-from crawler.frontier import Candidate
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 from crawler.run import FocusedCrawler
 from server.discover import DiscoveryEngine
 
@@ -24,6 +22,9 @@ from backend.app.search.embedding import embed_query
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_DISCOVERY_DEPTH = 4
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from crawler.frontier import Candidate
 
 
 def run_focused_crawl(
@@ -257,6 +258,8 @@ def _get_seed_candidates(
     extra_seeds: Optional[Sequence[str]] = None,
     depth: Optional[int] = None,
 ) -> List[Candidate]:
+    from crawler.frontier import Candidate
+
     q = (query or "").strip()
     if not q:
         return []
@@ -285,6 +288,13 @@ def _get_seed_candidates(
         model=model,
     )
     if not candidates:
+        candidates = engine.registry_frontier(
+            q,
+            limit=limit,
+            use_llm=use_llm,
+            model=model,
+        )
+    if not candidates:
         fallback = [
             f"https://{q.replace(' ', '')}.com",
             f"https://{q.replace(' ', '')}.io",
@@ -296,6 +306,8 @@ def _get_seed_candidates(
 
 
 def _build_manual_candidates(seed_urls: Optional[Sequence[str]]) -> List[Candidate]:
+    from crawler.frontier import Candidate
+
     if not seed_urls:
         return []
     candidates: List[Candidate] = []
