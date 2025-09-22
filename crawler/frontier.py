@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
@@ -132,6 +132,19 @@ def _query_candidates(query: str) -> Iterable[str]:
     return suggestions
 
 
+def _normalize_host(value: str) -> Optional[str]:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    probe = candidate if candidate.startswith(("http://", "https://")) else f"https://{candidate}"
+    parsed = urlparse(probe)
+    host = parsed.netloc or parsed.path
+    if not host:
+        return None
+    lowered = host.lower()
+    return lowered[4:] if lowered.startswith("www.") else lowered
+
+
 def build_frontier(
     query: str,
     *,
@@ -141,6 +154,7 @@ def build_frontier(
     cooldowns: Optional[CrawlCooldowns] = None,
     cooldown_seconds: Optional[int] = None,
     now: Optional[float] = None,
+    value_overrides: Optional[Mapping[str, float]] = None,
 ) -> List[Candidate]:
     q = (query or "").strip()
     if not q:
@@ -150,17 +164,28 @@ def build_frontier(
     current_time = now or time.time()
     cooldown_value = DEFAULT_COOLDOWN if cooldown_seconds is None else max(0, int(cooldown_seconds))
 
+    override_map: Dict[str, float] = {}
+    for domain, score in (value_overrides or {}).items():
+        normalized = _normalize_host(domain)
+        if not normalized:
+            continue
+        override_map[normalized] = max(override_map.get(normalized, 0.0), float(score))
+
     def _add(url: str, source: str, weight: float) -> None:
         sanitized = _sanitize(url)
         if not sanitized:
             return
         domain = urlparse(sanitized).netloc.lower()
+        normalized = domain[4:] if domain.startswith("www.") else domain
+        adjusted_weight = weight
+        if normalized in override_map:
+            adjusted_weight = max(adjusted_weight, override_map[normalized])
         if cooldowns and not cooldowns.allowed(q, domain, cooldown_value, current_time):
             LOGGER.debug("skipping %s due to cooldown", sanitized)
             return
         existing = collection.get(sanitized)
-        if existing is None or weight > existing.weight:
-            collection[sanitized] = Candidate(url=sanitized, source=source, weight=weight)
+        if existing is None or adjusted_weight > existing.weight:
+            collection[sanitized] = Candidate(url=sanitized, source=source, weight=adjusted_weight)
 
     for url in extra_urls or []:
         _add(url, source="llm", weight=1.5)
