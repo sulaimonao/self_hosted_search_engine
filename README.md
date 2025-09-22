@@ -124,22 +124,25 @@ ollama serve
 ollama pull llama3.1:8b-instruct
 ```
 
-The semantic search stack now bootstraps embeddings automatically. On the first search request the Flask backend checks for the canonical `embeddinggemma` model, streams `ollama pull` progress to the browser, and queues concurrent queries until the model is ready. Manual preparation is still a single command:
+### Embedding model defaults
 
-```bash
-ollama pull embeddinggemma
-```
+- The backend now targets the canonical `embeddinggemma` model. On the first semantic search the Flask API checks whether the model exists locally, streams the `ollama pull` progress to the UI, and queues concurrent queries until embeddings are available.
+- Manual preparation is still a single command if you prefer to pull models yourself:
 
-Configure overrides through environment variables when needed:
+  ```bash
+  ollama pull embeddinggemma
+  ```
 
-- `EMBED_MODEL` – alternate embedding model name (defaults to `embeddinggemma`).
-- `EMBED_AUTO_INSTALL` – set to `false` to disable automatic pulls.
-- `EMBED_FALLBACKS` – comma-separated list of fallback embedding models (`nomic-embed-text,gte-small` by default).
+- Configure overrides through environment variables when needed:
 
-Troubleshooting tips:
+  - `EMBED_MODEL` – alternate embedding model name (defaults to `embeddinggemma`).
+  - `EMBED_AUTO_INSTALL` – set to `false` to disable automatic pulls.
+  - `EMBED_FALLBACKS` – comma-separated list of fallback embedding models (`nomic-embed-text,gte-small` by default).
+
+Troubleshooting tips when the auto-install flow stalls:
 
 - **Disk space** – Ollama needs several GB free before it can unpack models. Clear older models with `ollama rm <name>` if the pull fails with `no space left on device`.
-- **Network stalls** – the UI exposes a retry button and fallback picker. Ensure the host can reach `https://registry.ollama.ai` or pre-download the model and import it into the Ollama cache.
+- **Network stalls** – ensure the host can reach `https://registry.ollama.ai`. The UI exposes a retry button and fallback picker, or you can pre-download/import the model into the Ollama cache.
 - **Runtime offline** – the “Start Ollama” button issues `brew services start ollama`/`systemctl start ollama` depending on the platform and surfaces errors when the daemon stays offline.
 
 Once the embedding model is present and `ollama serve` is running, `/api/search` responses return to `200` and repeat queries reuse the local cache immediately.
