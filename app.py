@@ -17,9 +17,10 @@ from engine.indexing.coldstart import ColdStartIndexer
 from engine.indexing.crawl import CrawlClient
 from engine.indexing.chunk import TokenChunker
 from engine.indexing.embed import OllamaEmbedder
-from engine.search.provider import seed_urls_for_query
 from engine.llm.ollama_client import OllamaClient
 from llm.seed_guesser import guess_urls as llm_guess_urls
+from server.discover import DiscoveryEngine
+from server.learned_web_db import get_db
 
 load_dotenv()
 
@@ -48,6 +49,9 @@ crawler = CrawlClient(
     min_delay=ENGINE_CONFIG.crawl.sleep_seconds,
 )
 
+discovery_engine = DiscoveryEngine()
+learned_web_db = get_db()
+
 
 def _llm_seed_provider(query: str, limit: int, model: str | None) -> list[str]:
     urls = llm_guess_urls(query, model=model)
@@ -59,7 +63,8 @@ coldstart = ColdStartIndexer(
     crawler=crawler,
     chunker=chunker,
     embedder=embedder,
-    seed_provider=seed_urls_for_query,
+    discovery_engine=discovery_engine,
+    learned_db=learned_web_db,
     llm_seed_provider=_llm_seed_provider,
     max_pages=ENGINE_CONFIG.crawl.max_pages,
 )
@@ -116,6 +121,8 @@ app.config.update(
     RAG_EMBEDDER=embedder,
     RAG_COLDSTART=coldstart,
     RAG_AGENT=rag_agent,
+    RAG_DISCOVERY_ENGINE=discovery_engine,
+    RAG_LEARNED_DB=learned_web_db,
     RAG_EMBED_MODEL_NAME=embed_model_name,
     RAG_OLLAMA_HOST=ENGINE_CONFIG.ollama.base_url,
     RAG_EMBED_MANAGER=embed_manager,
