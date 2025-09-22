@@ -22,6 +22,7 @@ from .config import AppConfig
 from .jobs.focused_crawl import FocusedCrawlManager
 from .jobs.runner import JobRunner
 from .metrics import metrics
+from .search.learned_web import LearnedWebStore
 from .search.service import SearchService
 from server.refresh_worker import RefreshWorker
 
@@ -55,7 +56,8 @@ def create_app() -> Flask:
 
     runner = JobRunner(config.logs_dir)
     manager = FocusedCrawlManager(config, runner)
-    search_service = SearchService(config, manager)
+    learned_store = LearnedWebStore(config.learned_web_db)
+    search_service = SearchService(config, manager, learned_store=learned_store)
     refresh_worker = RefreshWorker(config)
 
     app.config.update(
@@ -64,6 +66,7 @@ def create_app() -> Flask:
         FOCUSED_MANAGER=manager,
         SEARCH_SERVICE=search_service,
         REFRESH_WORKER=refresh_worker,
+        LEARNED_WEB_STORE=learned_store,
     )
 
     app.register_blueprint(search_api.bp)

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from backend.app.api.search import bp as search_bp
+from backend.app.search.service import SearchRunResult
 from engine.agents.rag import RagResult
 from engine.data.store import RetrievedChunk
 
@@ -107,8 +108,8 @@ def test_search_service_endpoint_returns_job_id_with_results():
 
         def run_query(self, query: str, *, limit: int, use_llm: bool, model: str | None):
             self.calls.append((query, limit, use_llm, model))
-            return (
-                [
+            return SearchRunResult(
+                results=[
                     {
                         "url": "https://docs.example.com",
                         "title": "Example Doc",
@@ -117,7 +118,12 @@ def test_search_service_endpoint_returns_job_id_with_results():
                         "lang": "en",
                     }
                 ],
-                "job-123",
+                job_id="job-123",
+                triggered=True,
+                confidence=0.18,
+                trigger_reason="low_confidence",
+                trigger_attempted=True,
+                frontier_seeds=("https://seed.example",),
             )
 
         def last_index_time(self) -> int:
@@ -141,6 +147,11 @@ def test_search_service_endpoint_returns_job_id_with_results():
     assert payload["job_id"] == "job-123"
     assert payload["results"][0]["url"] == "https://docs.example.com"
     assert payload["last_index_time"] == search_service.last_index_time()
+    assert payload["confidence"] == 0.18
+    assert payload["trigger_attempted"] is True
+    assert payload["triggered"] is True
+    assert payload["trigger_reason"] == "low_confidence"
+    assert payload["frontier_seeds"] == ["https://seed.example"]
     assert search_service.calls == [("docs", 5, False, None)]
 
 

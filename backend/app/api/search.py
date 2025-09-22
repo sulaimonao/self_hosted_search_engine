@@ -116,7 +116,7 @@ def search_endpoint():
         search_service = current_app.config.get("SEARCH_SERVICE")
         app_config = current_app.config.get("APP_CONFIG")
         if search_service and app_config:
-            results, job_id = search_service.run_query(
+            run = search_service.run_query(
                 query,
                 limit=app_config.search_default_limit,
                 use_llm=llm_enabled,
@@ -124,14 +124,21 @@ def search_endpoint():
             )
             payload = {
                 "status": "ok",
-                "results": results,
+                "results": run.results,
                 "llm_used": bool(llm_enabled),
+                "confidence": run.confidence,
+                "trigger_attempted": run.trigger_attempted,
+                "triggered": run.triggered,
             }
-            if job_id:
-                payload["job_id"] = job_id
+            if run.job_id:
+                payload["job_id"] = run.job_id
                 payload["last_index_time"] = search_service.last_index_time()
-                if len(results) < app_config.smart_min_results:
+                if len(run.results) < app_config.smart_min_results:
                     payload["status"] = "focused_crawl_running"
+            if run.trigger_reason:
+                payload["trigger_reason"] = run.trigger_reason
+            if run.frontier_seeds:
+                payload["frontier_seeds"] = list(run.frontier_seeds)
             if llm_model:
                 payload["llm_model"] = llm_model
             return jsonify(payload)

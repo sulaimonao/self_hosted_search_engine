@@ -258,7 +258,14 @@ class FocusedCrawlManager:
         self._history_path.parent.mkdir(parents=True, exist_ok=True)
         self._history_path.write_text(json.dumps(self._history, indent=2, sort_keys=True), encoding="utf-8")
 
-    def schedule(self, query: str, use_llm: bool, model: Optional[str]) -> Optional[str]:
+    def schedule(
+        self,
+        query: str,
+        use_llm: bool,
+        model: Optional[str],
+        *,
+        extra_seeds: Optional[Sequence[str]] = None,
+    ) -> Optional[str]:
         q = (query or "").strip()
         if not q:
             return None
@@ -273,6 +280,12 @@ class FocusedCrawlManager:
                 if last and (now - last) < cooldown:
                     return None
 
+            normalized_seeds = [
+                seed.strip()
+                for seed in (extra_seeds or [])
+                if isinstance(seed, str) and seed.strip()
+            ]
+
             def _job() -> dict:
                 return run_focused_crawl(
                     q,
@@ -280,12 +293,18 @@ class FocusedCrawlManager:
                     use_llm,
                     model,
                     config=self.config,
+                    extra_seeds=normalized_seeds or None,
                 )
 
             job_id = self.runner.submit(_job)
             self._history[q] = now
             self._persist_history()
-        LOGGER.info("scheduled focused crawl for '%s' as job %s", q, job_id)
+        LOGGER.info(
+            "scheduled focused crawl for '%s' as job %s (extra_seeds=%d)",
+            q,
+            job_id,
+            len(normalized_seeds),
+        )
         return job_id
 
     def last_index_time(self) -> int:
