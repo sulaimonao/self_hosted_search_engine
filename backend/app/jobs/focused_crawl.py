@@ -19,6 +19,7 @@ from ..indexer.incremental import incremental_index
 from ..pipeline.normalize import normalize
 from .runner import JobRunner
 from server.learned_web_db import LearnedWebDB, get_db
+from backend.app.search.embedding import embed_query
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def run_focused_crawl(
     *,
     config: AppConfig,
     extra_seeds: Optional[Sequence[str]] = None,
+    query_embedding: Optional[Sequence[float]] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
     db: Optional[LearnedWebDB] = None,
 ) -> dict:
@@ -53,6 +55,13 @@ def run_focused_crawl(
     except Exception:  # pragma: no cover - defensive fallback
         LOGGER.exception("unable to open learned web database", exc_info=True)
         learned_db = None
+    q = (query or "").strip()
+    if q and learned_db is not None:
+        try:
+            vector = query_embedding or embed_query(q)
+            learned_db.upsert_query_embedding(q, vector)
+        except Exception:  # pragma: no cover - logging only
+            LOGGER.debug("failed to persist query embedding for '%s'", q, exc_info=True)
     _emit("frontier_start", query=query)
     seeds = _get_seed_candidates(query, budget, use_llm, model, config, extra_seeds=extra_seeds)
     _emit("frontier_complete", seed_count=len(seeds))
@@ -281,7 +290,15 @@ class FocusedCrawlManager:
         self._history_path.parent.mkdir(parents=True, exist_ok=True)
         self._history_path.write_text(json.dumps(self._history, indent=2, sort_keys=True), encoding="utf-8")
 
-    def schedule(self, query: str, use_llm: bool, model: Optional[str]) -> Optional[str]:
+    def schedule(
+        self,
+        query: str,
+        use_llm: bool,
+        model: Optional[str],
+        *,
+        frontier_seeds: Optional[Sequence[str]] = None,
+        query_embedding: Optional[Sequence[float]] = None,
+    ) -> Optional[str]:
         q = (query or "").strip()
         if not q:
             return None
@@ -296,6 +313,23 @@ class FocusedCrawlManager:
                 if last and (now - last) < cooldown:
                     return None
 
+            if query_embedding is not None:
+                try:
+                    self.db.upsert_query_embedding(q, query_embedding)
+                except Exception:  # pragma: no cover - logging only
+                    LOGGER.debug("failed to persist scheduled embedding for '%s'", q, exc_info=True)
+
+            seeds: Optional[list[str]] = None
+            if frontier_seeds:
+                unique: list[str] = []
+                for url in frontier_seeds:
+                    if isinstance(url, str):
+                        cleaned = url.strip()
+                        if cleaned and cleaned not in unique:
+                            unique.append(cleaned)
+                if unique:
+                    seeds = unique
+
             def _job() -> dict:
                 try:
                     return run_focused_crawl(
@@ -304,10 +338,12 @@ class FocusedCrawlManager:
                         use_llm,
                         model,
                         config=self.config,
+                        extra_seeds=seeds,
+                        query_embedding=query_embedding,
                         db=self.db,
                     )
                 except TypeError as exc:
-                    if "unexpected keyword argument 'db'" not in str(exc):
+                    if "unexpected keyword argument" not in str(exc):
                         raise
                     return run_focused_crawl(
                         q,

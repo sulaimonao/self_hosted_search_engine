@@ -116,7 +116,7 @@ def search_endpoint():
         search_service = current_app.config.get("SEARCH_SERVICE")
         app_config = current_app.config.get("APP_CONFIG")
         if search_service and app_config:
-            results, job_id = search_service.run_query(
+            results, job_id, context = search_service.run_query(
                 query,
                 limit=app_config.search_default_limit,
                 use_llm=llm_enabled,
@@ -127,10 +127,16 @@ def search_endpoint():
                 "results": results,
                 "llm_used": bool(llm_enabled),
             }
+            if context:
+                payload["confidence"] = context.get("confidence")
+                if context.get("trigger_reason"):
+                    payload["trigger_reason"] = context.get("trigger_reason")
+                if context.get("seed_count"):
+                    payload["seed_count"] = context.get("seed_count")
             if job_id:
                 payload["job_id"] = job_id
                 payload["last_index_time"] = search_service.last_index_time()
-                if len(results) < app_config.smart_min_results:
+                if len(results) < app_config.smart_min_results or context.get("trigger_reason") == "low_confidence":
                     payload["status"] = "focused_crawl_running"
             if llm_model:
                 payload["llm_model"] = llm_model

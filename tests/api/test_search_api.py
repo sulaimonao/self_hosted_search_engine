@@ -118,6 +118,7 @@ def test_search_service_endpoint_returns_job_id_with_results():
                     }
                 ],
                 "job-123",
+                {"confidence": 0.1, "triggered": True, "trigger_reason": "no_results", "seed_count": 0},
             )
 
         def last_index_time(self) -> int:
@@ -142,6 +143,7 @@ def test_search_service_endpoint_returns_job_id_with_results():
     assert payload["results"][0]["url"] == "https://docs.example.com"
     assert payload["last_index_time"] == search_service.last_index_time()
     assert search_service.calls == [("docs", 5, False, None)]
+    assert "confidence" in payload
 
 
 def test_search_returns_answer_and_results():

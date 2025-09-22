@@ -4,6 +4,7 @@ import sqlite3
 
 from frontier.dedupe import ContentFingerprint
 
+from backend.app.search.embedding import embed_query
 from server.learned_web_db import LearnedWebDB
 
 
@@ -76,3 +77,24 @@ def test_learned_web_db_persists_discovery_and_pages(tmp_path) -> None:
 
         link_count = conn.execute("SELECT COUNT(*) FROM links").fetchone()
         assert link_count and link_count[0] >= 2
+
+
+def test_similar_discovery_seeds(tmp_path) -> None:
+    db_path = tmp_path / "learned.sqlite3"
+    db = LearnedWebDB(db_path)
+
+    query_a = "python packaging"
+    query_b = "python virtualenv"
+    embed_a = embed_query(query_a)
+    embed_b = embed_query(query_b)
+    db.upsert_query_embedding(query_a, embed_a)
+    db.upsert_query_embedding(query_b, embed_b)
+    db.record_discovery(query_a, "https://packaging.python.org", reason="frontier", score=1.0)
+    db.record_discovery(query_a, "https://pypi.org/project/pip", reason="frontier", score=0.8)
+    db.record_discovery(query_b, "https://virtualenv.pypa.io", reason="frontier", score=0.9)
+
+    probe = embed_query("python package manager")
+    seeds = db.similar_discovery_seeds(probe, limit=3, min_similarity=0.1)
+
+    assert "https://packaging.python.org" in seeds
+    assert len(seeds) >= 1
