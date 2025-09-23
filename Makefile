@@ -12,6 +12,9 @@ PY:=$(VENV)/bin/python
 PIP:=$(VENV)/bin/pip
 PLAYWRIGHT:=$(VENV)/bin/playwright
 
+REPO_ROOT := $(shell pwd)
+export PYTHONPATH := $(REPO_ROOT)$(if $(PYTHONPATH),:$(PYTHONPATH))
+
 setup:
 	./scripts/ensure_py311.sh $(PYTHON)
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
@@ -36,7 +39,7 @@ crawl:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
 
 reindex:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/reindex_incremental.py'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m bin.reindex_incremental'
 
 search:
 	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
@@ -50,7 +53,7 @@ normalize:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/normalize.py'
 
 reindex-incremental:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/reindex_incremental.py'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m bin.reindex_incremental'
 
 seeds:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/seeds_prepare.py'

@@ -279,6 +279,7 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 - `make dev` – loads `.env`, runs `bin/dev_check.py`, and starts the Flask dev server with auto-reload.
 - `make crawl` – wraps `python bin/crawl.py`; accepts `URL`, `SEEDS_FILE`, and respects `.env` overrides.
 - `make reindex` – rebuilds the Whoosh index (use `make index-inc` for incremental updates).
+- `python -m bin.reindex_incremental` and `python bin/reindex_incremental.py` are interchangeable entrypoints when you need to run the incremental job manually.
 - `make search` – executes the CLI search client with optional `LIMIT`.
 - `make focused` – runs `bin/crawl_focused.py` for a specific query (`Q="..."`) with optional `BUDGET`, `USE_LLM`, and `MODEL` overrides.
 - `make llm-status` – quick health check for the Ollama HTTP API exposed through Flask.
@@ -288,7 +289,7 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 ## Troubleshooting
 
 - **“No seeds provided”** – pass `URL=...` to `make crawl` or populate `crawler/seeds.txt`.
-- **Empty results** – confirm `data/crawl/normalized.jsonl` exists, then run `make reindex`.
+- **Empty results** – confirm `data/crawl/normalized.jsonl` exists, then run `make reindex` (or the equivalent `python -m bin.reindex_incremental`).
 - **Playwright prompts** – `make setup` installs Chromium automatically; re-run if browsers are missing.
 - **Non-3.11 Python** – run `./scripts/ensure_py311.sh python3` before `make setup`.
 
