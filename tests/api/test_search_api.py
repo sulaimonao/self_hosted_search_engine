@@ -150,7 +150,7 @@ def test_search_service_endpoint_returns_job_id_with_results():
     assert "confidence" in payload
 
 
-def test_search_returns_answer_and_results():
+def test_search_returns_keyword_results_without_llm():
     chunks = [
         RetrievedChunk(
             text="This is a retrieved chunk of content that answers the query.",
@@ -161,20 +161,32 @@ def test_search_returns_answer_and_results():
     ]
     store = StubStore(chunks)
     coldstart = ColdStartSpy()
-    rag_agent = StubRagAgent()
+
+    class RecordingRagAgent:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[RetrievedChunk]]] = []
+
+        def run(self, question: str, documents):
+            self.calls.append((question, list(documents)))
+            return RagResult(answer="unused", sources=[], used=len(documents))
+
+    rag_agent = RecordingRagAgent()
     app = _build_app(store, coldstart, rag_agent)
 
     client = app.test_client()
-    response = client.get("/api/search", query_string={"q": "test"})
+    response = client.get("/api/search", query_string={"q": "test", "llm": "off"})
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["status"] == "ok"
-    assert payload["answer"] == "Summary answer"
-    assert payload["k"] == 1
+    assert payload["status"] == "ok_no_llm"
+    assert payload["llm_used"] is False
+    assert payload["k"] == len(chunks)
     assert payload["results"]
+    assert payload["hits"] == payload["results"]
     first = payload["results"][0]
     assert first["url"] == "https://docs.example.com"
     assert "snippet" in first and first["snippet"].startswith("This is")
+    assert payload.get("answer") == ""
+    assert rag_agent.calls == []
     assert coldstart.calls == []
 
 
