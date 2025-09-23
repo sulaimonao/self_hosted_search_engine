@@ -39,3 +39,9 @@ sources:
       - https://data.europa.eu/en
       - https://www.data.gov.uk/
     trust: high
+  - id: sitemap-hunter
+    kind: crawler
+    strategy: sitemap
+    entrypoints:
+      - https://example.com/robots.txt
+    trust: medium
