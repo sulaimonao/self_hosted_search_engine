@@ -9,6 +9,8 @@ from backend.app.api import search as search_module
 from backend.app.api.search import bp as search_bp
 from engine.agents.rag import RagResult
 from engine.data.store import RetrievedChunk
+from server.agent import PlannerAgent
+from server.llm import LLMError
 
 
 class StubEmbedder:
@@ -235,6 +237,54 @@ def test_search_returns_planner_payload_when_llm_enabled(monkeypatch):
     assert payload["type"] == "final"
     assert payload["llm_model"] == "llama"
     assert captured["args"] == ("need data", "llama")
+
+
+def test_search_planner_fallback_succeeds(monkeypatch):
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    app = _build_app(store, coldstart, rag_agent)
+
+    class _StubPlannerLLM:
+        def __init__(self) -> None:
+            self.default_model = "primary-model"
+
+        def chat_json(self, *args, **kwargs):  # pragma: no cover - patched in test
+            raise AssertionError("chat_json should be patched")
+
+    planner_agent = PlannerAgent(
+        llm=_StubPlannerLLM(),
+        tools=SimpleNamespace(execute=lambda *_args, **_kwargs: {"ok": True}),
+        default_model="primary-model",
+        fallback_model="fallback-model",
+        max_iterations=2,
+    )
+    app.config["RAG_PLANNER_AGENT"] = planner_agent
+
+    calls: list[str | None] = []
+
+    def _patched_chat_json(messages, *, model=None):
+        calls.append(model)
+        if model == "primary-model":
+            raise LLMError("model primary-model not found")
+        assert model == "fallback-model"
+        return {"type": "final", "answer": "ok", "sources": []}
+
+    monkeypatch.setattr(planner_agent.llm, "chat_json", _patched_chat_json)
+
+    client = app.test_client()
+    response = client.get(
+        "/api/search",
+        query_string={"q": "need data", "llm": "on", "model": "primary-model"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["type"] == "final"
+    assert payload["planner_model_used"] == "fallback-model"
+    assert payload["llm_model"] == "fallback-model"
+    assert payload.get("llm_model_requested") == "primary-model"
+    assert calls == ["primary-model", "fallback-model"]
 
 
 def test_search_reports_embedding_unavailable():

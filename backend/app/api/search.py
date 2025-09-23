@@ -291,9 +291,13 @@ def run_agent(
     try:
         result = planner.run(query, context=planner_context, model=model)
     except LLMError as exc:
+        extra = {
+            "planner_models": _planner_model_candidates(planner, model),
+        }
         payload = _warming_payload(
             f"Planner LLM unavailable: {exc}",
             code="planner_llm_unavailable",
+            extra=extra,
         )
         payload["llm_used"] = True
         if model:
@@ -312,9 +316,14 @@ def run_agent(
         return payload
 
     response = dict(result)
+    used_model = response.get("planner_model_used")
     response["llm_used"] = True
     if model:
-        response["llm_model"] = model
+        response["llm_model_requested"] = model
+    if used_model:
+        response.setdefault("llm_model", used_model)
+    elif model:
+        response.setdefault("llm_model", model)
 
     steps = response.get("steps")
     candidates = _collect_candidates_from_steps(steps if isinstance(steps, Sequence) else None)
@@ -329,6 +338,22 @@ def run_agent(
         )
 
     return response
+
+
+def _planner_model_candidates(planner: Any, requested: str | None) -> list[str]:
+    candidates: list[str] = []
+    if requested:
+        candidates.append(requested)
+    else:
+        default_model = getattr(planner, "default_model", None)
+        if isinstance(default_model, str) and default_model.strip():
+            candidates.append(default_model.strip())
+    fallback_model = getattr(planner, "fallback_model", None)
+    if isinstance(fallback_model, str) and fallback_model.strip():
+        cleaned = fallback_model.strip()
+        if cleaned not in candidates:
+            candidates.append(cleaned)
+    return candidates
 
 
 @bp.get("/embedder/status")

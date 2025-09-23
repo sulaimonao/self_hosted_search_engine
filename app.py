@@ -99,6 +99,7 @@ planner_agent = PlannerAgent(
     llm=planner_llm,
     tools=tool_dispatcher,
     default_model=ENGINE_CONFIG.models.llm_primary,
+    fallback_model=ENGINE_CONFIG.models.llm_fallback,
     max_iterations=6,
 )
 
