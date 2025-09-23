@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, Sequence
+from dataclasses import asdict, dataclass, is_dataclass
+from typing import Any, Iterable, Mapping, Sequence
 
 import requests
 
@@ -16,6 +16,33 @@ class OllamaClientError(RuntimeError):
 class ChatMessage:
     role: str
     content: str
+
+
+def _message_to_dict(message: Any) -> dict[str, str]:
+    """Normalize chat messages into the Ollama payload structure."""
+
+    data: Any
+    if isinstance(message, Mapping):
+        data = dict(message)
+    elif is_dataclass(message):
+        data = asdict(message)
+    elif hasattr(message, "model_dump") and callable(message.model_dump):
+        data = message.model_dump()
+    else:
+        data = {
+            "role": getattr(message, "role", None),
+            "content": getattr(message, "content", None),
+        }
+
+    if not isinstance(data, Mapping):
+        raise OllamaClientError("Invalid chat message payload")
+
+    role = data.get("role")
+    content = data.get("content")
+    if not isinstance(role, str) or not isinstance(content, str):
+        raise OllamaClientError("Invalid chat message payload")
+
+    return {"role": role, "content": content}
 
 
 class OllamaClient:
@@ -32,7 +59,7 @@ class OllamaClient:
     def chat(self, model: str, messages: Sequence[ChatMessage], options: dict | None = None) -> str:
         payload = {
             "model": model,
-            "messages": [message.__dict__ for message in messages],
+            "messages": [_message_to_dict(message) for message in messages],
             "stream": False,
         }
         if options:
@@ -54,6 +81,9 @@ class OllamaClient:
         content = message.get("content") or data.get("response")
         if not isinstance(content, str):
             raise OllamaClientError("Unexpected chat response payload")
+        content = content.strip()
+        if not content:
+            raise OllamaClientError("Empty chat response payload")
         return content
 
     # ------------------------------------------------------------------
