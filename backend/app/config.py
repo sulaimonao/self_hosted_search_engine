@@ -39,6 +39,7 @@ class AppConfig:
     ollama_url: str
     crawl_use_playwright: str
     use_llm_rerank: bool
+    chat_log_level: int
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -66,6 +67,8 @@ class AppConfig:
         ollama_url = os.getenv("OLLAMA_URL", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
         crawl_use_playwright = os.getenv("CRAWL_USE_PLAYWRIGHT", "auto").lower()
         use_llm_rerank = os.getenv("USE_LLM_RERANK", "false").lower() in {"1", "true", "yes", "on"}
+        chat_log_level_name = os.getenv("CHAT_LOG_LEVEL", "INFO").upper()
+        chat_log_level = getattr(logging, chat_log_level_name, logging.INFO)
 
         return cls(
             index_dir=index_dir,
@@ -89,6 +92,7 @@ class AppConfig:
             ollama_url=ollama_url,
             crawl_use_playwright=crawl_use_playwright,
             use_llm_rerank=use_llm_rerank,
+            chat_log_level=chat_log_level,
         )
 
     def ensure_dirs(self) -> None:
@@ -121,6 +125,7 @@ class AppConfig:
             "crawl_use_playwright": self.crawl_use_playwright,
             "use_llm_rerank": self.use_llm_rerank,
             "learned_web_db_path": str(self.learned_web_db_path),
+            "chat_log_level": logging.getLevelName(self.chat_log_level),
         }
         LOGGER.info("runtime configuration: %s", json.dumps(payload, sort_keys=True))
 
