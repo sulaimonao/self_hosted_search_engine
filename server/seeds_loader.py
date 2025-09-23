@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Any, Iterable, Iterator, List, Mapping, MutableMapping, Sequence
 from urllib.parse import urlparse
 
 import yaml
@@ -116,6 +117,108 @@ def _normalize_trust(value: Any) -> float | str:
     raise TypeError("trust must be a string or numeric value")
 
 
+def _normalize_tag_sequence(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        candidates: Iterable[Any] = [value]
+    elif isinstance(value, Sequence):
+        candidates = value
+    else:
+        candidates = [value]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        text = str(candidate).strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered not in seen:
+            normalized.append(lowered)
+            seen.add(lowered)
+    return normalized
+
+
+def _merge_tag_lists(existing: Any, new: Any) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for candidate in (*_normalize_tag_sequence(existing), *_normalize_tag_sequence(new)):
+        if candidate not in seen:
+            merged.append(candidate)
+            seen.add(candidate)
+    return merged
+
+
+def _merge_mappings(*mappings: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Merge mappings, copying values to avoid shared mutable references."""
+
+    merged: dict[str, Any] = {}
+    for mapping in mappings:
+        if not mapping:
+            continue
+        for key, value in mapping.items():
+            if key == "tags" and key in merged:
+                merged[key] = _merge_tag_lists(merged[key], value)
+            else:
+                merged[key] = deepcopy(value)
+    return merged
+
+
+def _coerce_mapping(value: Any) -> Mapping[str, Any]:
+    if value is None:
+        return {}
+    return _ensure_mapping(value)
+
+
+def _iter_directory_sources(
+    payload: Mapping[str, Any],
+) -> Iterator[Mapping[str, Any]]:
+    directories = _coerce_mapping(payload.get("directories"))
+    if not directories:
+        return
+
+    crawl_defaults = _coerce_mapping(payload.get("crawl_defaults"))
+
+    for directory, raw_config in directories.items():
+        config = _ensure_mapping(raw_config)
+        directory_defaults = _merge_mappings(
+            crawl_defaults,
+            _coerce_mapping(config.get("defaults")),
+            {key: config[key] for key in ("kind", "strategy", "trust", "tags") if key in config},
+        )
+
+        sources = config.get("sources", [])
+        if isinstance(sources, (str, bytes)):
+            raise TypeError("directory 'sources' must be a sequence of mappings")
+        for raw_source in sources or []:
+            source_mapping = _ensure_mapping(raw_source)
+            yield _merge_mappings(
+                directory_defaults,
+                source_mapping,
+                {"collection": directory},
+            )
+
+
+def _iter_raw_entries(payload: Any) -> Iterator[Mapping[str, Any]]:
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        for item in payload:
+            yield _ensure_mapping(item)
+        return
+
+    mapping = _ensure_mapping(payload)
+
+    yield from _iter_directory_sources(mapping)
+
+    sources = mapping.get("sources", [])
+    if isinstance(sources, (str, bytes)):
+        raise TypeError("registry 'sources' must be a sequence of mappings")
+    for item in sources or []:
+        yield _ensure_mapping(item)
+
+
 def _normalize_entry(raw: Mapping[str, Any]) -> SeedRegistryEntry:
     data = dict(raw)
     entry_id = _normalize_id(data.pop("id", None))
@@ -144,16 +247,10 @@ def load_seed_registry(path: str | Path | None = None) -> List[SeedRegistryEntry
     with registry_path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
 
-    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        raw_entries = payload
-    else:
-        mapping = _ensure_mapping(payload)
-        raw_entries = mapping.get("sources", [])
-
     entries: List[SeedRegistryEntry] = []
     seen_ids: set[str] = set()
-    for item in raw_entries:
-        entry = _normalize_entry(_ensure_mapping(item))
+    for item in _iter_raw_entries(payload):
+        entry = _normalize_entry(item)
         if entry.id in seen_ids:
             raise ValueError(f"duplicate seed registry id '{entry.id}'")
         entries.append(entry)
