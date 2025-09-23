@@ -6,14 +6,28 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Iterable, List
 
-from backend.app.config import AppConfig
-from backend.app.indexer.incremental import incremental_index
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+try:
+    from backend.app.config import AppConfig
+    from backend.app.indexer.incremental import incremental_index
+except ModuleNotFoundError as exc:  # pragma: no cover - defensive path hints
+    if exc.name == "backend":
+        msg = (
+            "Unable to import 'backend'. Ensure the repository root is on PYTHONPATH or "
+            "invoke this script via 'python -m bin.reindex'."
+        )
+        print(msg, file=sys.stderr)
+    raise
 
 INDEX_INC_WINDOW_MIN = int(os.getenv("INDEX_INC_WINDOW_MIN", "60"))
 
