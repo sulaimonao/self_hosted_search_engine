@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 import hashlib
 import threading
+import json
 
 import duckdb
 from chromadb import PersistentClient
@@ -90,6 +91,25 @@ class VectorStore:
     def _ensure_embedding(vector: Sequence[float]) -> list[float]:
         return [float(value) for value in vector]
 
+    @staticmethod
+    def _sanitize_metadata(
+        metadata: dict[str, Any]
+    ) -> dict[str, str | int | float | bool]:
+        """Return a metadata dict limited to Chroma-compatible primitives."""
+
+        sanitized: dict[str, str | int | float | bool] = {}
+        for key, value in metadata.items():
+            if value is None:
+                continue
+            if isinstance(value, (list, dict)):
+                sanitized[key] = json.dumps(value, ensure_ascii=False)
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                sanitized[key] = value
+                continue
+            sanitized[key] = str(value)
+        return sanitized
+
     def needs_update(self, url: str, etag: str | None, content_hash: str) -> bool:
         with duckdb.connect(str(self._db_path)) as conn:
             row = conn.execute(
@@ -150,10 +170,13 @@ class VectorStore:
             ]
             ids = [self._chunk_id(url, idx) for idx in range(len(chunks))]
             embedding_list = [self._ensure_embedding(embedding) for embedding in embeddings]
+            sanitized_metadatas = [
+                self._sanitize_metadata(metadata) for metadata in metadatas
+            ]
             self._collection.add(
                 ids=ids,
                 documents=documents,
-                metadatas=metadatas,
+                metadatas=sanitized_metadatas,
                 embeddings=embedding_list,
             )
 
