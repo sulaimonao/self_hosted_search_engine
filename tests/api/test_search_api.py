@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from flask import Flask
 
+from backend.app.api import search as search_module
+
 from backend.app.api.search import bp as search_bp
 from engine.agents.rag import RagResult
 from engine.data.store import RetrievedChunk
@@ -174,7 +176,7 @@ def test_search_returns_answer_and_results():
     assert coldstart.calls == []
 
 
-def test_search_triggers_coldstart_with_llm_toggle():
+def test_search_triggers_coldstart_when_insufficient_hits():
     store = StubStore([])
     coldstart = ColdStartSpy()
 
@@ -191,14 +193,48 @@ def test_search_triggers_coldstart_with_llm_toggle():
     app = _build_app(store, coldstart, RejectingRag(), engine_config=engine_config)
     client = app.test_client()
 
-    response = client.get("/api/search", query_string={"q": "need data", "llm": "on", "model": "llama"})
+    response = client.get("/api/search", query_string={"q": "need data"})
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "no_results"
-    assert payload["llm_used"] is True
+    assert payload["llm_used"] is False
     assert coldstart.calls
     call = coldstart.calls[0]
-    assert call == {"query": "need data", "use_llm": True, "llm_model": "llama"}
+    assert call == {"query": "need data", "use_llm": False, "llm_model": None}
+
+
+def test_search_returns_planner_payload_when_llm_enabled(monkeypatch):
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    app = _build_app(store, coldstart, rag_agent)
+
+    captured: dict[str, tuple[str, str | None]] = {}
+
+    def _fake_run_agent(query: str, *, model: str | None = None, context=None):
+        captured["args"] = (query, model)
+        return {
+            "type": "final",
+            "answer": "Planner summary",
+            "sources": [],
+            "steps": [],
+            "llm_used": True,
+            "llm_model": model,
+        }
+
+    monkeypatch.setattr(search_module, "run_agent", _fake_run_agent)
+
+    client = app.test_client()
+    response = client.get(
+        "/api/search",
+        query_string={"q": "need data", "llm": "on", "model": "llama"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["type"] == "final"
+    assert payload["llm_model"] == "llama"
+    assert captured["args"] == ("need data", "llama")
 
 
 def test_search_reports_embedding_unavailable():
@@ -218,13 +254,15 @@ def test_search_reports_embedding_unavailable():
     client = app.test_client()
 
     response = client.get("/api/search", query_string={"q": "test"})
-    assert response.status_code == 503
+    assert response.status_code == 200
     payload = response.get_json()
+    assert payload["status"] == "warming"
     assert payload["code"] == "embedding_unavailable"
     assert payload["action"] == "ollama pull test-embed"
     assert payload["embedder_status"]["state"] == "error"
     assert payload["fallbacks"] == ["alt-model"]
     assert "detail" in payload
+    assert payload["llm_used"] is False
 
 
 def test_embedder_status_endpoint_returns_manager_state():

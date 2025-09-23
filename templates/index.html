@@ -872,17 +872,86 @@ ollama pull llama3.1:8b-instruct</code></pre>
   function renderResults(results, payload = {}) {
     const answer = (payload.answer || "").trim();
     const sources = Array.isArray(payload.sources) ? payload.sources : [];
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     const hasAnswer = Boolean(answer);
     const hasResults = Array.isArray(results) && results.length > 0;
+    const isWarming = payload.status === "warming";
 
     resultsEl.innerHTML = "";
 
-    if (!hasAnswer && !hasResults) {
+    if (!isWarming && !hasAnswer && !hasResults) {
       resultsEl.innerHTML = '<p class="empty">No results yet. Trigger a crawl or wait for focused discovery.</p>';
       return;
     }
 
     const fragment = document.createDocumentFragment();
+
+    if (isWarming) {
+      const notice = document.createElement("article");
+      notice.className = "result warming";
+
+      const heading = document.createElement("h2");
+      heading.textContent = "Preparing local knowledge base";
+      notice.appendChild(heading);
+
+      const detailText = (payload.detail || "").trim() || "Local search services are warming up.";
+      const detail = document.createElement("p");
+      detail.textContent = detailText;
+      notice.appendChild(detail);
+
+      if (payload.action) {
+        const actionBlock = document.createElement("pre");
+        actionBlock.innerHTML = `<code>${escapeHTML(payload.action)}</code>`;
+        notice.appendChild(actionBlock);
+      }
+
+      const warmingCandidates = !hasResults && candidates.length ? candidates : [];
+      if (warmingCandidates.length) {
+        const candHeading = document.createElement("h3");
+        candHeading.textContent = "Candidate discoveries";
+        notice.appendChild(candHeading);
+
+        const list = document.createElement("ol");
+        list.className = "sources";
+        warmingCandidates.forEach((candidate, index) => {
+          const item = document.createElement("li");
+          const title = candidate.title || candidate.url || `Candidate ${index + 1}`;
+          if (candidate.url) {
+            const link = document.createElement("a");
+            link.href = candidate.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = title;
+            item.appendChild(link);
+          } else {
+            item.textContent = title;
+          }
+          if (candidate.source) {
+            const source = document.createElement("span");
+            source.className = "source";
+            source.textContent = ` (${candidate.source})`;
+            item.appendChild(source);
+          }
+          const scoreValue = Number(candidate.score || 0);
+          if (!Number.isNaN(scoreValue) && scoreValue > 0) {
+            const score = document.createElement("span");
+            score.className = "score";
+            score.textContent = ` (${scoreValue.toFixed(3)})`;
+            item.appendChild(score);
+          }
+          if (candidate.snippet) {
+            const snippet = document.createElement("p");
+            snippet.className = "snippet";
+            snippet.innerHTML = candidate.snippet;
+            item.appendChild(snippet);
+          }
+          list.appendChild(item);
+        });
+        notice.appendChild(list);
+      }
+
+      fragment.appendChild(notice);
+    }
 
     if (hasAnswer) {
       const article = document.createElement("article");
@@ -974,7 +1043,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
 
         fragment.appendChild(article);
       });
-    } else if (hasAnswer) {
+    } else if (hasAnswer && !isWarming) {
       const note = document.createElement("p");
       note.className = "empty";
       note.textContent = "No supporting documents yet. Trigger a crawl to enrich the index.";
@@ -1146,6 +1215,13 @@ ollama pull llama3.1:8b-instruct</code></pre>
       }
       const data = payload || {};
       const results = Array.isArray(data.results) ? data.results : [];
+      if (data.status === "warming") {
+        renderResults(results, data);
+        const detail = (data.detail || "").trim() || "Local search services are warming up.";
+        updateStatus(detail, true);
+        stopSearchPolling();
+        return;
+      }
       renderResults(results, data);
       if (data.status === "focused_crawl_running" && data.job_id) {
         updateStatus("Focused crawl running. Waiting for new documents…", true);
