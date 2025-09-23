@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from engine.discovery.gather import RegistryCandidate
 from engine.data.store import RetrievedChunk
 from engine.indexing.chunk import TokenChunker
 from engine.indexing.crawl import CrawlResult, CrawlError
@@ -101,13 +102,14 @@ class FakeCrawler:
 
 
 @pytest.fixture()
-def dispatcher():
+def dispatcher(monkeypatch):
     vector_store = FakeVectorStore()
     embedder = FakeEmbedder()
     chunker = TokenChunker(chunk_size=20, overlap=0)
     index_api = IndexAPI(vector_store, embedder, chunker, default_k=3, similarity_threshold=0.2)
     crawler_api = CrawlerAPI(FakeCrawler())
     embed_api = EmbedAPI(embedder)
+    monkeypatch.setattr("server.tools.gather_from_registry", lambda query, max_candidates: [])
     return ToolDispatcher(index_api=index_api, crawler_api=crawler_api, embed_api=embed_api)
 
 
@@ -123,6 +125,26 @@ def test_tool_dispatcher_handles_success_and_failure(dispatcher):
     failure = dispatcher.execute("crawl.fetch", {"url": "empty"})
     assert not failure["ok"]
     assert "error" in failure
+
+
+def test_crawl_seeds_tool(dispatcher, monkeypatch):
+    sample = [
+        RegistryCandidate(
+            url="https://example.com",
+            score=1.5,
+            source="registry:test",
+            strategy="rss_hub",
+            entry_id="test",
+            metadata={"feed": "https://feed"},
+        )
+    ]
+    monkeypatch.setattr("server.tools.gather_from_registry", lambda query, max_candidates: sample)
+    result = dispatcher.execute("crawl.seeds", {"query": "widgets", "limit": 3})
+    assert result["ok"]
+    payload = result["result"]
+    assert payload["query"] == "widgets"
+    assert payload["count"] == 1
+    assert payload["candidates"][0]["url"] == "https://example.com"
 
 
 class FakeLLM:

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from engine.data.store import RetrievedChunk, VectorStore
+from engine.discovery.gather import gather_from_registry
 from engine.indexing.chunk import TokenChunker
 from engine.indexing.crawl import CrawlClient, CrawlError
 from engine.indexing.embed import EmbeddingError, OllamaEmbedder
@@ -128,6 +129,20 @@ class CrawlerAPI:
             "status_code": result.status_code,
         }
 
+    def seeds_from_registry(
+        self, *, query: str, limit: int | None = None
+    ) -> MutableMapping[str, Any]:
+        clean_query = (query or "").strip()
+        if not clean_query:
+            raise ToolExecutionError("query must be provided")
+        cap = max(1, int(limit)) if limit is not None else 5
+        candidates = gather_from_registry(clean_query, cap)
+        return {
+            "query": clean_query,
+            "count": len(candidates),
+            "candidates": [candidate.to_dict() for candidate in candidates],
+        }
+
 
 @dataclass(slots=True)
 class EmbedAPI:
@@ -170,6 +185,7 @@ class ToolDispatcher:
             "index.search": self.index_api.search,
             "index.upsert": self.index_api.upsert,
             "crawl.fetch": self.crawler_api.fetch,
+            "crawl.seeds": self.crawler_api.seeds_from_registry,
             "embed.query": self.embed_api.embed_query,
             "embed.documents": self.embed_api.embed_documents,
         }
