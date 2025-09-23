@@ -570,6 +570,21 @@ def search_endpoint():
             "results": serialized_results,
             "llm_used": llm_enabled,
         }
+        payload["hits"] = serialized_results
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
+
+    if not llm_enabled:
+        payload = {
+            "status": "ok_no_llm",
+            "answer": "",
+            "sources": [],
+            "k": len(serialized_results),
+            "results": serialized_results,
+            "llm_used": False,
+        }
+        payload["hits"] = serialized_results
         if llm_model:
             payload["llm_model"] = llm_model
         return jsonify(payload)
@@ -577,38 +592,34 @@ def search_endpoint():
     try:
         rag_result: RagResult = rag_agent.run(query, results)
     except OllamaClientError as exc:
-        payload = _warming_payload(
-            f"Failed to generate answer: {exc}",
-            code="rag_unavailable",
-        )
-        payload.update(
-            {
-                "answer": "",
-                "sources": [],
-                "k": 0,
-                "results": serialized_results,
-                "llm_used": llm_enabled,
-            }
-        )
+        payload = {
+            "status": "ok",
+            "code": "rag_error",
+            "detail": f"Failed to generate answer: {exc}",
+            "answer": "",
+            "sources": [],
+            "k": 0,
+            "results": serialized_results,
+            "llm_used": llm_enabled,
+        }
+        payload["hits"] = serialized_results
         if llm_model:
             payload["llm_model"] = llm_model
         return jsonify(payload)
     except Exception as exc:  # pragma: no cover - defensive logging
         current_app.logger.debug("rag agent failed", exc_info=True)
-        payload = _warming_payload(
-            "Answer generation warming up.",
-            code="rag_error",
-            extra={"error": str(exc)},
-        )
-        payload.update(
-            {
-                "answer": "",
-                "sources": [],
-                "k": 0,
-                "results": serialized_results,
-                "llm_used": llm_enabled,
-            }
-        )
+        payload = {
+            "status": "ok",
+            "code": "rag_error",
+            "detail": "Answer generation warming up.",
+            "error": str(exc),
+            "answer": "",
+            "sources": [],
+            "k": 0,
+            "results": serialized_results,
+            "llm_used": llm_enabled,
+        }
+        payload["hits"] = serialized_results
         if llm_model:
             payload["llm_model"] = llm_model
         return jsonify(payload)
@@ -621,6 +632,7 @@ def search_endpoint():
         "results": serialized_results,
         "llm_used": llm_enabled,
     }
+    payload["hits"] = serialized_results
     if llm_model:
         payload["llm_model"] = llm_model
     return jsonify(payload)
