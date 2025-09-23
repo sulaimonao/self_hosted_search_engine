@@ -21,6 +21,9 @@ from engine.llm.ollama_client import OllamaClient
 from llm.seed_guesser import guess_urls as llm_guess_urls
 from server.discover import DiscoveryEngine
 from server.learned_web_db import get_db
+from server.agent import PlannerAgent
+from server.llm import OllamaJSONClient
+from server.tools import CrawlerAPI, EmbedAPI, IndexAPI, ToolDispatcher
 
 load_dotenv()
 
@@ -72,6 +75,31 @@ rag_agent = RagAgent(
     client=ollama_client,
     primary_model=ENGINE_CONFIG.models.llm_primary,
     fallback_model=ENGINE_CONFIG.models.llm_fallback,
+)
+
+planner_llm = OllamaJSONClient(
+    base_url=ENGINE_CONFIG.ollama.base_url,
+    default_model=ENGINE_CONFIG.models.llm_primary,
+)
+index_api = IndexAPI(
+    store=vector_store,
+    embedder=embedder,
+    chunker=chunker,
+    default_k=ENGINE_CONFIG.retrieval.k,
+    similarity_threshold=ENGINE_CONFIG.retrieval.similarity_threshold,
+)
+crawler_api_adapter = CrawlerAPI(crawler)
+embed_api_adapter = EmbedAPI(embedder)
+tool_dispatcher = ToolDispatcher(
+    index_api=index_api,
+    crawler_api=crawler_api_adapter,
+    embed_api=embed_api_adapter,
+)
+planner_agent = PlannerAgent(
+    llm=planner_llm,
+    tools=tool_dispatcher,
+    default_model=ENGINE_CONFIG.models.llm_primary,
+    max_iterations=6,
 )
 
 app = create_app()
@@ -126,6 +154,12 @@ app.config.update(
     RAG_EMBED_MODEL_NAME=embed_model_name,
     RAG_OLLAMA_HOST=ENGINE_CONFIG.ollama.base_url,
     RAG_EMBED_MANAGER=embed_manager,
+    RAG_PLANNER_LLM=planner_llm,
+    RAG_INDEX_API=index_api,
+    RAG_EMBED_API=embed_api_adapter,
+    RAG_CRAWLER_API=crawler_api_adapter,
+    RAG_PLANNER_TOOLS=tool_dispatcher,
+    RAG_PLANNER_AGENT=planner_agent,
 )
 
 
