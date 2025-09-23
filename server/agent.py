@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
-from .llm import OllamaJSONClient
+from .llm import LLMError, OllamaJSONClient
 from .tools import ToolDispatcher
 
 LOGGER = logging.getLogger(__name__)
@@ -69,6 +69,7 @@ class PlannerAgent:
     llm: OllamaJSONClient
     tools: ToolDispatcher
     default_model: str | None = None
+    fallback_model: str | None = None
     max_iterations: int = 6
     logger: logging.Logger = field(default=LOGGER)
 
@@ -82,12 +83,23 @@ class PlannerAgent:
         self.logger.info("planner starting query=%s", query)
         messages = list(self._bootstrap_messages(query, context))
         steps: list[dict[str, Any]] = []
+        active_model = model or self.default_model
+        last_model_used: str | None = None
         for iteration in range(1, self.max_iterations + 1):
             self.logger.debug("planner iteration=%s", iteration)
-            response = self.llm.chat_json(messages, model=model or self.default_model)
-            steps.append({"iteration": iteration, "response": response})
+            response, used_model = self._chat_with_fallback(messages, active_model)
+            last_model_used = used_model
+            steps.append(
+                {
+                    "iteration": iteration,
+                    "response": response,
+                    "model": used_model,
+                }
+            )
             self.logger.info("planner step %s response=%s", iteration, json.dumps(response))
             messages.append({"role": "assistant", "content": json.dumps(response)})
+            if used_model and used_model != active_model:
+                active_model = used_model
             message_type = response.get("type")
             if message_type == "tool":
                 tool_name = response.get("tool")
@@ -106,7 +118,7 @@ class PlannerAgent:
                 )
                 continue
             if message_type == "final":
-                final_payload = self._normalize_final(response, steps)
+                final_payload = self._normalize_final(response, steps, last_model_used)
                 self.logger.info("planner completed query=%s", query)
                 return final_payload
             error = {
@@ -125,13 +137,16 @@ class PlannerAgent:
                 }
             )
         self.logger.warning("planner hit iteration limit for query=%s", query)
-        return {
+        payload = {
             "type": "final",
             "answer": "",
             "sources": [],
             "error": "iteration limit reached",
             "steps": steps,
         }
+        if last_model_used:
+            payload["planner_model_used"] = last_model_used
+        return payload
 
     def _bootstrap_messages(
         self, query: str, context: Mapping[str, Any] | None
@@ -147,7 +162,9 @@ class PlannerAgent:
 
     @staticmethod
     def _normalize_final(
-        payload: Mapping[str, Any], steps: Sequence[Mapping[str, Any]]
+        payload: Mapping[str, Any],
+        steps: Sequence[Mapping[str, Any]],
+        model_used: str | None,
     ) -> Mapping[str, Any]:
         final = {
             "type": "final",
@@ -158,7 +175,73 @@ class PlannerAgent:
         }
         if "error" in payload:
             final["error"] = payload["error"]
+        if model_used:
+            final["planner_model_used"] = model_used
         return final
+
+    def _chat_with_fallback(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        model: str | None,
+    ) -> tuple[Mapping[str, Any], str | None]:
+        primary_model = model or self.default_model
+        resolved_primary = self._resolved_model_name(primary_model)
+        self.logger.info(
+            "planner llm attempt=primary model=%s", resolved_primary or "<auto>"
+        )
+        try:
+            response = self.llm.chat_json(messages, model=primary_model)
+            return response, resolved_primary
+        except LLMError as primary_error:
+            self.logger.warning(
+                "planner llm primary model=%s failed: %s",
+                resolved_primary or "<auto>",
+                primary_error,
+            )
+            fallback_model = self.fallback_model
+            if (
+                not fallback_model
+                or fallback_model == primary_model
+                or not self._is_missing_model_error(primary_error)
+            ):
+                raise
+        fallback_model = self.fallback_model
+        resolved_fallback = self._resolved_model_name(fallback_model)
+        self.logger.info(
+            "planner llm attempt=fallback model=%s", resolved_fallback or "<auto>"
+        )
+        try:
+            response = self.llm.chat_json(messages, model=fallback_model)
+            return response, resolved_fallback
+        except LLMError as fallback_error:
+            self.logger.warning(
+                "planner llm fallback model=%s failed: %s",
+                resolved_fallback or "<auto>",
+                fallback_error,
+            )
+            raise
+
+    def _resolved_model_name(self, model: str | None) -> str | None:
+        if model:
+            return model
+        if self.default_model:
+            return self.default_model
+        return getattr(self.llm, "default_model", None)
+
+    @staticmethod
+    def _is_missing_model_error(error: LLMError) -> bool:
+        message = str(error).lower()
+        if "model" not in message:
+            return False
+        keywords = (
+            "not found",
+            "missing",
+            "no such",
+            "unavailable",
+            "pull the model",
+            "is not installed",
+        )
+        return any(keyword in message for keyword in keywords)
 
 
 __all__ = ["PlannerAgent", "SYSTEM_PROMPT", "FEW_SHOT_MESSAGES"]
