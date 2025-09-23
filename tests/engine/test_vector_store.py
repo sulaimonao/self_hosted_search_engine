@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 from engine.data.store import RetrievedChunk, VectorStore
 from engine.indexing.chunk import Chunk
@@ -39,3 +40,48 @@ def test_vector_store_round_trip(tmp_path):
     assert retrieved.title == title
     assert retrieved.url == url
     assert retrieved.similarity >= 0.99
+
+
+class RecordingCollection:
+    def __init__(self) -> None:
+        self.deleted: list[dict] = []
+        self.add_calls: list[dict] = []
+
+    def delete(self, where=None, **kwargs):  # pragma: no cover - signature compatibility
+        self.deleted.append({"where": where, **kwargs})
+
+    def add(self, *, ids, documents, metadatas, embeddings):
+        self.add_calls.append(
+            {
+                "ids": ids,
+                "documents": documents,
+                "metadatas": metadatas,
+                "embeddings": embeddings,
+            }
+        )
+
+
+def test_upsert_sanitizes_metadata(tmp_path):
+    persist_dir = tmp_path / "chroma"
+    db_path = tmp_path / "index.duckdb"
+    store = VectorStore(persist_dir, db_path)
+
+    recording = RecordingCollection()
+    store._collection = recording  # type: ignore[attr-defined]
+
+    url = "https://example.com/article"
+    title = "Example"
+    etag = None
+    content = "Chunk with complex metadata"
+    content_hash = _hash(content)
+
+    chunk = Chunk(text=content, start=0, end=len(content), token_count=["tok", "tok2"])  # type: ignore[arg-type]
+    embedding = [0.4, 0.5, 0.6]
+
+    store.upsert(url, title, etag, content_hash, [chunk], [embedding])
+
+    assert recording.deleted[0]["where"] == {"url": url}
+    assert len(recording.add_calls) == 1
+    metadata = recording.add_calls[0]["metadatas"][0]
+    assert "etag" not in metadata
+    assert metadata["token_count"] == json.dumps(["tok", "tok2"], ensure_ascii=False)
