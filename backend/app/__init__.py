@@ -57,6 +57,11 @@ def create_app() -> Flask:
     config.ensure_dirs()
     config.log_summary()
 
+    chat_logger = logging.getLogger("backend.app.api.chat")
+    chat_logger.setLevel(config.chat_log_level)
+    chat_logger.propagate = True
+    app.config.setdefault("CHAT_LOGGER", chat_logger)
+
     db = get_db(config.learned_web_db_path)
     runner = JobRunner(config.logs_dir)
     manager = FocusedCrawlManager(config, runner, db)
