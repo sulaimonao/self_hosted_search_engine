@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from ..config import AppConfig
+from .focused_crawl import run_focused_crawl  # re-exported for monkeypatching
+
+
 def _ollama_request(url: str, model: Optional[str], system: str, prompt: str) -> str:
     payload = {
         "messages": [
