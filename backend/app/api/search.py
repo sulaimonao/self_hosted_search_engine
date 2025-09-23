@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import textwrap
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 from markupsafe import escape
@@ -15,6 +17,7 @@ from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.indexing.coldstart import ColdStartIndexer
 from engine.llm.ollama_client import OllamaClientError
 from backend.app.embedding_manager import EmbeddingManager
+from server.llm import LLMError
 
 bp = Blueprint("search_api", __name__, url_prefix="/api")
 
@@ -45,19 +48,22 @@ def _serialize_chunk(chunk: RetrievedChunk) -> dict:
     }
 
 
-def _embedding_unavailable_response(message: str, *, status: dict | None = None) -> tuple:
+def _embedding_unavailable_payload(
+    message: str, *, status: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     embed_config_name = current_app.config.get("RAG_EMBED_MODEL_NAME")
     host = current_app.config.get("RAG_OLLAMA_HOST")
     status_model = (status or {}).get("model") if status else None
     target_model = status_model or embed_config_name or "embeddinggemma"
     action = f"ollama pull {target_model}" if target_model else None
     payload = {
-        "status": _EMBEDDING_ERROR_CODE,
+        "status": "warming",
         "error": "Embedding model unavailable",
         "detail": message,
         "code": _EMBEDDING_ERROR_CODE,
         "model": target_model,
         "host": host,
+        "candidates": [],
     }
     if action:
         payload["action"] = action
@@ -65,7 +71,264 @@ def _embedding_unavailable_response(message: str, *, status: dict | None = None)
         payload["embedder_status"] = status
         if status.get("fallbacks"):
             payload["fallbacks"] = status.get("fallbacks")
-    return jsonify(payload), 503
+    return payload
+
+
+def _embedding_unavailable_response(message: str, *, status: dict | None = None) -> tuple:
+    payload = _embedding_unavailable_payload(message, status=status)
+    return jsonify(payload), 200
+
+
+def _warming_payload(
+    detail: str,
+    *,
+    code: str = "warming",
+    candidates: Sequence[Mapping[str, Any]] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": "warming",
+        "detail": detail,
+        "code": code,
+        "candidates": list(candidates or []),
+    }
+    if extra:
+        payload.update({str(k): v for k, v in extra.items()})
+    return payload
+
+
+def _ensure_embedder_ready(
+    embed_manager: EmbeddingManager | None,
+    embedder: OllamaEmbedder,
+    embed_model_name: str,
+) -> tuple[bool, str, Mapping[str, Any] | None, str | None]:
+    if embed_manager is None:
+        return True, embed_model_name, None, None
+    try:
+        status = embed_manager.wait_until_ready()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        current_app.logger.debug("embed manager readiness check failed", exc_info=True)
+        return False, embed_model_name, None, str(exc)
+    status = status or {}
+    state = status.get("state") if isinstance(status, Mapping) else None
+    if state != "ready":
+        detail = None
+        if isinstance(status, Mapping):
+            detail = status.get("detail") or status.get("error")
+        if not detail:
+            detail = "Embedding model is warming up."
+        return False, embed_model_name, status, detail
+    active_model = (
+        status.get("model") if isinstance(status, Mapping) else embed_model_name
+    ) or embed_model_name
+    if active_model:
+        try:
+            embedder.set_model(active_model)
+            embed_model_name = active_model
+        except Exception:  # pragma: no cover - defensive logging
+            current_app.logger.debug(
+                "failed to update embedder model to %s", active_model, exc_info=True
+            )
+    return True, embed_model_name, status, None
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _collect_candidates_from_steps(
+    steps: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if not steps:
+        return []
+    seen: dict[str, dict[str, Any]] = {}
+    aggregated: list[dict[str, Any]] = []
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        tool_payload = step.get("tool")
+        if not isinstance(tool_payload, Mapping):
+            continue
+        if not tool_payload.get("ok"):
+            continue
+        tool_name = str(tool_payload.get("tool") or "")
+        result = tool_payload.get("result")
+        if not isinstance(result, Mapping):
+            continue
+        if tool_name == "index.search":
+            hits = result.get("results")
+            if not isinstance(hits, Sequence):
+                continue
+            for raw in hits:
+                if not isinstance(raw, Mapping):
+                    continue
+                url = raw.get("url")
+                if not isinstance(url, str) or not url or url in seen:
+                    continue
+                candidate = {
+                    "url": url,
+                    "title": raw.get("title") or url,
+                    "snippet": _format_snippet(str(raw.get("text", ""))),
+                    "score": _float_or_zero(
+                        raw.get("similarity") or raw.get("score")
+                    ),
+                    "source": tool_name,
+                }
+                seen[url] = candidate
+                aggregated.append(candidate)
+        elif tool_name == "crawl.fetch":
+            url = result.get("url")
+            if not isinstance(url, str) or not url or url in seen:
+                continue
+            candidate = {
+                "url": url,
+                "title": result.get("title") or url,
+                "snippet": _format_snippet(str(result.get("text", ""))),
+                "score": _float_or_zero(result.get("score")),
+                "source": tool_name,
+            }
+            status_code = result.get("status_code")
+            if isinstance(status_code, int):
+                candidate["status_code"] = status_code
+            seen[url] = candidate
+            aggregated.append(candidate)
+    return aggregated
+
+
+def _summarize_tool_steps(steps: Sequence[Mapping[str, Any]] | None) -> list[str]:
+    summaries: list[str] = []
+    if not steps:
+        return summaries
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        tool_payload = step.get("tool")
+        if not isinstance(tool_payload, Mapping):
+            continue
+        iteration = step.get("iteration") if isinstance(step.get("iteration"), int) else None
+        tool_name = str(tool_payload.get("tool") or "tool")
+        prefix = f"{iteration}:{tool_name}" if iteration is not None else tool_name
+        if tool_payload.get("ok"):
+            result = tool_payload.get("result")
+            detail = "ok"
+            if isinstance(result, Mapping):
+                if tool_name == "index.search":
+                    hits = result.get("results")
+                    count = len(hits) if isinstance(hits, Sequence) else 0
+                    detail = f"hits={count}"
+                elif tool_name == "crawl.fetch":
+                    status_code = result.get("status_code")
+                    if isinstance(status_code, int):
+                        detail = f"status={status_code}"
+            summaries.append(f"{prefix} {detail}")
+        else:
+            error = tool_payload.get("error")
+            detail = str(error) if error else "error"
+            summaries.append(f"{prefix} {detail}")
+    return summaries
+
+
+def run_agent(
+    query: str,
+    *,
+    model: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    planner = current_app.config.get("RAG_PLANNER_AGENT")
+    if planner is None:
+        payload = _warming_payload(
+            "Planner agent unavailable.",
+            code="planner_unavailable",
+            candidates=[],
+        )
+        payload["llm_used"] = True
+        if model:
+            payload["llm_model"] = model
+        return payload
+
+    engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
+    embedder: OllamaEmbedder | None = current_app.config.get("RAG_EMBEDDER")
+    embed_manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
+    embed_model_name = (
+        current_app.config.get("RAG_EMBED_MODEL_NAME")
+        if current_app.config.get("RAG_EMBED_MODEL_NAME")
+        else (engine_config.models.embed if engine_config else None)
+    ) or "embeddinggemma"
+
+    if embedder is None:
+        payload = _warming_payload(
+            "Embedding pipeline unavailable.",
+            code="embedder_unavailable",
+            candidates=[],
+        )
+        payload["llm_used"] = True
+        if model:
+            payload["llm_model"] = model
+        return payload
+
+    ready, _, status, detail = _ensure_embedder_ready(
+        embed_manager, embedder, embed_model_name
+    )
+    if not ready:
+        payload = _embedding_unavailable_payload(detail or "Embedding model unavailable.", status=status)
+        payload["llm_used"] = True
+        if model:
+            payload["llm_model"] = model
+        return payload
+
+    planner_context: dict[str, Any] = {}
+    if engine_config is not None:
+        planner_context["retrieval"] = {
+            "k": engine_config.retrieval.k,
+            "similarity_threshold": engine_config.retrieval.similarity_threshold,
+        }
+    if context:
+        planner_context.update({str(k): v for k, v in context.items()})
+
+    try:
+        result = planner.run(query, context=planner_context, model=model)
+    except LLMError as exc:
+        payload = _warming_payload(
+            f"Planner LLM unavailable: {exc}",
+            code="planner_llm_unavailable",
+        )
+        payload["llm_used"] = True
+        if model:
+            payload["llm_model"] = model
+        return payload
+    except Exception as exc:  # pragma: no cover - defensive logging
+        current_app.logger.exception("planner execution failed for query='%s'", query)
+        payload = _warming_payload(
+            "Planner failed to complete request.",
+            code="planner_error",
+            extra={"error": str(exc)},
+        )
+        payload["llm_used"] = True
+        if model:
+            payload["llm_model"] = model
+        return payload
+
+    response = dict(result)
+    response["llm_used"] = True
+    if model:
+        response["llm_model"] = model
+
+    steps = response.get("steps")
+    candidates = _collect_candidates_from_steps(steps if isinstance(steps, Sequence) else None)
+    if candidates:
+        response.setdefault("candidates", candidates)
+        response.setdefault("results", candidates)
+
+    summaries = _summarize_tool_steps(steps if isinstance(steps, Sequence) else None)
+    if summaries and current_app.logger.isEnabledFor(10):  # DEBUG
+        current_app.logger.debug(
+            "planner tool summary query='%s': %s", query, "; ".join(summaries)
+        )
+
+    return response
 
 
 @bp.get("/embedder/status")
@@ -111,6 +374,10 @@ def search_endpoint():
     llm_enabled = _normalize_bool(request.args.get("llm"))
     llm_model = (request.args.get("model") or "").strip() or None
 
+    if llm_enabled:
+        agent_payload = run_agent(query, model=llm_model)
+        return jsonify(agent_payload)
+
     engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
     if engine_config is None:
         search_service = current_app.config.get("SEARCH_SERVICE")
@@ -153,17 +420,17 @@ def search_endpoint():
         current_app.config.get("RAG_EMBED_MODEL_NAME") or engine_config.models.embed
     )
 
-    embed_status: dict | None = None
-    if embed_manager is not None:
-        embed_status = embed_manager.wait_until_ready()
-        state = embed_status.get("state") if embed_status else "unknown"
-        if state != "ready":
-            detail = embed_status.get("detail") or embed_status.get("error") or "Embedding model is not ready."
-            return _embedding_unavailable_response(detail, status=embed_status)
-        active_model = embed_status.get("model") or embed_model_name
-        if active_model:
-            embedder.set_model(active_model)
-            embed_model_name = active_model
+    ready, embed_model_name, embed_status, detail = _ensure_embedder_ready(
+        embed_manager, embedder, embed_model_name
+    )
+    if not ready:
+        payload = _embedding_unavailable_payload(
+            detail or "Embedding model is not ready.", status=embed_status
+        )
+        payload["llm_used"] = llm_enabled
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
 
     try:
         query_vector = embedder.embed_query(query)
@@ -172,16 +439,57 @@ def search_endpoint():
             "Unable to generate embeddings from Ollama. "
             f"Ensure the model '{embed_model_name}' is installed and running."
         )
-        return _embedding_unavailable_response(f"{message} ({exc})")
+        payload = _embedding_unavailable_payload(f"{message} ({exc})", status=embed_status)
+        payload["llm_used"] = llm_enabled
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        current_app.logger.debug("unexpected embedding failure", exc_info=True)
+        payload = _warming_payload(
+            "Unable to embed query.",
+            code="embedding_failure",
+            extra={"error": str(exc), "model": embed_model_name},
+        )
+        payload["llm_used"] = llm_enabled
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
 
-    results = store.query(
-        vector=query_vector,
-        k=engine_config.retrieval.k,
-        similarity_threshold=engine_config.retrieval.similarity_threshold,
-    )
+    try:
+        results = store.query(
+            vector=query_vector,
+            k=engine_config.retrieval.k,
+            similarity_threshold=engine_config.retrieval.similarity_threshold,
+        )
+    except Exception as exc:
+        current_app.logger.debug("vector store query failed", exc_info=True)
+        payload = _warming_payload(
+            "Vector store warming up.",
+            code="vector_store_unavailable",
+            extra={"error": str(exc)},
+        )
+        payload["llm_used"] = llm_enabled
+        payload["results"] = []
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
 
     if len(results) < engine_config.retrieval.min_hits:
-        coldstart.build_index(query, use_llm=llm_enabled, llm_model=llm_model)
+        try:
+            coldstart.build_index(query, use_llm=llm_enabled, llm_model=llm_model)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            current_app.logger.debug("coldstart build failed", exc_info=True)
+            payload = _warming_payload(
+                "Focused crawl warming up.",
+                code="coldstart_unavailable",
+                extra={"error": str(exc)},
+            )
+            payload["llm_used"] = llm_enabled
+            payload["results"] = [_serialize_chunk(chunk) for chunk in results]
+            if llm_model:
+                payload["llm_model"] = llm_model
+            return jsonify(payload)
         try:
             query_vector = embedder.embed_query(query)
         except EmbeddingError as exc:
@@ -189,12 +497,44 @@ def search_endpoint():
                 "Unable to generate embeddings from Ollama. "
                 f"Ensure the model '{embed_model_name}' is installed and running."
             )
-            return _embedding_unavailable_response(f"{message} ({exc})")
-        results = store.query(
-            vector=query_vector,
-            k=engine_config.retrieval.k,
-            similarity_threshold=engine_config.retrieval.similarity_threshold,
-        )
+            payload = _embedding_unavailable_payload(
+                f"{message} ({exc})", status=embed_status
+            )
+            payload["llm_used"] = llm_enabled
+            if llm_model:
+                payload["llm_model"] = llm_model
+            return jsonify(payload)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            current_app.logger.debug("unexpected embedding failure after coldstart", exc_info=True)
+            payload = _warming_payload(
+                "Unable to embed query after coldstart.",
+                code="embedding_failure",
+                extra={"error": str(exc), "model": embed_model_name},
+            )
+            payload["llm_used"] = llm_enabled
+            if llm_model:
+                payload["llm_model"] = llm_model
+            return jsonify(payload)
+        try:
+            results = store.query(
+                vector=query_vector,
+                k=engine_config.retrieval.k,
+                similarity_threshold=engine_config.retrieval.similarity_threshold,
+            )
+        except Exception as exc:
+            current_app.logger.debug("vector store query failed after coldstart", exc_info=True)
+            payload = _warming_payload(
+                "Vector store warming up.",
+                code="vector_store_unavailable",
+                extra={"error": str(exc)},
+            )
+            payload["llm_used"] = llm_enabled
+            payload["results"] = []
+            if llm_model:
+                payload["llm_model"] = llm_model
+            return jsonify(payload)
+
+    serialized_results = [_serialize_chunk(chunk) for chunk in results]
 
     if not results:
         payload = {
@@ -202,21 +542,58 @@ def search_endpoint():
             "answer": "I could not find relevant information in the local index.",
             "sources": [],
             "k": 0,
-            "results": [],
+            "results": serialized_results,
             "llm_used": llm_enabled,
         }
+        if llm_model:
+            payload["llm_model"] = llm_model
         return jsonify(payload)
 
     try:
         rag_result: RagResult = rag_agent.run(query, results)
     except OllamaClientError as exc:
-        return jsonify({"error": f"Failed to generate answer: {exc}"}), 502
+        payload = _warming_payload(
+            f"Failed to generate answer: {exc}",
+            code="rag_unavailable",
+        )
+        payload.update(
+            {
+                "answer": "",
+                "sources": [],
+                "k": 0,
+                "results": serialized_results,
+                "llm_used": llm_enabled,
+            }
+        )
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        current_app.logger.debug("rag agent failed", exc_info=True)
+        payload = _warming_payload(
+            "Answer generation warming up.",
+            code="rag_error",
+            extra={"error": str(exc)},
+        )
+        payload.update(
+            {
+                "answer": "",
+                "sources": [],
+                "k": 0,
+                "results": serialized_results,
+                "llm_used": llm_enabled,
+            }
+        )
+        if llm_model:
+            payload["llm_model"] = llm_model
+        return jsonify(payload)
+
     payload = {
         "status": "ok",
         "answer": rag_result.answer,
         "sources": rag_result.sources,
         "k": rag_result.used,
-        "results": [_serialize_chunk(chunk) for chunk in results],
+        "results": serialized_results,
         "llm_used": llm_enabled,
     }
     if llm_model:
