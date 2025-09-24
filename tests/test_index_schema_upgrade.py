@@ -54,3 +54,30 @@ def test_ensure_index_upgrades_legacy_schema(tmp_path):
         writer.commit()
     finally:
         upgraded_ix.close()
+
+
+def test_ensure_index_recovers_from_missing_segment(tmp_path):
+    index_dir = tmp_path / "corrupt_index"
+    ix = ensure_index(index_dir)
+    writer = ix.writer()
+    writer.add_document(
+        url="https://example.com/",
+        lang="en",
+        title="Example",
+        h1h2="Example",
+        body="Example body",
+    )
+    writer.commit()
+    ix.close()
+
+    segments = list(index_dir.glob("MAIN_*.seg"))
+    assert segments, "Expected at least one Whoosh segment file"
+    for segment in segments:
+        segment.unlink()
+
+    recovered = ensure_index(index_dir)
+    try:
+        with recovered.searcher() as searcher:
+            assert searcher.doc_count_all() == 0
+    finally:
+        recovered.close()

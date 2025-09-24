@@ -86,22 +86,48 @@ def ensure_index(index_dir: Path):
     index_dir.mkdir(parents=True, exist_ok=True)
     schema = build_schema()
     if index.exists_in(index_dir):
-        ix = index.open_dir(index_dir)
+        ix = None
         try:
-            reason = _schema_migration_reason(ix.schema, schema)
+            ix = index.open_dir(index_dir)
+            try:
+                reason = _schema_migration_reason(ix.schema, schema)
+            except Exception:
+                LOGGER.warning(
+                    "failed to inspect existing index schema at %s; rebuilding",
+                    index_dir,
+                    exc_info=True,
+                )
+                raise
+            if reason is None:
+                try:
+                    with ix.searcher() as searcher:
+                        # Touch the reader to ensure all segment files are present.
+                        searcher.reader()
+                except Exception:
+                    LOGGER.warning(
+                        "existing search index at %s is corrupt; rebuilding",
+                        index_dir,
+                        exc_info=True,
+                    )
+                    raise
+                return ix
+            LOGGER.warning(
+                "rebuilding search index at %s due to schema change (%s); legacy documents will be re-indexed on the next crawl",
+                index_dir,
+                reason,
+            )
         except Exception:
-            LOGGER.warning("failed to inspect existing index schema at %s; rebuilding", index_dir, exc_info=True)
-            reason = "schema inspection failed"
-        if reason is None:
-            return ix
-        LOGGER.warning(
-            "rebuilding search index at %s due to schema change (%s); legacy documents will be re-indexed on the next crawl",
-            index_dir,
-            reason,
-        )
-        ix.close()
-        _clear_index_dir(index_dir)
-        return index.create_in(index_dir, schema)
+            if ix is not None:
+                try:
+                    ix.close()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+            _clear_index_dir(index_dir)
+            return index.create_in(index_dir, schema)
+        else:
+            ix.close()
+            _clear_index_dir(index_dir)
+            return index.create_in(index_dir, schema)
     return index.create_in(index_dir, schema)
 
 
