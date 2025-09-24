@@ -135,6 +135,24 @@ directories:
         entrypoints:
           - https://github.com/sbilly/awesome-security
         cadence: weekly
+  language_docs:
+    description: >-
+      Official documentation portals for widely used programming
+      languages and runtimes. These canonical sources provide
+      authoritative API references and tutorials for developers.
+    defaults:
+      kind: documentation
+      strategy: docs
+      trust: high
+      tags:
+        - docs
+        - developer
+    sources:
+      - id: docs_python
+        title: Python Documentation
+        entrypoints:
+          - https://docs.python.org/3/
+        cadence: monthly
   sitemap_discovery:
     description: >-
       Robots.txt entrypoints for broad sitemap discovery across trusted
