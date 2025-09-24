@@ -138,9 +138,38 @@
               <label class="sr-only" for="chat-input">Ask the assistant</label>
               <textarea id="chat-input" rows="3" placeholder="Ask the local model…" required></textarea>
               <div class="chat-actions">
+                <button
+                  type="button"
+                  id="diagnostics-run"
+                  class="secondary"
+                  title="Shift+click to force a fresh diagnostics run"
+                >
+                  Run diagnostics
+                </button>
                 <button type="submit" id="chat-send">Send</button>
               </div>
             </form>
+            <section
+              id="diagnostics-panel"
+              class="diagnostics-panel"
+              aria-live="polite"
+              aria-busy="false"
+              hidden
+            >
+              <header class="diagnostics-header">
+                <h3>System diagnostics</h3>
+                <p id="diagnostics-status">Load diagnostics to review environment health.</p>
+              </header>
+              <div id="diagnostics-preview" class="diagnostics-preview"></div>
+              <div class="diagnostics-actions">
+                <a id="diagnostics-download" href="#" download hidden>Download summary</a>
+                <a id="diagnostics-log-download" href="#" download hidden>Download log</a>
+                <button type="button" id="diagnostics-rerun" class="secondary" hidden>
+                  Run again
+                </button>
+              </div>
+              <pre id="diagnostics-log-tail" class="diagnostics-log-tail"></pre>
+            </section>
           </section>
           <section
             id="research-panel"
@@ -235,6 +264,14 @@ ollama pull llama3.1:8b-instruct</code></pre>
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
   const chatSend = document.getElementById("chat-send");
+  const diagnosticsButton = document.getElementById("diagnostics-run");
+  const diagnosticsPanel = document.getElementById("diagnostics-panel");
+  const diagnosticsStatus = document.getElementById("diagnostics-status");
+  const diagnosticsPreview = document.getElementById("diagnostics-preview");
+  const diagnosticsDownload = document.getElementById("diagnostics-download");
+  const diagnosticsLogDownload = document.getElementById("diagnostics-log-download");
+  const diagnosticsLogTail = document.getElementById("diagnostics-log-tail");
+  const diagnosticsRerun = document.getElementById("diagnostics-rerun");
   const researchForm = document.getElementById("research-form");
   const researchQuery = document.getElementById("research-query");
   const researchBudget = document.getElementById("research-budget");
@@ -276,6 +313,15 @@ ollama pull llama3.1:8b-instruct</code></pre>
       status: null,
       pollTimer: null,
       pendingSearch: null,
+    },
+    diagnostics: {
+      jobId: null,
+      pollTimer: null,
+      cachedResult: null,
+      cachedJobId: null,
+      summaryUrl: null,
+      busySnapshot: null,
+      running: false,
     },
   };
 
@@ -836,29 +882,51 @@ ollama pull llama3.1:8b-instruct</code></pre>
     const lines = markdown.split(/\r?\n/);
     const html = [];
     let inList = false;
+    let inCodeBlock = false;
     const closeList = () => {
       if (inList) {
         html.push("</ul>");
         inList = false;
       }
     };
+    const closeCode = () => {
+      if (inCodeBlock) {
+        html.push("</code></pre>");
+        inCodeBlock = false;
+      }
+    };
     for (const line of lines) {
-      if (line.startsWith("# ")) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("```")) {
+        if (inCodeBlock) {
+          closeCode();
+        } else {
+          closeList();
+          html.push("<pre><code>");
+          inCodeBlock = true;
+        }
+        continue;
+      }
+      if (inCodeBlock) {
+        html.push(escapeHTML(line));
+        continue;
+      }
+      if (trimmed.startsWith("# ")) {
         closeList();
         html.push(`<h2>${formatInline(line.slice(2))}</h2>`);
-      } else if (line.startsWith("## ")) {
+      } else if (trimmed.startsWith("## ")) {
         closeList();
         html.push(`<h3>${formatInline(line.slice(3))}</h3>`);
-      } else if (line.startsWith("### ")) {
+      } else if (trimmed.startsWith("### ")) {
         closeList();
         html.push(`<h4>${formatInline(line.slice(4))}</h4>`);
-      } else if (line.startsWith("- ")) {
+      } else if (trimmed.startsWith("- ")) {
         if (!inList) {
           html.push("<ul>");
           inList = true;
         }
         html.push(`<li>${formatInline(line.slice(2))}</li>`);
-      } else if (!line.trim()) {
+      } else if (!trimmed) {
         closeList();
       } else {
         closeList();
@@ -866,6 +934,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
       }
     }
     closeList();
+    closeCode();
     return html.join("\n");
   }
 
@@ -1366,10 +1435,14 @@ ollama pull llama3.1:8b-instruct</code></pre>
     setAssistAvailability(true);
   }
 
-  function appendChatMessage(role, content) {
+  function appendChatMessage(role, content, options = {}) {
     const wrapper = document.createElement("div");
     wrapper.className = `chat-message ${role}`;
-    wrapper.innerHTML = `<p>${formatPlain(content)}</p>`;
+    if (options.markdown) {
+      wrapper.innerHTML = renderMarkdown(content);
+    } else {
+      wrapper.innerHTML = `<p>${formatPlain(content)}</p>`;
+    }
     chatMessagesEl.appendChild(wrapper);
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
     return wrapper;
@@ -1467,11 +1540,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
       return;
     }
     try {
-      const response = await fetch(`/api/jobs/${state.researchJobId}/status`);
-      if (!response.ok) {
-        throw new Error(`Research status failed: ${response.status}`);
-      }
-      const payload = await response.json();
+      const payload = await fetchJobStatus(state.researchJobId, "Research");
       const tail = Array.isArray(payload.logs_tail) ? payload.logs_tail.slice(-6) : [];
       researchLog.textContent = tail.length ? tail.join("\n") : "Waiting for job output...";
       if (payload.state === "done") {
@@ -1517,6 +1586,347 @@ ollama pull llama3.1:8b-instruct</code></pre>
       researchReport.hidden = false;
     }
   }
+
+  async function fetchJobStatus(jobId, label = "Job") {
+    const response = await fetch(`/api/jobs/${jobId}/status`);
+    if (!response.ok) {
+      throw new Error(`${label} status failed: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function resetDiagnosticsDownloads() {
+    if (state.diagnostics.summaryUrl) {
+      URL.revokeObjectURL(state.diagnostics.summaryUrl);
+      state.diagnostics.summaryUrl = null;
+    }
+    if (diagnosticsDownload) {
+      diagnosticsDownload.removeAttribute("href");
+      diagnosticsDownload.hidden = true;
+    }
+    if (diagnosticsLogDownload) {
+      diagnosticsLogDownload.removeAttribute("href");
+      diagnosticsLogDownload.hidden = true;
+    }
+  }
+
+  function stopDiagnosticsPolling() {
+    if (state.diagnostics.pollTimer) {
+      clearInterval(state.diagnostics.pollTimer);
+      state.diagnostics.pollTimer = null;
+    }
+  }
+
+  function setDiagnosticsBusy(busy) {
+    if (!diagnosticsButton) {
+      return;
+    }
+    const controls = [
+      chatInput,
+      chatSend,
+      diagnosticsButton,
+      researchQuery,
+      researchBudget,
+      llmModelSelect,
+      llmToggle,
+      refreshButton,
+    ].filter(Boolean);
+    const uniqueControls = [];
+    const seen = new Set();
+    controls.forEach((el) => {
+      if (el && !seen.has(el)) {
+        uniqueControls.push(el);
+        seen.add(el);
+      }
+    });
+    if (busy) {
+      const snapshot = {
+        controls: uniqueControls.map((el) => ({ el, disabled: el.disabled })),
+        chatBusy: chatForm.classList.contains("busy"),
+        researchBusy: researchForm.classList.contains("busy"),
+      };
+      state.diagnostics.busySnapshot = snapshot;
+      uniqueControls.forEach((el) => {
+        el.disabled = true;
+      });
+      if (!snapshot.chatBusy) {
+        chatForm.classList.add("busy");
+      }
+      if (!snapshot.researchBusy) {
+        researchForm.classList.add("busy");
+      }
+    } else if (state.diagnostics.busySnapshot) {
+      const snapshot = state.diagnostics.busySnapshot;
+      snapshot.controls.forEach(({ el, disabled }) => {
+        el.disabled = disabled;
+      });
+      if (!snapshot.chatBusy) {
+        chatForm.classList.remove("busy");
+      }
+      if (!snapshot.researchBusy) {
+        researchForm.classList.remove("busy");
+      }
+      state.diagnostics.busySnapshot = null;
+      updateRefreshAvailability();
+    }
+  }
+
+  function formatDiagnosticsTimestamp(timestamp) {
+    if (!timestamp) {
+      return "";
+    }
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return timestamp;
+    }
+    return date.toLocaleString();
+  }
+
+  function safeDiagnosticsFilename(base, extension) {
+    const sanitized = base.replace(/[:\s]/g, "-").replace(/[^a-zA-Z0-9_.-]/g, "");
+    return `${sanitized || "diagnostics"}.${extension}`;
+  }
+
+  function updateDiagnosticsDownloads(markdown) {
+    if (!diagnosticsDownload) {
+      return;
+    }
+    if (markdown && markdown.trim()) {
+      if (state.diagnostics.summaryUrl) {
+        URL.revokeObjectURL(state.diagnostics.summaryUrl);
+        state.diagnostics.summaryUrl = null;
+      }
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      state.diagnostics.summaryUrl = URL.createObjectURL(blob);
+      diagnosticsDownload.href = state.diagnostics.summaryUrl;
+      diagnosticsDownload.download = safeDiagnosticsFilename(
+        state.diagnostics.cachedResult?.generated_at || new Date().toISOString(),
+        "md"
+      );
+      diagnosticsDownload.hidden = false;
+    } else {
+      diagnosticsDownload.removeAttribute("href");
+      diagnosticsDownload.hidden = true;
+    }
+    if (diagnosticsLogDownload && state.diagnostics.cachedJobId) {
+      diagnosticsLogDownload.href = `/api/jobs/${state.diagnostics.cachedJobId}/log?download=1`;
+      diagnosticsLogDownload.download = safeDiagnosticsFilename(
+        `${state.diagnostics.cachedJobId}-log`,
+        "log"
+      );
+      diagnosticsLogDownload.hidden = false;
+    }
+  }
+
+  function renderDiagnosticsPreview(markdown) {
+    if (!diagnosticsPreview) {
+      return;
+    }
+    if (markdown && markdown.trim()) {
+      diagnosticsPreview.innerHTML = renderMarkdown(markdown);
+    } else {
+      diagnosticsPreview.innerHTML = `<p>${formatPlain("No summary available.")}</p>`;
+    }
+  }
+
+  function showDiagnosticsPanel() {
+    if (!diagnosticsPanel) {
+      return;
+    }
+    diagnosticsPanel.hidden = false;
+  }
+
+  function updateDiagnosticsLog(lines) {
+    if (!diagnosticsLogTail) {
+      return;
+    }
+    diagnosticsLogTail.textContent = lines.length
+      ? lines.join("\n")
+      : "Logs will appear here while diagnostics are running.";
+  }
+
+  function handleDiagnosticsError(message) {
+    if (diagnosticsStatus) {
+      diagnosticsStatus.textContent = `Diagnostics failed: ${message}`;
+    }
+    if (diagnosticsPreview) {
+      diagnosticsPreview.innerHTML = `<p>${formatPlain("No diagnostics summary was generated.")}</p>`;
+    }
+    if (state.diagnostics.jobId) {
+      state.diagnostics.cachedJobId = state.diagnostics.jobId;
+    }
+    updateDiagnosticsDownloads("");
+    if (diagnosticsPanel) {
+      diagnosticsPanel.setAttribute("aria-busy", "false");
+    }
+    if (diagnosticsRerun) {
+      diagnosticsRerun.hidden = false;
+    }
+    const chatMessage = `Diagnostics job failed: ${message}`;
+    state.chatMessages.push({ role: "system", content: chatMessage });
+    appendChatMessage("system", chatMessage);
+  }
+
+  function showDiagnosticsResult(result, { fromCache = false } = {}) {
+    showDiagnosticsPanel();
+    if (diagnosticsPanel) {
+      diagnosticsPanel.setAttribute("aria-busy", "false");
+    }
+    const summary = (result?.summary_markdown || "").trim();
+    const generatedAt = formatDiagnosticsTimestamp(result?.generated_at || "");
+    if (diagnosticsStatus) {
+      diagnosticsStatus.textContent = fromCache
+        ? generatedAt
+          ? `Showing cached diagnostics from ${generatedAt}. Shift+click Run diagnostics to capture a fresh snapshot.`
+          : "Showing cached diagnostics. Shift+click Run diagnostics to capture a fresh snapshot."
+        : generatedAt
+        ? `Diagnostics completed at ${generatedAt}.`
+        : "Diagnostics completed.";
+    }
+    renderDiagnosticsPreview(summary);
+    updateDiagnosticsDownloads(summary);
+    if (diagnosticsRerun) {
+      diagnosticsRerun.hidden = false;
+    }
+    if (fromCache) {
+      updateDiagnosticsLog([]);
+    }
+    if (!fromCache) {
+      const timestampNote = generatedAt ? `Generated at ${generatedAt}.` : "";
+      const systemContent = [`# Diagnostics Summary`, timestampNote, summary]
+        .filter(Boolean)
+        .join("\n\n");
+      state.chatMessages.push({ role: "system", content: systemContent });
+      appendChatMessage("system", systemContent, { markdown: true });
+      const followUpPrompt = generatedAt
+        ? `Review the diagnostics summary above (generated at ${generatedAt}) and highlight any risks or next steps.`
+        : "Review the diagnostics summary above and highlight any risks or next steps.";
+      sendChatMessage(followUpPrompt).catch((error) => {
+        console.error("Diagnostics follow-up failed", error);
+      });
+    }
+  }
+
+  async function pollDiagnosticsJob() {
+    if (!state.diagnostics.jobId) {
+      return;
+    }
+    try {
+      const payload = await fetchJobStatus(state.diagnostics.jobId, "Diagnostics");
+      const tail = Array.isArray(payload.logs_tail) ? payload.logs_tail.slice(-8) : [];
+      updateDiagnosticsLog(tail);
+      if (diagnosticsStatus) {
+        const stateText =
+          payload.state === "running"
+            ? "Diagnostics running…"
+            : payload.state === "queued"
+            ? "Diagnostics queued…"
+            : payload.state === "error"
+            ? "Diagnostics encountered an error."
+            : payload.state === "done"
+            ? "Diagnostics completed."
+            : "Diagnostics status unknown.";
+        diagnosticsStatus.textContent = stateText;
+      }
+      if (payload.state === "done") {
+        stopDiagnosticsPolling();
+        state.diagnostics.running = false;
+        setDiagnosticsBusy(false);
+        state.diagnostics.cachedResult = payload.result || {};
+        state.diagnostics.cachedJobId = state.diagnostics.jobId;
+        const result = state.diagnostics.cachedResult;
+        state.diagnostics.jobId = null;
+        showDiagnosticsResult(result, { fromCache: false });
+      } else if (payload.state === "error") {
+        stopDiagnosticsPolling();
+        state.diagnostics.running = false;
+        setDiagnosticsBusy(false);
+        handleDiagnosticsError(payload.error || "Unknown error");
+        state.diagnostics.jobId = null;
+      }
+    } catch (error) {
+      console.error(error);
+      stopDiagnosticsPolling();
+      state.diagnostics.running = false;
+      setDiagnosticsBusy(false);
+      handleDiagnosticsError(error.message || "Diagnostics status unavailable");
+      state.diagnostics.jobId = null;
+    }
+  }
+
+  async function startDiagnosticsJob({ force = false } = {}) {
+    if (!diagnosticsButton || state.diagnostics.running) {
+      return;
+    }
+    if (!force && state.diagnostics.cachedResult) {
+      showDiagnosticsResult(state.diagnostics.cachedResult, { fromCache: true });
+      return;
+    }
+    showDiagnosticsPanel();
+    if (diagnosticsPanel) {
+      diagnosticsPanel.setAttribute("aria-busy", "true");
+    }
+    if (diagnosticsStatus) {
+      diagnosticsStatus.textContent = "Submitting diagnostics job…";
+    }
+    if (diagnosticsPreview) {
+      diagnosticsPreview.innerHTML = "";
+    }
+    updateDiagnosticsLog([]);
+    resetDiagnosticsDownloads();
+    state.diagnostics.running = true;
+    setDiagnosticsBusy(true);
+    if (diagnosticsRerun) {
+      diagnosticsRerun.hidden = true;
+    }
+    try {
+      const response = await fetch("/api/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      state.diagnostics.jobId = payload.job_id || null;
+      if (!state.diagnostics.jobId) {
+        throw new Error("Diagnostics job did not start");
+      }
+      stopDiagnosticsPolling();
+      state.diagnostics.pollTimer = setInterval(pollDiagnosticsJob, 3000);
+      await pollDiagnosticsJob();
+    } catch (error) {
+      console.error(error);
+      state.diagnostics.running = false;
+      setDiagnosticsBusy(false);
+      handleDiagnosticsError(error.message || "Unable to start diagnostics");
+      state.diagnostics.jobId = null;
+    }
+  }
+
+  function initDiagnostics() {
+    if (!diagnosticsButton) {
+      return;
+    }
+    diagnosticsButton.addEventListener("click", (event) => {
+      const force = event.shiftKey;
+      startDiagnosticsJob({ force });
+    });
+    if (diagnosticsRerun) {
+      diagnosticsRerun.addEventListener("click", () => {
+        startDiagnosticsJob({ force: true });
+      });
+    }
+    updateDiagnosticsLog([]);
+  }
+
+  window.addEventListener("beforeunload", () => {
+    if (state.diagnostics.summaryUrl) {
+      URL.revokeObjectURL(state.diagnostics.summaryUrl);
+      state.diagnostics.summaryUrl = null;
+    }
+  });
 
   chatForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1566,6 +1976,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
 
   initManualRefresh();
   initEmbedderStatus();
+  initDiagnostics();
   setTab("chat");
   fetchLLMStatus();
   fetchLLMModels();

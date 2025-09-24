@@ -85,6 +85,28 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  background: rgba(15, 23, 42, 0.08);
+  color: #1f2937;
+}
+
+button.secondary:hover,
+button.secondary:focus {
+  background: rgba(15, 23, 42, 0.15);
+}
+
+@media (prefers-color-scheme: dark) {
+  button.secondary {
+    background: rgba(148, 163, 239, 0.12);
+    color: #f8fafc;
+  }
+
+  button.secondary:hover,
+  button.secondary:focus {
+    background: rgba(148, 163, 239, 0.2);
+  }
+}
+
 .search-panel button:hover,
 .search-panel button:focus {
   background: #1e50c5;
@@ -479,6 +501,11 @@ button {
   background: rgba(15, 23, 42, 0.05);
 }
 
+.chat-message.system {
+  background: rgba(20, 184, 166, 0.12);
+  border: 1px solid rgba(20, 184, 166, 0.3);
+}
+
 .chat-message p {
   margin: 0;
 }
@@ -500,12 +527,76 @@ button {
 
 .chat-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .chat-form.busy button {
   opacity: 0.6;
   pointer-events: none;
+}
+
+.diagnostics-panel {
+  border: 1px solid rgba(20, 184, 166, 0.25);
+  border-radius: 12px;
+  padding: 1rem;
+  background: rgba(20, 184, 166, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.diagnostics-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.diagnostics-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.diagnostics-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.diagnostics-actions a {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.diagnostics-actions a:hover,
+.diagnostics-actions a:focus {
+  text-decoration: underline;
+}
+
+.diagnostics-log-tail {
+  background: rgba(15, 23, 42, 0.05);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .diagnostics-panel {
+    background: rgba(20, 184, 166, 0.12);
+    border-color: rgba(20, 184, 166, 0.35);
+  }
+
+  .diagnostics-log-tail {
+    background: rgba(148, 163, 239, 0.15);
+  }
 }
 
 .research-form {
