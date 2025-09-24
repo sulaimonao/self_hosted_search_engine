@@ -56,6 +56,23 @@ def test_json_client_parses_code_fence():
     assert result["answer"] == "ok"
 
 
+def test_json_client_accepts_object_payload():
+    payload = {
+        "message": {
+            "content": {
+                "type": "final",
+                "answer": "structured",
+                "sources": ["https://example"],
+            }
+        }
+    }
+    client = OllamaJSONClient(base_url="http://fake", default_model="llama", session=FakeSession(payload))
+    result = client.chat_json([{"role": "user", "content": "hi"}])
+    assert result["type"] == "final"
+    assert result["answer"] == "structured"
+    assert result["sources"] == ["https://example"]
+
+
 class FakeVectorStore:
     def __init__(self):
         self.upserts = []
