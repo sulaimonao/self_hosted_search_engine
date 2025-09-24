@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from crawler.frontier import Candidate
 
 from engine.indexing.coldstart import ColdStartIndexer
@@ -103,7 +105,8 @@ def test_build_index_uses_candidate_provider_and_records_discoveries():
     assert all(record["reason"].startswith("coldstart:") for record in learned_db.records)
 
 
-def test_default_discovery_helper_calls_discover_and_registry():
+@patch("engine.discovery.strategies.external_search_strategy", return_value=[])
+def test_default_discovery_helper_calls_discover_and_registry(mock_search):
     store = StubStore()
     crawler = StubCrawler()
     chunker = StubChunker()

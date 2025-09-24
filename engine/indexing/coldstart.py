@@ -120,20 +120,26 @@ class ColdStartIndexer:
     def _discover_candidates(
         self, query: str, limit: int, use_llm: bool, llm_model: str | None
     ) -> Sequence[Candidate]:
-        llm_urls: list[str] = []
+        from ..discovery.strategies import external_search_strategy
+
+        extra_seeds: list[str] = []
         if use_llm and self._llm_seed_provider is not None:
             for raw in self._llm_seed_provider(query, limit, llm_model):
                 if isinstance(raw, str):
                     candidate = raw.strip()
-                    if candidate and candidate not in llm_urls:
-                        llm_urls.append(candidate)
+                    if candidate and candidate not in extra_seeds:
+                        extra_seeds.append(candidate)
+
+        for candidate in external_search_strategy(query, limit=limit):
+            if candidate.url not in extra_seeds:
+                extra_seeds.append(candidate.url)
 
         engine = self._ensure_discovery_engine()
         frontier = list(
             engine.discover(
                 query,
                 limit=max(1, int(limit)),
-                extra_seeds=llm_urls,
+                extra_seeds=extra_seeds,
                 use_llm=use_llm,
                 model=llm_model,
             )

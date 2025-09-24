@@ -245,3 +245,14 @@ STRATEGY_REGISTRY: dict[str, StrategyFn] = {
 
 
 __all__ = ["StrategyCandidate", "STRATEGY_REGISTRY", "rss_hub"]
+
+
+def external_search_strategy(query: str, limit: int = 10) -> list[StrategyCandidate]:
+    """Use an external search provider to find new documents."""
+    from .utils import google_search
+
+    results = google_search(query, limit=limit)
+    return [
+        StrategyCandidate(url=r["link"], title=r["title"], summary=r["snippet"])
+        for r in results
+    ]
