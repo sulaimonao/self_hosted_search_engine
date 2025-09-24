@@ -151,17 +151,34 @@ class OllamaJSONClient:
             raise LLMError("Non-JSON response from Ollama chat") from exc
         message = payload.get("message") if isinstance(payload, Mapping) else None
         if isinstance(message, Mapping):
-            content = message.get("content")
-            if isinstance(content, str) and content.strip():
+            content = self._coerce_content(message.get("content"))
+            if content:
                 return content
-        content = payload.get("response") if isinstance(payload, Mapping) else None
-        if isinstance(content, str) and content.strip():
-            return content
+        if isinstance(payload, Mapping):
+            for key in ("response", "content"):
+                content = self._coerce_content(payload.get(key))
+                if content:
+                    return content
         raise LLMError("Ollama chat response missing content")
 
     # ------------------------------------------------------------------
     # JSON coercion helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _coerce_content(raw: object) -> str | None:
+        if isinstance(raw, str):
+            cleaned = raw.strip()
+            return cleaned or None
+        if isinstance(raw, (Mapping, list, tuple)):
+            try:
+                return json.dumps(raw)
+            except TypeError:
+                try:
+                    return json.dumps(raw, default=str)
+                except TypeError as exc:  # pragma: no cover - defensive
+                    raise LLMError("Unable to serialize Ollama content payload") from exc
+        return None
+
     def _parse_json(self, text: str) -> Mapping[str, object]:
         cleaned = self._strip_code_fence(text)
         try:
