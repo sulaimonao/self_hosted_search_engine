@@ -199,6 +199,40 @@ make llm-models   # lists models returned by /api/tags
 The default behaviour stays fully local: no external APIs are contacted unless you explicitly enable Ollama. Set `SMART_USE_LLM=true`
 in `.env` if you want the toggle pre-enabled for every user.
 
+## Diagnostics snapshot API
+
+Operators can capture the current repository state and runtime logs without leaving the browser. `POST /api/diagnostics` enqueues a
+background job and returns `{ "job_id": "<hex>" }`. Poll `/api/jobs/<job_id>/status` until `state` becomes `done`; the `result`
+payload contains:
+
+- `summary_markdown` – rendered report with git metadata, dependency versions, and log excerpts.
+- `summary_path` – on-disk markdown file under `data/logs/diagnostics/` that operators can download for full context.
+- Structured fields for git status, dependency snapshots, and the (optional) `pytest --collect-only` run.
+
+Toggle expensive steps through environment variables (all optional):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DIAGNOSTICS_RUN_PYTEST` | `false` | Enable `pytest --collect-only -q` in the diagnostics job. Override per-request with `{ "include_pytest": true }`. |
+| `DIAGNOSTICS_PYTEST_ARGS` | *(empty)* | Extra CLI arguments appended to the pytest collect command. |
+| `DIAGNOSTICS_CMD_TIMEOUT` | `60` | Seconds before git/pytest/pip commands are aborted. |
+| `DIAGNOSTICS_LOG_FILES` | `3` | Number of recent `*.log` files to sample from `data/logs`. |
+| `DIAGNOSTICS_LOG_LINES` | `40` | Tail length captured for each log file. |
+
+Example macOS workflow:
+
+```bash
+source .venv/bin/activate
+curl -X POST http://127.0.0.1:5000/api/diagnostics \
+     -H 'Content-Type: application/json' \
+     -d '{"include_pytest": true}'
+# => {"job_id":"abc123..."}
+curl http://127.0.0.1:5000/api/jobs/abc123.../status | jq .result.summary_path
+```
+
+This endpoint keeps all diagnostics local—no external uploads occur. Long-running checks remain opt-in so you can keep the job
+lightweight during routine health checks.
+
 ## Project layout
 
 ```
