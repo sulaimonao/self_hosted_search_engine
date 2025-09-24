@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import yaml
@@ -79,9 +80,13 @@ class EngineConfig:
             min_hits=int(retrieval.get("min_hits", 1)),
             similarity_threshold=float(retrieval.get("similarity_threshold", 0.2)),
         )
+        persist_dir_value = os.getenv(
+            "CHROMA_PERSIST_DIR", index.get("persist_dir", "data/chroma")
+        )
+        db_path_value = os.getenv("CHROMA_DB_PATH", index.get("db_path", "data/index.duckdb"))
         index_cfg = IndexConfig(
-            persist_dir=cls._resolve_path(index.get("persist_dir", ".chroma"), base_dir),
-            db_path=cls._resolve_path(index.get("db_path", "data/index.duckdb"), base_dir),
+            persist_dir=cls._resolve_path(persist_dir_value, base_dir),
+            db_path=cls._resolve_path(db_path_value, base_dir),
         )
         crawl_cfg = CrawlConfig(
             user_agent=str(crawl.get("user_agent", "SelfHostedSearchBot/0.1")),

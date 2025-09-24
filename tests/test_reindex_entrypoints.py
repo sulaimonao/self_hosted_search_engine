@@ -22,7 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_incremental_reindex_entrypoints(tmp_path: Path, invocation: list[str]) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    normalized = data_dir / "normalized.jsonl"
+    normalized = data_dir / "normalized" / "normalized.jsonl"
+    normalized.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "url": "https://example.com/",
         "lang": "en",
@@ -51,5 +52,5 @@ def test_incremental_reindex_entrypoints(tmp_path: Path, invocation: list[str]) 
     )
 
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    index_dir = Path(env["DATA_DIR"]) / "index"
+    index_dir = Path(env["DATA_DIR"]) / "whoosh"
     assert index_dir.exists(), f"index directory missing\nstdout={result.stdout}\nstderr={result.stderr}"

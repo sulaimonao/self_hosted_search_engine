@@ -68,7 +68,12 @@ def _load_docs(path: Path, *, window_minutes: int | None) -> List[dict]:
 
 def _rebuild_index(config: AppConfig, docs: Iterable[dict]) -> None:
     if config.index_dir.exists():
-        shutil.rmtree(config.index_dir)
+        resolved = config.index_dir.resolve()
+        if resolved == ROOT:
+            raise RuntimeError("Refusing to remove repository root as index directory")
+        if resolved == resolved.anchor:
+            raise RuntimeError("Refusing to remove filesystem root as index directory")
+        shutil.rmtree(resolved)
     config.index_dir.mkdir(parents=True, exist_ok=True)
     incremental_index(
         config.index_dir,

@@ -33,7 +33,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10, help="Maximum number of results to return")
     args = parser.parse_args()
 
-    index_dir = os.getenv("INDEX_DIR", "./data/index")
+    index_dir = os.getenv("INDEX_DIR", "./data/whoosh")
     ix = create_or_open_index(index_dir)
     results = search_index(ix, args.q, limit=args.limit)
     if not results:

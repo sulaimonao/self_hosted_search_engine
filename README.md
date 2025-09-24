@@ -34,7 +34,7 @@ The retrieval layer persists embeddings in a local [Chroma](https://www.trychrom
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `index.persist_dir` | `./.chroma` | Directory holding the Chroma collection used during retrieval |
+| `index.persist_dir` | `./data/chroma` | Directory holding the Chroma collection used during retrieval |
 | `index.db_path` | `./data/index.duckdb` | DuckDB database storing document metadata for crawl deduplication |
 
 Ensure these locations live on fast local storage—the cold-start indexer and Flask app share the same files, so the vector store must be accessible to both processes.
@@ -49,7 +49,7 @@ make crawl URL="https://www.vmware.com/"
 make crawl SEEDS_FILE="/path/to/seeds.txt"
 ```
 
-The crawler writes raw responses and normalized text to `data/crawl/`. When raw data changes you can normalize and index incrementally:
+The crawler writes raw responses to `data/crawl/raw/` and normalized text to `data/normalized/normalized.jsonl`. When raw data changes you can normalize and index incrementally:
 
 ```bash
 make normalize
@@ -248,7 +248,7 @@ lightweight during routine health checks.
 │   ├── __init__.py
 │   └── seed_guesser.py   # Lightweight Ollama client for seed guessing
 ├── crawler/
-│   ├── pipelines.py      # Writes raw + normalized JSONL to data/crawl/
+│   ├── pipelines.py      # Writes raw JSONL to data/crawl/raw/ and normalized output under data/normalized/
 │   ├── seeds.txt         # Default seeds list (one URL per line)
 │   ├── settings.py       # Scrapy settings factory (robots, concurrency, Playwright)
 │   └── spiders/
@@ -273,7 +273,7 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 | `APP_ENV` | `development` | Controls environment-specific behaviour such as telemetry defaults |
 | `TELEMETRY_ENABLED` | _(auto)_ | Override to force telemetry on/off (`1`/`0`); defaults to disabled in development |
 | `TELEMETRY_LOG_LOCAL` | _(empty)_ | When set, append JSONL telemetry events to `/tmp/telemetry.log` |
-| `INDEX_DIR` | `./data/index` | Location of the Whoosh index |
+| `INDEX_DIR` | `./data/whoosh` | Location of the Whoosh index |
 | `CRAWL_STORE` | `./data/crawl` | Where crawler JSONL data is persisted |
 | `CRAWL_MAX_PAGES` | `100` | Stop after visiting this many pages |
 | `CRAWL_RESPECT_ROBOTS` | `true` | Toggle robots.txt compliance |
@@ -323,7 +323,7 @@ Export variables via `.env` (auto-loaded by `make` targets) or the shell:
 ## Troubleshooting
 
 - **“No seeds provided”** – pass `URL=...` to `make crawl` or populate `crawler/seeds.txt`.
-- **Empty results** – confirm `data/crawl/normalized.jsonl` exists, then run `make reindex` (or the equivalent `python -m bin.reindex_incremental`).
+- **Empty results** – confirm `data/normalized/normalized.jsonl` exists, then run `make reindex` (or the equivalent `python -m bin.reindex_incremental`).
 - **Playwright prompts** – `make setup` installs Chromium automatically; re-run if browsers are missing.
 - **Non-3.11 Python** – run `./scripts/ensure_py311.sh python3` before `make setup`.
 
