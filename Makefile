@@ -34,7 +34,7 @@ setup:
 	$(PLAYWRIGHT) install chromium
 
 dev:
-@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; NORMALIZED_PATH="${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"; CHROMA_PERSIST_DIR="${CHROMA_PERSIST_DIR:-./data/chroma}"; CHROMADB_DISABLE_TELEMETRY="${CHROMADB_DISABLE_TELEMETRY:-1}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; NORMALIZED_PATH="${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"; CHROMA_PERSIST_DIR="${CHROMA_PERSIST_DIR:-./data/chroma}"; CHROMADB_DISABLE_TELEMETRY="${CHROMADB_DISABLE_TELEMETRY:-1}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
 
 run:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
