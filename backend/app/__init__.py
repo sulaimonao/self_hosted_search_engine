@@ -29,6 +29,7 @@ def _is_embedding_model(name: str) -> bool:
 
 def create_app() -> Flask:
     from .api import chat as chat_api
+    from .api import diagnostics as diagnostics_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import refresh as refresh_api
@@ -81,6 +82,7 @@ def create_app() -> Flask:
     app.register_blueprint(jobs_api.bp)
     app.register_blueprint(chat_api.bp)
     app.register_blueprint(research_api.bp)
+    app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(refresh_api.bp)
 
