@@ -126,7 +126,6 @@ class OllamaJSONClient:
                 for message in messages
             ],
             "stream": False,
-            "format": "json",
         }
         if options:
             payload["options"] = dict(options)

@@ -13,6 +13,10 @@ import duckdb
 from chromadb import PersistentClient
 from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings
+import chromadb.telemetry
+from backend.app import telemetry
+
+chromadb.telemetry.capture = telemetry.capture
 
 from ..indexing.chunk import Chunk
 
