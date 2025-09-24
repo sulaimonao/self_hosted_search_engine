@@ -1,5 +1,5 @@
 .PHONY: setup dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean seeds index-inc
-.PHONY: run index clean-index
+.PHONY: run index clean-index paths
 
 PYTHON ?= python3
 # Prefer 3.11 if available
@@ -15,6 +15,18 @@ PLAYWRIGHT:=$(VENV)/bin/playwright
 REPO_ROOT := $(shell pwd)
 export PYTHONPATH := $(REPO_ROOT)$(if $(PYTHONPATH),:$(PYTHONPATH))
 
+DATA_DIR := $(REPO_ROOT)/data
+WHOOSH_DIR := $(DATA_DIR)/whoosh
+CHROMA_DIR := $(DATA_DIR)/chroma
+DUCKDB_PATH := $(DATA_DIR)/index.duckdb
+
+paths:
+	@echo "DATA_DIR=$(DATA_DIR)"
+	@echo "WHOOSH_DIR=$(WHOOSH_DIR)"
+	@echo "CHROMA_DIR=$(CHROMA_DIR)"
+	@echo "DUCKDB_PATH=$(DUCKDB_PATH)"
+	@echo "NORMALIZED_PATH=${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"
+
 setup:
 	./scripts/ensure_py311.sh $(PYTHON)
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
@@ -22,7 +34,7 @@ setup:
 	$(PLAYWRIGHT) install chromium
 
 dev:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
+@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; NORMALIZED_PATH="${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"; CHROMA_PERSIST_DIR="${CHROMA_PERSIST_DIR:-./data/chroma}"; CHROMADB_DISABLE_TELEMETRY="${CHROMADB_DISABLE_TELEMETRY:-1}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
 
 run:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
@@ -32,22 +44,33 @@ index:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; python -c "import os; from app import coldstart; query = os.environ.get('"'"Q"'"', '"'"""'"'); count = coldstart.build_index(query); print(f'"'"Indexed {count} pages for query: {query}"'"')"'
 
 clean-index:
-	rm -rf .chroma
-	rm -f data/index.duckdb
+	@mkdir -p "$(WHOOSH_DIR)"
+	@if [ "$$(realpath $(WHOOSH_DIR))" = "$$(realpath $(REPO_ROOT))" ]; then \
+	  echo "Refusing to clean: WHOOSH_DIR resolves to repository root" >&2; exit 2; \
+	fi
+	@find "$(WHOOSH_DIR)" -maxdepth 1 -type f -name 'MAIN_*' -delete
+	@find "$(WHOOSH_DIR)" -maxdepth 1 -type f \( -name '*.seg' -o -name '*_WRITELOCK' \) -delete
+	@if [ -d "$(CHROMA_DIR)" ]; then \
+	  if [ "$$(realpath $(CHROMA_DIR))" = "$$(realpath $(REPO_ROOT))" ]; then \
+	    echo "Refusing to clean: CHROMA_DIR resolves to repository root" >&2; exit 2; \
+	  fi; \
+	  rm -rf "$(CHROMA_DIR)"; \
+	fi
+	@rm -f "$(DUCKDB_PATH)"
 
 crawl:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
 
 reindex:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m bin.reindex_incremental'
 
 search:
 	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/index}"; export INDEX_DIR; exec $(PY) bin/search_cli.py --q "$$Q" --limit "$${LIMIT:-10}"'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; export INDEX_DIR; exec $(PY) bin/search_cli.py --q "$$Q" --limit "$${LIMIT:-10}"'
 
 focused:
 	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BUDGET_VALUE=$${BUDGET:-$${FOCUSED_CRAWL_BUDGET:-10}}; CMD="$(PY) -m crawler.run --query=\"$$Q\" --budget=$$BUDGET_VALUE --out=$${CRAWL_STORE:-./data/crawl/raw}"; [ "$$USE_LLM" = "1" ] && CMD="$$CMD --use-llm"; [ -n "$$MODEL" ] && CMD="$$CMD --model=\"$$MODEL\""; eval $$CMD'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BUDGET_VALUE=$${BUDGET:-$${FOCUSED_CRAWL_BUDGET:-10}}; STORE="$${CRAWL_STORE:-./data/crawl}"; OUT_DIR="$${STORE%/}/raw"; CMD="$(PY) -m crawler.run --query=\"$$Q\" --budget=$$BUDGET_VALUE --out=$$OUT_DIR"; [ "$$USE_LLM" = "1" ] && CMD="$$CMD --use-llm"; [ -n "$$MODEL" ] && CMD="$$CMD --model=\"$$MODEL\""; eval $$CMD'
 
 normalize:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/normalize.py'
@@ -77,4 +100,7 @@ research:
 
 clean:
 	rm -rf $(VENV)
-	rm -rf data/index data/crawl
+	@if [ -d "$(WHOOSH_DIR)" ]; then rm -rf "$(WHOOSH_DIR)"; fi
+	@if [ -d "$(CHROMA_DIR)" ]; then rm -rf "$(CHROMA_DIR)"; fi
+	@if [ -d "$(DATA_DIR)/crawl" ]; then rm -rf "$(DATA_DIR)/crawl"; fi
+	@rm -f "$(DUCKDB_PATH)"

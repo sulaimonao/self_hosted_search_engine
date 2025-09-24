@@ -14,6 +14,32 @@ import requests
 LOGGER = logging.getLogger(__name__)
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_path(value: str | os.PathLike[str] | None, base: Path) -> Path:
+    """Resolve ``value`` relative to ``base`` when not absolute."""
+
+    if value is None:
+        return base
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate
+    return (base / candidate).resolve()
+
+
+def _guard_directory(path: Path, *, label: str) -> Path:
+    """Ensure ``path`` does not resolve to an unsafe location."""
+
+    resolved = path.resolve()
+    repo_root = REPO_ROOT.resolve()
+    if resolved == repo_root:
+        raise ValueError(f"{label} may not be the repository root ({resolved})")
+    if resolved == Path(resolved.anchor):
+        raise ValueError(f"{label} may not be the filesystem root ({resolved})")
+    return path
+
+
 @dataclass(slots=True)
 class AppConfig:
     """Runtime configuration resolved from environment variables."""
@@ -43,16 +69,35 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> "AppConfig":
-        data_dir = Path(os.getenv("DATA_DIR", "data"))
-        crawl_root = Path(os.getenv("CRAWL_STORE", data_dir / "crawl"))
-        crawl_raw_dir = crawl_root / "raw"
-        normalized_path = Path(os.getenv("NORMALIZED_PATH", data_dir / "normalized.jsonl"))
-        index_dir = Path(os.getenv("INDEX_DIR", data_dir / "index"))
-        ledger_path = Path(os.getenv("INDEX_LEDGER", data_dir / "index_ledger.json"))
-        simhash_path = Path(os.getenv("SIMHASH_PATH", data_dir / "simhash_index.json"))
-        last_index_time_path = Path(os.getenv("LAST_INDEX_TIME_PATH", data_dir / ".last_index_time"))
-        logs_dir = Path(os.getenv("LOGS_DIR", data_dir / "logs"))
-        learned_web_db_path = Path(os.getenv("LEARNED_WEB_DB_PATH", data_dir / "learned_web.sqlite3"))
+        default_data_dir = REPO_ROOT / "data"
+        data_dir = _resolve_path(os.getenv("DATA_DIR"), default_data_dir)
+        data_dir = _guard_directory(data_dir, label="DATA_DIR")
+
+        crawl_root_default = data_dir / "crawl"
+        crawl_root = _resolve_path(os.getenv("CRAWL_STORE"), crawl_root_default)
+        crawl_root = _guard_directory(crawl_root, label="CRAWL_STORE")
+        crawl_raw_dir = _guard_directory(crawl_root / "raw", label="CRAWL_RAW_DIR")
+        normalized_default = data_dir / "normalized" / "normalized.jsonl"
+        normalized_path = _resolve_path(os.getenv("NORMALIZED_PATH"), normalized_default)
+        _guard_directory(normalized_path.parent, label="NORMALIZED_PATH parent")
+        index_dir_default = data_dir / "whoosh"
+        index_dir = _resolve_path(os.getenv("INDEX_DIR"), index_dir_default)
+        index_dir = _guard_directory(index_dir, label="INDEX_DIR")
+        ledger_path = _resolve_path(os.getenv("INDEX_LEDGER"), data_dir / "index_ledger.json")
+        _guard_directory(ledger_path.parent, label="INDEX_LEDGER parent")
+        simhash_path = _resolve_path(os.getenv("SIMHASH_PATH"), data_dir / "simhash_index.json")
+        _guard_directory(simhash_path.parent, label="SIMHASH_PATH parent")
+        last_index_time_path = _resolve_path(
+            os.getenv("LAST_INDEX_TIME_PATH"), data_dir / "state" / ".last_index_time"
+        )
+        _guard_directory(last_index_time_path.parent, label="LAST_INDEX_TIME_PATH parent")
+        logs_dir = _guard_directory(
+            _resolve_path(os.getenv("LOGS_DIR"), data_dir / "logs"), label="LOGS_DIR"
+        )
+        learned_web_db_path = _resolve_path(
+            os.getenv("LEARNED_WEB_DB_PATH"), data_dir / "learned_web.sqlite3"
+        )
+        _guard_directory(learned_web_db_path.parent, label="LEARNED_WEB_DB_PATH parent")
 
         focused_enabled = os.getenv("FOCUSED_CRAWL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
@@ -98,14 +143,17 @@ class AppConfig:
     def ensure_dirs(self) -> None:
         """Ensure all required directories exist."""
 
-        self.index_dir.mkdir(parents=True, exist_ok=True)
-        self.crawl_raw_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.normalized_path.parent.mkdir(parents=True, exist_ok=True)
-        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        self.simhash_path.parent.mkdir(parents=True, exist_ok=True)
-        self.last_index_time_path.parent.mkdir(parents=True, exist_ok=True)
-        self.learned_web_db_path.parent.mkdir(parents=True, exist_ok=True)
+        for directory in (
+            self.index_dir,
+            self.crawl_raw_dir,
+            self.logs_dir,
+            self.normalized_path.parent,
+            self.ledger_path.parent,
+            self.simhash_path.parent,
+            self.last_index_time_path.parent,
+            self.learned_web_db_path.parent,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
 
     def log_summary(self) -> None:
         """Log environment-derived flags for observability."""

@@ -9,8 +9,11 @@ services:
     image: selfsearch:latest
     environment:
       UI_PORT: ${UI_PORT:-5000}
-      INDEX_DIR: ${INDEX_DIR:-/app/data/index}
+      INDEX_DIR: ${INDEX_DIR:-/app/data/whoosh}
       CRAWL_STORE: ${CRAWL_STORE:-/app/data/crawl}
+      NORMALIZED_PATH: ${NORMALIZED_PATH:-/app/data/normalized/normalized.jsonl}
+      CHROMA_PERSIST_DIR: ${CHROMA_PERSIST_DIR:-/app/data/chroma}
+      CHROMADB_DISABLE_TELEMETRY: ${CHROMADB_DISABLE_TELEMETRY:-1}
     ports:
       - "${UI_PORT:-5000}:${UI_PORT:-5000}"
     volumes:

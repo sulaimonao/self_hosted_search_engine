@@ -37,6 +37,17 @@ if _embed_override:
     )
 embed_model_name = _embed_override or ENGINE_CONFIG.models.embed
 
+_planner_fallback_override = os.getenv("PLANNER_FALLBACK")
+fallback_model_name = _planner_fallback_override or ENGINE_CONFIG.models.llm_fallback
+if _planner_fallback_override:
+    logging.getLogger(__name__).info(
+        "Overriding planner fallback model: using '%s'", fallback_model_name
+    )
+elif not fallback_model_name:
+    logging.getLogger(__name__).warning(
+        "No planner fallback model configured; set PLANNER_FALLBACK to improve resilience"
+    )
+
 ollama_client = OllamaClient(ENGINE_CONFIG.ollama.base_url)
 embedder = OllamaEmbedder(ollama_client, embed_model_name)
 embed_manager = EmbeddingManager(
@@ -74,7 +85,7 @@ coldstart = ColdStartIndexer(
 rag_agent = RagAgent(
     client=ollama_client,
     primary_model=ENGINE_CONFIG.models.llm_primary,
-    fallback_model=ENGINE_CONFIG.models.llm_fallback,
+    fallback_model=fallback_model_name,
 )
 
 planner_llm = OllamaJSONClient(
@@ -99,7 +110,7 @@ planner_agent = PlannerAgent(
     llm=planner_llm,
     tools=tool_dispatcher,
     default_model=ENGINE_CONFIG.models.llm_primary,
-    fallback_model=ENGINE_CONFIG.models.llm_fallback,
+    fallback_model=fallback_model_name,
     max_iterations=6,
 )
 

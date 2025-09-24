@@ -13,8 +13,11 @@ FROM python:${PYTHON_VERSION} AS app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UI_PORT=5000 \
-    INDEX_DIR=/app/data/index \
-    CRAWL_STORE=/app/data/crawl
+    INDEX_DIR=/app/data/whoosh \
+    CRAWL_STORE=/app/data/crawl \
+    NORMALIZED_PATH=/app/data/normalized/normalized.jsonl \
+    CHROMA_PERSIST_DIR=/app/data/chroma \
+    CHROMADB_DISABLE_TELEMETRY=1
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels

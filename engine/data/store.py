@@ -6,17 +6,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 import hashlib
-import threading
 import json
+import os
+import threading
 
 import duckdb
 from chromadb import PersistentClient
 from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings
-import chromadb.telemetry
-from backend.app import telemetry
 
-chromadb.telemetry.capture = telemetry.capture
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+os.environ.setdefault("CHROMADB_DISABLE_TELEMETRY", "1")
+
+try:  # pragma: no cover - best effort shielding
+    import chromadb.telemetry as _chroma_telemetry
+except ImportError:  # pragma: no cover - library structure changed
+    _chroma_telemetry = None
+else:
+    _chroma_telemetry.capture = lambda *args, **kwargs: True
+
+
+def _ensure_safe_directory(path: Path, *, label: str) -> Path:
+    resolved = path.resolve()
+    repo_root = REPO_ROOT.resolve()
+    if resolved == repo_root:
+        raise ValueError(f"{label} may not be the repository root ({resolved})")
+    if resolved == Path(resolved.anchor):
+        raise ValueError(f"{label} may not be the filesystem root ({resolved})")
+    return path
 
 from ..indexing.chunk import Chunk
 
@@ -40,8 +58,11 @@ class VectorStore:
     _cache_lock = threading.Lock()
 
     def __init__(self, persist_dir: str | Path, db_path: str | Path) -> None:
-        self._persist_dir = Path(persist_dir).resolve()
+        self._persist_dir = _ensure_safe_directory(
+            Path(persist_dir).resolve(), label="persist_dir"
+        )
         self._db_path = Path(db_path).resolve()
+        _ensure_safe_directory(self._db_path.parent, label="db_path parent")
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._collection = self._get_collection(self._persist_dir)
