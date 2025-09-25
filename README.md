@@ -30,6 +30,48 @@ Enable the agent runtime to let chat turns expand the local index automatically:
 make agent-dev        # identical to `make dev` but highlights agent-specific logs
 ```
 
+## Agent maintainer tools
+
+The repository now exposes a curated toolchain that lets the autonomous agent
+inspect and edit code without raw shell access. Writes are limited to the paths
+listed in `policy/allowlist.yml` and must stay within the configured change
+budget (≤10 files, ≤500 lines of churn per task). Attempting to touch
+disallowed paths such as `.env`, `.github/`, or anything under `data/` raises
+an immediate error.
+
+Run the full pre-flight suite locally before pushing changes:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+pip install -e .
+
+make check
+python scripts/change_budget.py     # validate staged diff
+python scripts/perf_smoke.py        # standalone perf smoke
+```
+
+The `check` target runs Ruff, Black (check mode), Mypy, pytest, pip-audit,
+Bandit, and the lightweight performance smoke test.
+
+## Autonomy & safety
+
+Maintainer runs default to **Observe**, which keeps the agent read-only. Promote
+to **Patch** to allow applying a diff after verifying that every gate passes.
+The **Maintainer** level enables multi-file refactors while still respecting the
+change budgets enforced by `policy/allowlist.yml`. Regardless of autonomy, the
+agent must plan → patch → verify → document risks and rollback steps before
+opening a PR.
+
+## Continuous integration
+
+Pull requests run `make check` inside GitHub Actions (Python 3.11) and then
+invoke the budget guard. Linting covers Ruff, Black (check mode), and Mypy for
+the maintainer surface; pytest exercises the full suite; `pip-audit` and Bandit
+scan the same paths enforced locally. The budget guard fails the build if the
+staged diff exceeds 50 files or 4,000 lines.
+
 Key endpoints (all under `/api/tools/`):
 
 | Endpoint | Description |

@@ -16,3 +16,5 @@ node_modules/
 .DS_Store
 /.venv311
 _MAIN_0.toc
+/worktrees/
+/data/telemetry/
