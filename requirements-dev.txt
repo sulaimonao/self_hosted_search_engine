@@ -1,0 +1,6 @@
+black
+bandit
+mypy
+pip-audit
+pytest
+ruff

@@ -1,0 +1,12 @@
+write_paths:
+  - backend/**
+  - server/**
+  - bin/**
+  - tests/**
+deny_paths:
+  - .env
+  - data/**
+  - .github/
+limits:
+  max_changed_files: 10
+  max_changed_loc: 500

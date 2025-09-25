@@ -107,6 +107,14 @@
                 <option value="">Detecting models...</option>
               </select>
             </div>
+            <div class="field">
+              <label for="autonomy-level">Autonomy</label>
+              <select id="autonomy-level">
+                <option value="observe">Observe</option>
+                <option value="patch">Patch</option>
+                <option value="maintainer">Maintainer</option>
+              </select>
+            </div>
           </div>
           <div class="assist-tabs" role="tablist">
             <button
@@ -264,6 +272,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
   const chatSend = document.getElementById("chat-send");
+  const autonomySelect = document.getElementById("autonomy-level");
   const diagnosticsButton = document.getElementById("diagnostics-run");
   const diagnosticsPanel = document.getElementById("diagnostics-panel");
   const diagnosticsStatus = document.getElementById("diagnostics-status");
@@ -323,6 +332,7 @@ ollama pull llama3.1:8b-instruct</code></pre>
       busySnapshot: null,
       running: false,
     },
+    autonomyLevel: "observe",
   };
 
   function isEmbeddingModelName(name) {
@@ -1490,7 +1500,11 @@ ollama pull llama3.1:8b-instruct</code></pre>
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: requestMessages, model: llmModelSelect.value || undefined }),
+        body: JSON.stringify({
+          messages: requestMessages,
+          model: llmModelSelect.value || undefined,
+          autonomy: state.autonomyLevel,
+        }),
       });
       if (!response.ok || !response.body) {
         throw new Error(`Chat failed: ${response.status}`);
@@ -1932,6 +1946,12 @@ ollama pull llama3.1:8b-instruct</code></pre>
     event.preventDefault();
     sendChatMessage(chatInput.value);
   });
+
+  if (autonomySelect) {
+    autonomySelect.addEventListener("change", () => {
+      state.autonomyLevel = autonomySelect.value || "observe";
+    });
+  }
 
   researchForm.addEventListener("submit", async (event) => {
     event.preventDefault();

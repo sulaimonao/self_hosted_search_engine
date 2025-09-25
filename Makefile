@@ -1,4 +1,4 @@
-.PHONY: setup dev agent-dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean seeds index-inc seed postchat
+.PHONY: setup dev agent-dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean seeds index-inc seed postchat check budget perf
 .PHONY: run index clean-index paths
 
 PYTHON ?= python3
@@ -112,3 +112,18 @@ clean:
 	@if [ -d "$(CHROMA_DIR)" ]; then rm -rf "$(CHROMA_DIR)"; fi
 	@if [ -d "$(DATA_DIR)/crawl" ]; then rm -rf "$(DATA_DIR)/crawl"; fi
 	@rm -f "$(DUCKDB_PATH)"
+
+check:
+	pytest -q
+	ruff check server scripts policy
+	black --check server/agent_tools_repo.py server/agent_policy.py scripts/change_budget.py scripts/perf_smoke.py tests/e2e/test_agent_patch_flow.py
+	mypy --ignore-missing-imports server/agent_tools_repo.py server/agent_policy.py scripts/change_budget.py scripts/perf_smoke.py
+	pip-audit -r requirements.txt || true
+	bandit -q server/agent_tools_repo.py scripts/change_budget.py scripts/perf_smoke.py
+	python scripts/perf_smoke.py
+
+budget:
+	python scripts/change_budget.py
+
+perf:
+	python scripts/perf_smoke.py
