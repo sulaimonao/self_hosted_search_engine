@@ -5,9 +5,15 @@ from __future__ import annotations
 from typing import List, Optional
 
 try:  # pragma: no cover - optional dependency on Flask request context
-    from flask import g
+    from flask import g, has_app_context, has_request_context
 except Exception:  # pragma: no cover - allows import without Flask context
     g = None  # type: ignore
+
+    def has_app_context() -> bool:  # type: ignore
+        return False
+
+    def has_request_context() -> bool:  # type: ignore
+        return False
 
 
 class RunLog:
@@ -30,7 +36,14 @@ class RunLog:
 
 
 def _get_g() -> Optional[object]:  # pragma: no cover - thin wrapper
-    return g if g is not None else None
+    if g is None:
+        return None
+    try:
+        if not (has_request_context() or has_app_context()):
+            return None
+    except RuntimeError:
+        return None
+    return g
 
 
 def current_run_log(create: bool = False) -> Optional[RunLog]:
