@@ -15,6 +15,7 @@ def _base_config(tmp_path, **overrides):
         "smart_confidence_threshold": 0.35,
         "smart_seed_min_similarity": 0.2,
         "smart_seed_limit": 5,
+        "last_index_time_path": tmp_path / "state" / ".last_index_time",
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -163,3 +164,29 @@ def test_run_query_triggers_for_low_confidence(monkeypatch, tmp_path):
     assert context["trigger_reason"] == "low_confidence"
     assert context["seed_count"] == 2
     assert manager.calls and manager.calls[0]["frontier"] == ["https://seed.one", "https://seed.two"]
+
+
+def test_get_index_reloads_when_generation_changes(tmp_path):
+    marker = tmp_path / "state" / ".last_index_time"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("1\n", encoding="utf-8")
+
+    config = _base_config(tmp_path, last_index_time_path=marker)
+
+    class StubManager:
+        def __init__(self) -> None:
+            self.db = SimpleNamespace(similar_discovery_seeds=lambda *args, **kwargs: [])
+
+        def schedule(self, *args, **kwargs):  # pragma: no cover - not exercised here
+            return None
+
+        def last_index_time(self) -> int:
+            return 0
+
+    service = SearchService(config, StubManager())
+
+    first = service._get_index()
+    marker.write_text("2\n", encoding="utf-8")
+    second = service._get_index()
+
+    assert first is not second
