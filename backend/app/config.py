@@ -52,6 +52,13 @@ class AppConfig:
     last_index_time_path: Path
     logs_dir: Path
     learned_web_db_path: Path
+    frontier_db_path: Path
+    agent_data_dir: Path
+    agent_plans_dir: Path
+    agent_sessions_dir: Path
+    telemetry_dir: Path
+    agent_max_fetch_per_turn: int
+    agent_coverage_threshold: float
     focused_enabled: bool
     focused_budget: int
     smart_min_results: int
@@ -99,6 +106,23 @@ class AppConfig:
         )
         _guard_directory(learned_web_db_path.parent, label="LEARNED_WEB_DB_PATH parent")
 
+        agent_root_default = data_dir / "agent"
+        agent_root = _resolve_path(os.getenv("AGENT_DATA_DIR"), agent_root_default)
+        agent_root = _guard_directory(agent_root, label="AGENT_DATA_DIR")
+        agent_plans_dir = _guard_directory(agent_root / "plans", label="AGENT_PLANS_DIR")
+        agent_sessions_dir = _guard_directory(agent_root / "sessions", label="AGENT_SESSIONS_DIR")
+        frontier_db_path = _resolve_path(
+            os.getenv("FRONTIER_DB_PATH"), agent_root / "frontier.sqlite3"
+        )
+        _guard_directory(frontier_db_path.parent, label="FRONTIER_DB_PATH parent")
+        telemetry_dir_default = data_dir / "telemetry"
+        telemetry_dir = _guard_directory(
+            _resolve_path(os.getenv("TELEMETRY_DIR"), telemetry_dir_default),
+            label="TELEMETRY_DIR",
+        )
+        agent_max_fetch_per_turn = max(1, int(os.getenv("AGENT_MAX_FETCH_PER_TURN", "3")))
+        agent_coverage_threshold = float(os.getenv("AGENT_COVERAGE_THRESHOLD", "0.6"))
+
         focused_enabled = os.getenv("FOCUSED_CRAWL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         focused_budget = max(1, int(os.getenv("FOCUSED_CRAWL_BUDGET", "10")))
         smart_min_results = max(0, int(os.getenv("SMART_MIN_RESULTS", "1")))
@@ -124,6 +148,13 @@ class AppConfig:
             last_index_time_path=last_index_time_path,
             logs_dir=logs_dir,
             learned_web_db_path=learned_web_db_path,
+            frontier_db_path=frontier_db_path,
+            agent_data_dir=agent_root,
+            agent_plans_dir=agent_plans_dir,
+            agent_sessions_dir=agent_sessions_dir,
+            telemetry_dir=telemetry_dir,
+            agent_max_fetch_per_turn=agent_max_fetch_per_turn,
+            agent_coverage_threshold=agent_coverage_threshold,
             focused_enabled=focused_enabled,
             focused_budget=focused_budget,
             smart_min_results=smart_min_results,
@@ -152,6 +183,11 @@ class AppConfig:
             self.simhash_path.parent,
             self.last_index_time_path.parent,
             self.learned_web_db_path.parent,
+            self.frontier_db_path.parent,
+            self.agent_data_dir,
+            self.agent_plans_dir,
+            self.agent_sessions_dir,
+            self.telemetry_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -173,6 +209,10 @@ class AppConfig:
             "crawl_use_playwright": self.crawl_use_playwright,
             "use_llm_rerank": self.use_llm_rerank,
             "learned_web_db_path": str(self.learned_web_db_path),
+            "frontier_db_path": str(self.frontier_db_path),
+            "agent_data_dir": str(self.agent_data_dir),
+            "agent_max_fetch_per_turn": self.agent_max_fetch_per_turn,
+            "agent_coverage_threshold": self.agent_coverage_threshold,
             "chat_log_level": logging.getLevelName(self.chat_log_level),
         }
         LOGGER.info("runtime configuration: %s", json.dumps(payload, sort_keys=True))

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "self_hosted_search_engine"
+version = "0.1.0"
+description = "Self-hosted deep research agent"
+authors = [{name = "Akeem"}]
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+packages = [
+    "backend",
+    "crawler",
+    "engine",
+    "llm",
+    "rank",
+    "search",
+    "server",
+    "seed_loader",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
