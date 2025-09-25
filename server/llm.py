@@ -134,14 +134,27 @@ class OllamaJSONClient:
             response = self._session.post(
                 f"{self.base_url}/api/chat", json=payload, timeout=self.timeout
             )
-            response.raise_for_status()
         except requests.RequestException as exc:
             raise LLMError(str(exc)) from exc
+        status = response.status_code
+        if status == 404:
+            raise LLMError(f"HTTP 404 (model not found): {resolved_model}")
+        if not (200 <= status < 300):
+            snippet = (response.text or "")[:280]
+            raise LLMError(f"HTTP {status}: {snippet}")
         raw_content = self._extract_content(response)
         try:
             return self._parse_json(raw_content)
-        except ValueError as exc:
-            raise LLMError(f"Invalid JSON payload from model {resolved_model}") from exc
+        except ValueError:
+            LOGGER.warning(
+                "planner.llm invalid-json model=%s", resolved_model, exc_info=True
+            )
+            return {
+                "type": "final",
+                "answer": raw_content,
+                "sources": [],
+                "actions": ["raw"],
+            }
 
     def _extract_content(self, response: requests.Response) -> str:
         try:

@@ -291,28 +291,34 @@ def run_agent(
     try:
         result = planner.run(query, context=planner_context, model=model)
     except LLMError as exc:
-        extra = {
+        message = str(exc)[:200]
+        payload = {
+            "type": "final",
+            "answer": "Planner LLM is unavailable.",
+            "sources": [],
+            "actions": ["planner_unavailable"],
+            "planner_model_used": None,
+            "error": message,
             "planner_models": _planner_model_candidates(planner, model),
+            "llm_used": True,
         }
-        payload = _warming_payload(
-            f"Planner LLM unavailable: {exc}",
-            code="planner_llm_unavailable",
-            extra=extra,
-        )
-        payload["llm_used"] = True
         if model:
-            payload["llm_model"] = model
+            payload["llm_model_requested"] = model
         return payload
     except Exception as exc:  # pragma: no cover - defensive logging
         current_app.logger.exception("planner execution failed for query='%s'", query)
-        payload = _warming_payload(
-            "Planner failed to complete request.",
-            code="planner_error",
-            extra={"error": str(exc)},
-        )
-        payload["llm_used"] = True
+        payload = {
+            "type": "final",
+            "answer": "Planner failed to complete request.",
+            "sources": [],
+            "actions": ["planner_error"],
+            "planner_model_used": None,
+            "error": str(exc)[:200],
+            "planner_models": _planner_model_candidates(planner, model),
+            "llm_used": True,
+        }
         if model:
-            payload["llm_model"] = model
+            payload["llm_model_requested"] = model
         return payload
 
     response = dict(result)

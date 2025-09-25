@@ -199,6 +199,13 @@ make llm-models   # lists models returned by /api/tags
 The default behaviour stays fully local: no external APIs are contacted unless you explicitly enable Ollama. Set `SMART_USE_LLM=true`
 in `.env` if you want the toggle pre-enabled for every user.
 
+### Planner LLM fallback
+
+- `models.llm_primary` in `config.yaml` selects the planner's primary Ollama model.
+- `models.llm_fallback` defines an optional backup automatically used when the primary returns `404`/`model not found`.
+- Pull at least one model locally: `ollama pull gpt-oss:20b` or `ollama pull gemma3:27b`.
+- When both models are missing the `/api/search` planner response stays `200` and returns `{"type":"final","answer":"Planner LLM is unavailable."}` so the UI can degrade gracefully.
+
 ## Diagnostics snapshot API
 
 Operators can capture the current repository state and runtime logs without leaving the browser. `POST /api/diagnostics` enqueues a
