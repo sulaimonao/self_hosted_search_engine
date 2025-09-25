@@ -135,6 +135,21 @@ class VectorStore:
             sanitized[key] = str(value)
         return sanitized
 
+    def is_empty(self) -> bool:
+        """Return ``True`` when the vector store has no indexed documents."""
+
+        with duckdb.connect(str(self._db_path)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+        doc_count = int(row[0]) if row and row[0] is not None else 0
+        if doc_count > 0:
+            return False
+        try:
+            with self._collection_lock:
+                collection_total = self._collection.count()
+        except Exception:  # pragma: no cover - defensive guard
+            return doc_count == 0
+        return int(collection_total or 0) == 0
+
     def needs_update(self, url: str, etag: str | None, content_hash: str) -> bool:
         with duckdb.connect(str(self._db_path)) as conn:
             row = conn.execute(

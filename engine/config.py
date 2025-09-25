@@ -43,12 +43,21 @@ class CrawlConfig:
 
 
 @dataclass(frozen=True)
+class BootstrapConfig:
+    enabled: bool
+    queries: tuple[str, ...]
+    use_llm: bool
+    llm_model: str | None
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     models: ModelConfig
     ollama: OllamaConfig
     retrieval: RetrievalConfig
     index: IndexConfig
     crawl: CrawlConfig
+    bootstrap: BootstrapConfig | None = None
 
     @staticmethod
     def _resolve_path(path_value: str | Path, base_dir: Path) -> Path:
@@ -68,6 +77,7 @@ class EngineConfig:
         retrieval = data.get("retrieval", {})
         index = data.get("index", {})
         crawl = data.get("crawl", {})
+        bootstrap = data.get("bootstrap")
 
         model_cfg = ModelConfig(
             llm_primary=str(models.get("llm_primary", "gemma2:latest")),
@@ -100,12 +110,44 @@ class EngineConfig:
             max_pages=int(crawl.get("max_pages", 5)),
             sleep_seconds=float(crawl.get("sleep_seconds", 1.0)),
         )
+
+        bootstrap_cfg: BootstrapConfig | None = None
+        if isinstance(bootstrap, dict):
+            raw_queries = bootstrap.get("queries", [])
+            if isinstance(raw_queries, str):
+                raw_queries = [raw_queries]
+            queries: list[str] = []
+            if isinstance(raw_queries, (list, tuple, set)):
+                for item in raw_queries:
+                    text = str(item).strip()
+                    if text:
+                        queries.append(text)
+            enabled = bool(bootstrap.get("enabled", bool(queries)))
+            use_llm = bool(bootstrap.get("use_llm", True))
+            llm_model_raw = bootstrap.get("llm_model")
+            llm_model = str(llm_model_raw).strip() if llm_model_raw else None
+            if queries:
+                bootstrap_cfg = BootstrapConfig(
+                    enabled=enabled,
+                    queries=tuple(queries),
+                    use_llm=use_llm,
+                    llm_model=llm_model,
+                )
+            elif enabled:
+                bootstrap_cfg = BootstrapConfig(
+                    enabled=True,
+                    queries=tuple(),
+                    use_llm=use_llm,
+                    llm_model=llm_model,
+                )
+
         return cls(
             models=model_cfg,
             ollama=ollama_cfg,
             retrieval=retrieval_cfg,
             index=index_cfg,
             crawl=crawl_cfg,
+            bootstrap=bootstrap_cfg,
         )
 
 
@@ -116,4 +158,5 @@ __all__ = [
     "RetrievalConfig",
     "IndexConfig",
     "CrawlConfig",
+    "BootstrapConfig",
 ]

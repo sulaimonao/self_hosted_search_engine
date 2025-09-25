@@ -40,8 +40,7 @@ run:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
 
 index:
-	@if [ -z "$$Q" ]; then echo "Set Q=\"seed query\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; python -c "import os; from app import coldstart; query = os.environ.get('"'"Q"'"', '"'"""'"'); count = coldstart.build_index(query); print(f'"'"Indexed {count} pages for query: {query}"'"')"'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; exec $(PY) bin/bootstrap_index.py'
 
 clean-index:
 	@mkdir -p "$(WHOOSH_DIR)"

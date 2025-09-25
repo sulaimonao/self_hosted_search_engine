@@ -17,3 +17,11 @@ crawl:
   read_timeout: 30
   max_pages: 5
   sleep_seconds: 1.0
+bootstrap:
+  enabled: true
+  use_llm: true
+  llm_model: null
+  queries:
+    - "top news in the USA"
+    - "how to build a python library"
+    - "latest breakthroughs in artificial intelligence"
