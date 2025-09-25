@@ -80,10 +80,15 @@ class EngineConfig:
             min_hits=int(retrieval.get("min_hits", 1)),
             similarity_threshold=float(retrieval.get("similarity_threshold", 0.2)),
         )
-        persist_dir_value = os.getenv(
-            "CHROMA_PERSIST_DIR", index.get("persist_dir", "data/chroma")
-        )
-        db_path_value = os.getenv("CHROMA_DB_PATH", index.get("db_path", "data/index.duckdb"))
+        persist_dir_env = os.getenv("CHROMA_PERSIST_DIR")
+        if persist_dir_env is not None and not persist_dir_env.strip():
+            persist_dir_env = None
+        persist_dir_value = persist_dir_env or index.get("persist_dir", "data/chroma")
+
+        db_path_env = os.getenv("CHROMA_DB_PATH")
+        if db_path_env is not None and not db_path_env.strip():
+            db_path_env = None
+        db_path_value = db_path_env or index.get("db_path", "data/index.duckdb")
         index_cfg = IndexConfig(
             persist_dir=cls._resolve_path(persist_dir_value, base_dir),
             db_path=cls._resolve_path(db_path_value, base_dir),
