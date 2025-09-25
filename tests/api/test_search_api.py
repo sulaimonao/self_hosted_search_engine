@@ -278,7 +278,7 @@ def test_search_planner_fallback_succeeds(monkeypatch):
     def _patched_chat_json(messages, *, model=None):
         calls.append(model)
         if model == "primary-model":
-            raise LLMError("model primary-model not found")
+            raise LLMError("HTTP 404 (model not found): primary-model")
         assert model == "fallback-model"
         return {"type": "final", "answer": "ok", "sources": []}
 
@@ -297,6 +297,35 @@ def test_search_planner_fallback_succeeds(monkeypatch):
     assert payload["llm_model"] == "fallback-model"
     assert payload.get("llm_model_requested") == "primary-model"
     assert calls == ["primary-model", "fallback-model"]
+
+
+def test_search_planner_reports_llm_error():
+    store = StubStore([])
+    coldstart = ColdStartSpy()
+    rag_agent = StubRagAgent()
+    app = _build_app(store, coldstart, rag_agent)
+
+    class _BrokenPlanner:
+        default_model = "primary-model"
+        fallback_model = "fallback-model"
+
+        def run(self, query: str, *, context=None, model=None):
+            raise LLMError("HTTP 404 (model not found): gemma3:27b")
+
+    app.config["RAG_PLANNER_AGENT"] = _BrokenPlanner()
+
+    client = app.test_client()
+    response = client.get("/api/search", query_string={"q": "need data", "llm": "on"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["type"] == "final"
+    assert payload["answer"] == "Planner LLM is unavailable."
+    assert payload["actions"] == ["planner_unavailable"]
+    assert payload["planner_model_used"] is None
+    assert payload["llm_used"] is True
+    assert payload["planner_models"] == ["primary-model", "fallback-model"]
+    assert payload["error"].startswith("HTTP 404")
 
 
 def test_search_reports_embedding_unavailable():

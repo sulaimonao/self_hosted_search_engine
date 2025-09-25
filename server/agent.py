@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass, field
+from logging import Logger
 from typing import Any, Iterable, Mapping, Sequence
 
 from .llm import LLMError, OllamaJSONClient
+from .logging_utils import get_logger
 from .tools import ToolDispatcher
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger("agent")
 
 SYSTEM_PROMPT = (
     "You are the autonomous planner for a self-hosted search stack. "
@@ -71,7 +72,7 @@ class PlannerAgent:
     default_model: str | None = None
     fallback_model: str | None = None
     max_iterations: int = 6
-    logger: logging.Logger = field(default=LOGGER)
+    logger: Logger = field(default=LOGGER)
 
     def run(
         self,
@@ -185,63 +186,55 @@ class PlannerAgent:
         model: str | None,
     ) -> tuple[Mapping[str, Any], str | None]:
         primary_model = model or self.default_model
-        resolved_primary = self._resolved_model_name(primary_model)
-        self.logger.info(
-            "planner llm attempt=primary model=%s", resolved_primary or "<auto>"
-        )
+
+        def _call(use_model: str | None) -> tuple[Mapping[str, Any], str | None]:
+            response = self.llm.chat_json(messages, model=use_model)
+            if not isinstance(response, Mapping):
+                raise LLMError("Planner LLM returned non-JSON payload")
+            payload = dict(response)
+            resolved = use_model or getattr(self.llm, "default_model", None)
+            if resolved:
+                payload.setdefault("planner_model_used", resolved)
+            return payload, resolved
+
         try:
-            response = self.llm.chat_json(messages, model=primary_model)
-            return response, resolved_primary
-        except LLMError as primary_error:
-            self.logger.warning(
-                "planner llm primary model=%s failed: %s",
-                resolved_primary or "<auto>",
-                primary_error,
+            self.logger.info(
+                "planner.llm attempt=primary model=%s", primary_model or "<auto>"
             )
-            fallback_model = self.fallback_model
+            return _call(primary_model)
+        except LLMError as err:
+            self.logger.warning(
+                "planner.primary_failed model=%s err=%s",
+                primary_model or "<auto>",
+                err,
+            )
             if (
-                not fallback_model
-                or fallback_model == primary_model
-                or not self._is_missing_model_error(primary_error)
+                not self.fallback_model
+                or self.fallback_model == primary_model
+                or not self._is_model_missing(err)
             ):
                 raise
-        fallback_model = self.fallback_model
-        resolved_fallback = self._resolved_model_name(fallback_model)
-        self.logger.info(
-            "planner llm attempt=fallback model=%s", resolved_fallback or "<auto>"
-        )
-        try:
-            response = self.llm.chat_json(messages, model=fallback_model)
-            return response, resolved_fallback
-        except LLMError as fallback_error:
-            self.logger.warning(
-                "planner llm fallback model=%s failed: %s",
-                resolved_fallback or "<auto>",
-                fallback_error,
-            )
-            raise
-
-    def _resolved_model_name(self, model: str | None) -> str | None:
-        if model:
-            return model
-        if self.default_model:
-            return self.default_model
-        return getattr(self.llm, "default_model", None)
+            try:
+                self.logger.info(
+                    "planner.llm attempt=fallback model=%s", self.fallback_model
+                )
+                return _call(self.fallback_model)
+            except Exception as fallback_err:
+                self.logger.error(
+                    "planner.fallback_failed model=%s err=%s",
+                    self.fallback_model,
+                    fallback_err,
+                )
+                raise
 
     @staticmethod
-    def _is_missing_model_error(error: LLMError) -> bool:
-        message = str(error).lower()
-        if "model" not in message:
-            return False
-        keywords = (
-            "not found",
-            "missing",
-            "no such",
-            "unavailable",
-            "pull the model",
-            "is not installed",
+    def _is_model_missing(error: Exception) -> bool:
+        text = str(error).lower()
+        return (
+            ("404" in text and "not found" in text)
+            or "model not found" in text
+            or "no such model" in text
         )
-        return any(keyword in message for keyword in keywords)
 
 
 __all__ = ["PlannerAgent", "SYSTEM_PROMPT", "FEW_SHOT_MESSAGES"]
