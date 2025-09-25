@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 from search import query as query_module
@@ -25,13 +26,39 @@ class SearchService:
         self._lock = threading.Lock()
         self._index = None
         self._index_dir = None
+        self._index_generation = self._read_index_generation()
+
+    def _read_index_generation(self) -> int:
+        """Return a monotonic marker for the current on-disk index state."""
+
+        path = getattr(self.config, "last_index_time_path", None)
+        if not path:
+            return 0
+        try:
+            marker_path = Path(path)
+        except TypeError:
+            return 0
+        try:
+            raw = marker_path.read_text("utf-8").strip()
+        except OSError:
+            return 0
+        try:
+            return int(raw or 0)
+        except ValueError:
+            return 0
 
     def _get_index(self):
+        generation = self._read_index_generation()
         with self._lock:
-            if self._index and self._index_dir == self.config.index_dir:
+            if (
+                self._index
+                and self._index_dir == self.config.index_dir
+                and self._index_generation == generation
+            ):
                 return self._index
             self._index = ensure_index(self.config.index_dir)
             self._index_dir = self.config.index_dir
+            self._index_generation = generation
             return self._index
 
     def reload_index(self) -> None:
@@ -40,6 +67,7 @@ class SearchService:
         with self._lock:
             self._index = ensure_index(self.config.index_dir)
             self._index_dir = self.config.index_dir
+            self._index_generation = self._read_index_generation()
 
     def _estimate_confidence(self, results: Sequence[dict]) -> float:
         if not results:
