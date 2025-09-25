@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .llm import LLMError, OllamaJSONClient
 from .logging_utils import get_logger
 from .tools import ToolDispatcher
+from .runlog import add_run_log_line
 
 LOGGER = get_logger("agent")
 
@@ -82,6 +83,7 @@ class PlannerAgent:
         model: str | None = None,
     ) -> Mapping[str, Any]:
         self.logger.info("planner starting query=%s", query)
+        add_run_log_line(f"planner start: {query[:80]}")
         messages = list(self._bootstrap_messages(query, context))
         steps: list[dict[str, Any]] = []
         active_model = model or self.default_model
@@ -120,6 +122,7 @@ class PlannerAgent:
                 continue
             if message_type == "final":
                 final_payload = self._normalize_final(response, steps, last_model_used)
+                add_run_log_line("planner finished")
                 self.logger.info("planner completed query=%s", query)
                 return final_payload
             error = {
@@ -145,6 +148,7 @@ class PlannerAgent:
             "error": "iteration limit reached",
             "steps": steps,
         }
+        add_run_log_line("planner hit iteration limit")
         if last_model_used:
             payload["planner_model_used"] = last_model_used
         return payload

@@ -21,6 +21,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple, cast
 
 import yaml  # type: ignore[import]
 
+from server.tool_logging import log_tool
+
 
 @dataclass
 class Policy:
@@ -147,6 +149,7 @@ def _budget_guard(diff: str) -> None:
         raise RuntimeError(f"change budget exceeded: files={len(files)} loc={loc}")
 
 
+@log_tool("repo.write_unified_diff")
 def repo_write_unified_diff(diff: str) -> Dict[str, object]:
     """Apply a unified diff via ``git apply --index`` within policy bounds."""
 

@@ -13,6 +13,8 @@ from engine.indexing.chunk import TokenChunker
 from engine.indexing.crawl import CrawlClient, CrawlError
 from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 
+from server.tool_logging import log_tool
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -182,12 +184,12 @@ class ToolDispatcher:
 
     def __post_init__(self) -> None:
         self._registry = {
-            "index.search": self.index_api.search,
-            "index.upsert": self.index_api.upsert,
-            "crawl.fetch": self.crawler_api.fetch,
-            "crawl.seeds": self.crawler_api.seeds_from_registry,
-            "embed.query": self.embed_api.embed_query,
-            "embed.documents": self.embed_api.embed_documents,
+            "index.search": log_tool("index.search")(self.index_api.search),
+            "index.upsert": log_tool("index.upsert")(self.index_api.upsert),
+            "crawl.fetch": log_tool("crawl.fetch")(self.crawler_api.fetch),
+            "crawl.seeds": log_tool("crawl.seeds")(self.crawler_api.seeds_from_registry),
+            "embed.query": log_tool("embed.query")(self.embed_api.embed_query),
+            "embed.documents": log_tool("embed.documents")(self.embed_api.embed_documents),
         }
 
     def execute(self, tool: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
