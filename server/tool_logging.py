@@ -6,7 +6,16 @@ import time
 from functools import wraps
 from typing import Any, Callable, Mapping, MutableMapping
 
-from flask import g
+try:  # pragma: no cover - optional flask dependency for tooling
+    from flask import g, has_app_context, has_request_context
+except Exception:  # pragma: no cover - allows usage without flask context
+    g = None  # type: ignore
+
+    def has_app_context() -> bool:  # type: ignore
+        return False
+
+    def has_request_context() -> bool:  # type: ignore
+        return False
 
 from backend.logging_utils import event_base, redact, write_event
 from server.runlog import add_run_log_line
@@ -49,6 +58,22 @@ def _summarize_error(tool_name: str, error: Mapping[str, Any]) -> str:
     return f"{tool_name} error"
 
 
+def _get_context_attr(name: str) -> Any:
+    """Safely retrieve attributes from ``flask.g`` when available."""
+
+    if g is None:
+        return None
+    try:
+        if not (has_request_context() or has_app_context()):
+            return None
+    except RuntimeError:  # pragma: no cover - defensive for partial flask setup
+        return None
+    try:
+        return getattr(g, name, None)
+    except RuntimeError:
+        return None
+
+
 def log_tool(tool_name: str) -> Callable[[ToolFunc], ToolFunc]:
     """Decorator emitting start/end/error events around tool execution."""
 
@@ -56,8 +81,8 @@ def log_tool(tool_name: str) -> Callable[[ToolFunc], ToolFunc]:
         @wraps(fn)
         def wrapped(*args: Any, **kwargs: Any) -> Any:
             start = time.time()
-            request_id = getattr(g, "request_id", None)
-            session_id = getattr(g, "session_id", None)
+            request_id = _get_context_attr("request_id")
+            session_id = _get_context_attr("session_id")
             write_event(
                 event_base(
                     event="tool.start",
