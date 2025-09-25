@@ -33,9 +33,23 @@ setup:
 	. $(VENV)/bin/activate && pip install -U pip setuptools wheel && pip install -r requirements.txt && pip install -e .
 	$(PLAYWRIGHT) install chromium
 	$(PY) -c "import backend; print('backend package import ok')"
+	@if [ -f frontend/package.json ]; then \
+		echo "Installing frontend dependencies..."; \
+		(cd frontend && npm install); \
+	fi
 
 dev:
+	@trap 'kill 0' EXIT; \
+	$(MAKE) dev-backend & \
+	$(MAKE) dev-frontend & \
+	wait
+
+dev-backend:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; NORMALIZED_PATH="${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"; CHROMA_PERSIST_DIR="${CHROMA_PERSIST_DIR:-./data/chroma}"; CHROMADB_DISABLE_TELEMETRY="${CHROMADB_DISABLE_TELEMETRY:-1}"; FLASK_RUN_PORT="${UI_PORT:-${FLASK_RUN_PORT:-5000}}"; FLASK_RUN_HOST="${FLASK_RUN_HOST:-127.0.0.1}"; export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST; $(PY) bin/dev_check.py; exec $(PY) -m flask --app app --debug run'
+
+dev-frontend:
+	@echo "Starting frontend development server..."
+	@(cd frontend && npm run dev)
 
 agent-dev:
 	@$(MAKE) dev
