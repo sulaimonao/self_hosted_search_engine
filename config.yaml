@@ -1,7 +1,7 @@
 models:
   llm_primary: "gemma2:latest"
   llm_fallback: "gpt-oss:latest"
-  embed: "embeddinggemma"
+  embed: "embedding-gemma"
 ollama:
   base_url: "http://localhost:11434"
 retrieval:
@@ -17,6 +17,9 @@ crawl:
   read_timeout: 30
   max_pages: 5
   sleep_seconds: 1.0
+agent:
+  max_fetch_per_turn: 3
+  coverage_threshold: 0.6
 bootstrap:
   enabled: true
   use_llm: true

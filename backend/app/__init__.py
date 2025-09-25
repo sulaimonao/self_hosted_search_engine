@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -22,12 +25,21 @@ EMBEDDING_MODEL_PATTERNS = [
     re.compile(r"(?:^|[-_:])e5[-_:]", re.IGNORECASE),
 ]
 
+CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.yaml"
+
 
 def _is_embedding_model(name: str) -> bool:
     return any(pattern.search(name) for pattern in EMBEDDING_MODEL_PATTERNS)
 
 
 def create_app() -> Flask:
+    from backend.agent.document_store import DocumentStore
+    from backend.agent.frontier_store import FrontierStore
+    from backend.agent.runtime import AgentRuntime, CrawlFetcher
+    from backend.retrieval.vector_store import LocalVectorStore
+    from engine.indexing.crawl import CrawlClient
+
+    from .api import agent_tools as agent_tools_api
     from .api import chat as chat_api
     from .api import diagnostics as diagnostics_api
     from .api import jobs as jobs_api
@@ -69,6 +81,36 @@ def create_app() -> Flask:
     search_service = SearchService(config, manager)
     refresh_worker = RefreshWorker(config, search_service=search_service, db=db)
 
+    documents_dir = config.agent_data_dir / "documents"
+    vector_dir = config.agent_data_dir / "vector_store"
+    frontier_store = FrontierStore(config.frontier_db_path)
+    document_store = DocumentStore(documents_dir)
+    vector_store = LocalVectorStore(vector_dir)
+    crawler_client = CrawlClient(
+        user_agent=os.getenv("AGENT_USER_AGENT", "SelfHostedSearchAgent/0.1"),
+        request_timeout=float(os.getenv("AGENT_REQUEST_TIMEOUT", "15")),
+        read_timeout=float(os.getenv("AGENT_READ_TIMEOUT", "30")),
+        min_delay=float(os.getenv("AGENT_MIN_DELAY", "1.0")),
+    )
+    fetcher = CrawlFetcher(crawler_client)
+
+    with CONFIG_PATH.open("r", encoding="utf-8") as handle:
+        raw_yaml = yaml.safe_load(handle) or {}
+    agent_settings = raw_yaml.get("agent", {}) if isinstance(raw_yaml, dict) else {}
+    agent_max_fetch = int(agent_settings.get("max_fetch_per_turn", config.agent_max_fetch_per_turn))
+    agent_coverage_threshold = float(
+        agent_settings.get("coverage_threshold", config.agent_coverage_threshold)
+    )
+    agent_runtime = AgentRuntime(
+        search_service=search_service,
+        frontier=frontier_store,
+        document_store=document_store,
+        vector_store=vector_store,
+        fetcher=fetcher,
+        max_fetch_per_turn=agent_max_fetch,
+        coverage_threshold=agent_coverage_threshold,
+    )
+
     app.config.update(
         APP_CONFIG=config,
         JOB_RUNNER=runner,
@@ -76,6 +118,7 @@ def create_app() -> Flask:
         SEARCH_SERVICE=search_service,
         REFRESH_WORKER=refresh_worker,
         LEARNED_WEB_DB=db,
+        AGENT_RUNTIME=agent_runtime,
     )
 
     app.register_blueprint(search_api.bp)
@@ -85,6 +128,7 @@ def create_app() -> Flask:
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(refresh_api.bp)
+    app.register_blueprint(agent_tools_api.bp)
 
     @app.get("/healthz")
     def healthz():

@@ -22,6 +22,41 @@ make dev              # loads .env (if present) and starts the Flask dev server
 # UI is available at http://127.0.0.1:5000
 ```
 
+### Deep research agent
+
+Enable the agent runtime to let chat turns expand the local index automatically:
+
+```bash
+make agent-dev        # identical to `make dev` but highlights agent-specific logs
+```
+
+Key endpoints (all under `/api/tools/`):
+
+| Endpoint | Description |
+| --- | --- |
+| `POST /search_index` | Blend vector + BM25 retrieval, falling back to BM25 when embeddings are unavailable. |
+| `POST /enqueue_crawl` | Queue pages for polite background crawling with dedupe metadata (`topic`, `reason`, `source_task_id`). |
+| `POST /fetch_page` | Fetch and normalize a single page, storing it under `data/agent/documents/`. |
+| `POST /reindex` | Incrementally embed + upsert changed documents into the agent vector store (`data/agent/vector_store/`). |
+| `GET /status` | Return counters for the frontier queue and vector store. |
+| `POST /agent/turn` | Run the full policy loop (search → fetch ≤3 pages → reindex → synthesize answer with citations). |
+
+The agent persists its planning artefacts in `data/agent/`:
+
+- `frontier.sqlite3` stores the crawl queue with `source_task_id`, `topic`, and `reason` columns.
+- `documents/` holds normalized JSON captures keyed by URL hash.
+- `vector_store/` maintains `index.json` + `embeddings.npy` for semantic retrieval.
+
+Telemetry is always local-first. Events append to `data/telemetry/events.ndjson`; configure a different path via `TELEMETRY_EVENTS_PATH`.
+
+Run the full test suite (unit + API + e2e):
+
+```bash
+pytest -q
+```
+
+The e2e test (`tests/e2e/test_agent_improves_answer.py`) proves that answering the same query twice increases coverage and surfaces new citations after the agent fetches and indexes pages.
+
 A quick smoke check is available too:
 
 ```bash
