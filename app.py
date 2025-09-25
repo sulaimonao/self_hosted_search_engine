@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -173,6 +174,76 @@ app.config.update(
     RAG_PLANNER_TOOLS=tool_dispatcher,
     RAG_PLANNER_AGENT=planner_agent,
 )
+
+
+def _schedule_bootstrap_index() -> None:
+    if testing_mode:
+        return
+    bootstrap_cfg = ENGINE_CONFIG.bootstrap
+    if bootstrap_cfg is None or not bootstrap_cfg.enabled:
+        return
+    if not bootstrap_cfg.queries:
+        logging.getLogger(__name__).info(
+            "Bootstrap indexing enabled but no queries configured; skipping."
+        )
+        return
+    try:
+        if not vector_store.is_empty():
+            logging.getLogger(__name__).debug(
+                "Vector store already populated; skipping bootstrap indexing."
+            )
+            return
+    except Exception:  # pragma: no cover - defensive logging only
+        logging.getLogger(__name__).debug(
+            "Unable to determine vector store state; skipping bootstrap indexing.",
+            exc_info=True,
+        )
+        return
+
+    def _run_bootstrap() -> None:
+        logger = logging.getLogger(__name__)
+        queries = list(bootstrap_cfg.queries)
+        logger.info("Bootstrapping index with %d queries", len(queries))
+        try:
+            status = embed_manager.ensure(bootstrap_cfg.llm_model or embed_model_name)
+        except Exception:  # pragma: no cover - defensive logging only
+            logger.exception("Bootstrap failed while ensuring embedding model")
+            return
+        if status.get("state") != "ready":
+            detail = status.get("detail") or status.get("error") or "unknown"
+            logger.warning(
+                "Skipping bootstrap: embedding model not ready (%s)", detail
+            )
+            return
+        active_model = status.get("model") or embed_manager.active_model
+        if active_model:
+            try:
+                embedder.set_model(str(active_model))
+            except Exception:  # pragma: no cover - defensive logging only
+                logger.exception("Failed to set embedder model during bootstrap")
+                return
+        for query in queries:
+            try:
+                count = coldstart.build_index(
+                    query,
+                    use_llm=bootstrap_cfg.use_llm,
+                    llm_model=bootstrap_cfg.llm_model,
+                )
+            except Exception:  # pragma: no cover - defensive logging only
+                logger.exception(
+                    "Bootstrap indexing failed for query '%s'", query
+                )
+                continue
+            logger.info(
+                "Bootstrapped %d pages for query '%s'", count, query
+            )
+
+    threading.Thread(
+        target=_run_bootstrap, name="bootstrap-index", daemon=True
+    ).start()
+
+
+_schedule_bootstrap_index()
 
 
 if __name__ == "__main__":

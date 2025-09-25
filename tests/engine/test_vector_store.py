@@ -42,6 +42,26 @@ def test_vector_store_round_trip(tmp_path):
     assert retrieved.similarity >= 0.99
 
 
+def test_is_empty(tmp_path):
+    persist_dir = tmp_path / "chroma"
+    db_path = tmp_path / "index.duckdb"
+    store = VectorStore(persist_dir, db_path)
+
+    assert store.is_empty() is True
+
+    url = "https://example.com/bootstrap"
+    title = "Bootstrap"
+    etag = "W/\"67890\""
+    content = "Bootstrap content"
+    content_hash = _hash(content)
+    chunk = Chunk(text=content, start=0, end=len(content), token_count=3)
+    embedding = [0.2, 0.3, 0.4]
+
+    store.upsert(url, title, etag, content_hash, [chunk], [embedding])
+
+    assert store.is_empty() is False
+
+
 class RecordingCollection:
     def __init__(self) -> None:
         self.deleted: list[dict] = []
