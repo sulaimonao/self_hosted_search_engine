@@ -54,6 +54,7 @@ def create_app() -> Flask:
     from .search.service import SearchService
     from server.refresh_worker import RefreshWorker
     from server.learned_web_db import get_db
+    from server import middleware_logging
 
     metrics = metrics_module
 
@@ -65,6 +66,9 @@ def create_app() -> Flask:
         static_folder=str(static_folder),
         template_folder=str(template_folder),
     )
+
+    app.before_request(middleware_logging.before_request)
+    app.after_request(middleware_logging.after_request)
 
     config = AppConfig.from_env()
     config.ensure_dirs()

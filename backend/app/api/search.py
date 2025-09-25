@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import textwrap
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from markupsafe import escape
 
 from engine.agents.rag import RagAgent
@@ -17,7 +18,9 @@ from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.indexing.coldstart import ColdStartIndexer
 from engine.llm.ollama_client import OllamaClientError
 from backend.app.embedding_manager import EmbeddingManager
+from backend.logging_utils import event_base, redact, write_event
 from server.llm import LLMError
+from server.runlog import add_run_log_line, current_run_log
 
 bp = Blueprint("search_api", __name__, url_prefix="/api")
 
@@ -237,6 +240,47 @@ def run_agent(
     model: str | None = None,
     context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    start = time.time()
+    route = f"{request.method} {request.path}" if request else "agent"
+    request_id = getattr(g, "request_id", None)
+    session_id = getattr(g, "session_id", None)
+    user_id = getattr(g, "user_id", None)
+    add_run_log_line(f"agent turn: {query[:80]}")
+
+    def _finalize(payload: dict[str, Any], *, status: str, message: str) -> dict[str, Any]:
+        if status == "ok":
+            add_run_log_line("agent turn complete")
+        else:
+            add_run_log_line(f"agent status={status}")
+        response_payload = dict(payload)
+        run_log = current_run_log()
+        if run_log is not None and "run_log" not in response_payload:
+            response_payload["run_log"] = run_log.dump()
+        meta_payload = dict(response_payload)
+        if isinstance(meta_payload.get("run_log"), list):
+            meta_payload["run_log"] = len(meta_payload["run_log"])
+        meta = {
+            "query": query,
+            "model_requested": model,
+            "response": meta_payload,
+        }
+        duration_ms = int((time.time() - start) * 1000)
+        write_event(
+            event_base(
+                event="agent.turn",
+                level="INFO" if status == "ok" else "ERROR",
+                status=status,
+                route=route,
+                request_id=request_id,
+                session_id=session_id,
+                user_id=user_id,
+                duration_ms=duration_ms,
+                msg=message,
+                meta=meta,
+            )
+        )
+        return response_payload
+
     planner = current_app.config.get("RAG_PLANNER_AGENT")
     if planner is None:
         payload = _warming_payload(
@@ -247,7 +291,7 @@ def run_agent(
         payload["llm_used"] = True
         if model:
             payload["llm_model"] = model
-        return payload
+        return _finalize(payload, status="error", message="planner unavailable")
 
     engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
     embedder: OllamaEmbedder | None = current_app.config.get("RAG_EMBEDDER")
@@ -267,7 +311,7 @@ def run_agent(
         payload["llm_used"] = True
         if model:
             payload["llm_model"] = model
-        return payload
+        return _finalize(payload, status="error", message="embedder unavailable")
 
     ready, _, status, detail = _ensure_embedder_ready(
         embed_manager, embedder, embed_model_name
@@ -277,7 +321,7 @@ def run_agent(
         payload["llm_used"] = True
         if model:
             payload["llm_model"] = model
-        return payload
+        return _finalize(payload, status="error", message="embedding not ready")
 
     planner_context: dict[str, Any] = {}
     if engine_config is not None:
@@ -304,7 +348,7 @@ def run_agent(
         }
         if model:
             payload["llm_model_requested"] = model
-        return payload
+        return _finalize(payload, status="error", message="planner llm error")
     except Exception as exc:  # pragma: no cover - defensive logging
         current_app.logger.exception("planner execution failed for query='%s'", query)
         payload = {
@@ -319,7 +363,7 @@ def run_agent(
         }
         if model:
             payload["llm_model_requested"] = model
-        return payload
+        return _finalize(payload, status="error", message="planner execution error")
 
     response = dict(result)
     used_model = response.get("planner_model_used")
@@ -343,7 +387,7 @@ def run_agent(
             "planner tool summary query='%s': %s", query, "; ".join(summaries)
         )
 
-    return response
+    return _finalize(response, status="ok", message="agent turn ok")
 
 
 def _planner_model_candidates(planner: Any, requested: str | None) -> list[str]:

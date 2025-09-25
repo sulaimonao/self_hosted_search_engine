@@ -89,7 +89,12 @@ The agent persists its planning artefacts in `data/agent/`:
 - `documents/` holds normalized JSON captures keyed by URL hash.
 - `vector_store/` maintains `index.json` + `embeddings.npy` for semantic retrieval.
 
-Telemetry is always local-first. Events append to `data/telemetry/events.ndjson`; configure a different path via `TELEMETRY_EVENTS_PATH`.
+## Observability
+
+- Structured telemetry is written to newline-delimited JSON under `data/telemetry/events.ndjson`. Override the directory via `LOG_DIR` and tune field truncation with `LOG_MAX_FIELD_BYTES`.
+- Every Flask request emits `req.start`/`req.end` entries with request, session, and user correlation IDs. Tool invocations emit `tool.start`/`tool.end`/`tool.error` with redacted inputs and previews of the results.
+- Planner responses append `agent.turn` summaries, and API responses now return a `run_log` array so the UI can render a per-turn activity feed.
+- Follow live events locally with `./scripts/tail_telemetry.sh`. No external services are required; set `OTEL_EXPORTER_OTLP_ENDPOINT` to mirror the stream into an OpenTelemetry collector if desired.
 
 Run the full test suite (unit + API + e2e):
 
