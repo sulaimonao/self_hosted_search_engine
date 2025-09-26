@@ -65,6 +65,7 @@ Set `NEXT_PUBLIC_API_BASE_URL` to the live backend URL before building if the AP
 
 ## Features snapshot
 
+- Unified omnibox workflow: keyword queries call `/api/search` and render side-by-side results with quick "Ask agent" escalation into chat.
 - Split pane layout with in-app browser preview, omnibox, and copilot chat
 - Streaming chat responses from `/api/chat` with inline action cards (crawl, index, seeds)
 - Drag & drop URLs into the crawl queue and highlight capture with manual approvals
@@ -82,3 +83,14 @@ The Crawl Manager widget now persists entries through the seed registry API:
 Agent-approved crawl actions also persist new seeds through the same API helpers so manual edits and automated approvals stay in sync.
 
 For backend configuration and deeper agent controls, see the repository root `README`.
+
+## Search and chat interplay
+
+The omnibox now routes non-URL submissions through the local semantic index:
+
+1. Press Enter on a keyword and the UI issues `GET /api/search?q=...` via the new `searchIndex` helper.
+2. Results, confidence, and crawl status appear in the Search panel beside the preview.
+3. Use the **Ask agent** button to send the same query to `/api/chat` when you need reasoning or follow-up actions.
+4. If the search triggers a focused crawl, progress is reflected both in the panel and the Agent Ops tab.
+
+Paste an absolute URL at any time to jump directly into the preview pane without triggering search.
