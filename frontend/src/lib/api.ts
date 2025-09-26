@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatStreamChunk,
   CrawlScope,
+  SeedRegistryResponse,
   JobStatusSummary,
   ModelStatus,
   OllamaStatus,
@@ -269,6 +270,95 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
     status,
     models: knownModels,
   };
+}
+
+export interface SaveSeedRequest {
+  action: "create" | "update" | "delete";
+  revision: string;
+  seed: {
+    id?: string;
+    url?: string;
+    scope?: CrawlScope;
+    notes?: string;
+  };
+}
+
+export async function fetchSeeds(): Promise<SeedRegistryResponse> {
+  const response = await fetch(api("/api/seeds"));
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Unable to fetch seeds (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function saveSeed(request: SaveSeedRequest): Promise<SeedRegistryResponse> {
+  const { action, revision, seed } = request;
+  let method: "POST" | "PUT" | "DELETE";
+  let path = "/api/seeds";
+  let body: Record<string, unknown> = { revision };
+
+  if (action === "create") {
+    method = "POST";
+    if (!seed.url || !seed.scope) {
+      throw new Error("Seed url and scope are required to create a seed");
+    }
+    body = { ...body, url: seed.url, scope: seed.scope, notes: seed.notes ?? undefined, id: seed.id };
+  } else if (action === "update") {
+    method = "PUT";
+    if (!seed.id) {
+      throw new Error("Seed id is required to update a seed");
+    }
+    path = `/api/seeds/${encodeURIComponent(seed.id)}`;
+    body = { ...body };
+    if (typeof seed.url !== "undefined") {
+      body.url = seed.url;
+    }
+    if (typeof seed.scope !== "undefined") {
+      body.scope = seed.scope;
+    }
+    if (typeof seed.notes !== "undefined") {
+      body.notes = seed.notes;
+    }
+  } else {
+    method = "DELETE";
+    if (!seed.id) {
+      throw new Error("Seed id is required to delete a seed");
+    }
+    path = `/api/seeds/${encodeURIComponent(seed.id)}`;
+    body = { revision };
+  }
+
+  const response = await fetch(api(path), {
+    method,
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `Seed ${action} failed (${response.status})`;
+    let revisionHint: string | undefined;
+    try {
+      const parsed = text ? (JSON.parse(text) as { error?: string; revision?: string }) : null;
+      if (parsed?.error) {
+        message = parsed.error;
+      }
+      if (parsed?.revision) {
+        revisionHint = parsed.revision;
+      }
+    } catch {
+      // ignore
+    }
+    const error = new Error(message) as Error & { status?: number; revision?: string };
+    error.status = response.status;
+    if (revisionHint) {
+      error.revision = revisionHint;
+    }
+    throw error;
+  }
+
+  return response.json();
 }
 
 export interface SelectionResult {

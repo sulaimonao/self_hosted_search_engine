@@ -71,4 +71,14 @@ Set `NEXT_PUBLIC_API_BASE_URL` to the live backend URL before building if the AP
 - Live job log polling from `/api/jobs/:id/status` surfaced in the Agent Log & Job Status widgets
 - Model picker wired to `/api/llm/status` + `/api/llm/models`
 
+## Crawl queue workflow
+
+The Crawl Manager widget now persists entries through the seed registry API:
+
+1. On mount the component calls `GET /api/seeds` to hydrate the queue from `seeds/registry.yaml`.
+2. Adding, updating, or removing an entry issues `POST`/`PUT`/`DELETE` requests that require the latest `revision` hash. The backend returns the refreshed queue on every success.
+3. If the revision mismatches (another client wrote first) the API responds with `409 Conflict`; the UI automatically reloads and surfaces an error banner so users can retry safely.
+
+Agent-approved crawl actions also persist new seeds through the same API helpers so manual edits and automated approvals stay in sync.
+
 For backend configuration and deeper agent controls, see the repository root `README`.
