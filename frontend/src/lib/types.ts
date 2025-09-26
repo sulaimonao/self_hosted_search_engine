@@ -108,6 +108,35 @@ export interface ChatStreamChunk {
   load_duration?: number;
 }
 
+export type SearchResponseStatus = "ok" | "focused_crawl_running" | "warming" | string;
+
+export interface SearchHit {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  score?: number | null;
+  blendedScore?: number | null;
+  lang?: string | null;
+}
+
+export interface SearchIndexResponse {
+  status: SearchResponseStatus;
+  hits: SearchHit[];
+  llmUsed: boolean;
+  jobId?: string;
+  lastIndexTime?: number;
+  confidence?: number;
+  triggerReason?: string;
+  seedCount?: number;
+  detail?: string;
+  error?: string;
+  code?: string;
+  action?: string;
+  candidates?: Array<Record<string, unknown>>;
+  embedderStatus?: Record<string, unknown>;
+}
+
 export interface JobLogEvent {
   type: "log" | "status" | "error";
   message?: string;

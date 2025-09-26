@@ -24,6 +24,7 @@ import {
 import { OmniBox } from "@/components/omnibox";
 import { WebPreview } from "@/components/web-preview";
 import { ChatPanel } from "@/components/chat-panel";
+import { SearchResultsPanel } from "@/components/search-results-panel";
 import { AgentLog } from "@/components/agent-log";
 import { JobStatus } from "@/components/job-status";
 import { CrawlManager } from "@/components/crawl-manager";
@@ -32,6 +33,7 @@ import {
   extractSelection,
   fetchModelInventory,
   fetchSeeds,
+  searchIndex,
   reindexUrl,
   saveSeed,
   startCrawlJob,
@@ -52,6 +54,7 @@ import type {
   ProposedAction,
   SelectionActionPayload,
   SeedRecord,
+  SearchHit,
 } from "@/lib/types";
 
 const INITIAL_URL = "https://news.ycombinator.com";
@@ -92,6 +95,48 @@ const DEFAULT_CHAT_MESSAGES: ChatMessage[] = [
   },
 ];
 
+type SearchPanelStatus = "idle" | "loading" | "ok" | "warming" | "focused_crawl_running" | "error";
+
+interface SearchState {
+  status: SearchPanelStatus;
+  hits: SearchHit[];
+  query: string;
+  isLoading: boolean;
+  error: string | null;
+  detail: string | null;
+  jobId: string | null;
+  confidence: number | null;
+  llmUsed: boolean;
+  triggerReason: string | null;
+  seedCount: number | null;
+  action: string | null;
+  code: string | null;
+  candidates: Array<Record<string, unknown>>;
+  lastIndexTime: number | null;
+  lastFetchedAt: string | null;
+}
+
+function createInitialSearchState(): SearchState {
+  return {
+    status: "idle",
+    hits: [],
+    query: "",
+    isLoading: false,
+    error: null,
+    detail: null,
+    jobId: null,
+    confidence: null,
+    llmUsed: false,
+    triggerReason: null,
+    seedCount: null,
+    action: null,
+    code: null,
+    candidates: [],
+    lastIndexTime: null,
+    lastFetchedAt: null,
+  };
+}
+
 export function AppShell() {
   const [previewState, setPreviewState] = useState({
     history: [INITIAL_URL],
@@ -119,12 +164,14 @@ export function AppShell() {
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const streamingController = useRef<AbortController | null>(null);
   const jobSubscriptions = useRef(new Map<string, () => void>());
   const chatHistoryRef = useRef<ChatMessage[]>(chatMessages);
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   const currentUrl = previewState.history[previewState.index];
 
@@ -378,6 +425,100 @@ export function AppShell() {
     [appendLog]
   );
 
+  const handleSearch = useCallback(
+    async (value: string) => {
+      const query = value.trim();
+      if (!query) {
+        searchAbortRef.current?.abort();
+        searchAbortRef.current = null;
+        setSearchState(() => createInitialSearchState());
+        return;
+      }
+
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      const timestamp = new Date().toISOString();
+
+      setSearchState((state) => ({
+        ...state,
+        query,
+        status: "loading",
+        isLoading: true,
+        error: null,
+        detail: null,
+      }));
+
+      try {
+        const result = await searchIndex(query, { signal: controller.signal });
+        const normalizedStatus: SearchPanelStatus = result.error
+          ? "error"
+          : result.status === "focused_crawl_running"
+          ? "focused_crawl_running"
+          : result.status === "warming"
+          ? "warming"
+          : "ok";
+
+        setSearchState({
+          status: normalizedStatus,
+          hits: result.hits,
+          query,
+          isLoading: false,
+          error: result.error ?? null,
+          detail: result.detail ?? null,
+          jobId: result.jobId ?? null,
+          confidence: typeof result.confidence === "number" ? result.confidence : null,
+          llmUsed: result.llmUsed,
+          triggerReason: result.triggerReason ?? null,
+          seedCount: typeof result.seedCount === "number" ? result.seedCount : null,
+          action: result.action ?? null,
+          code: result.code ?? null,
+          candidates: result.candidates ?? [],
+          lastIndexTime: typeof result.lastIndexTime === "number" ? result.lastIndexTime : null,
+          lastFetchedAt: timestamp,
+        });
+
+        if (result.jobId) {
+          registerJob(result.jobId, `Focused crawl for "${query}"`);
+        }
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error ?? "Search failed");
+        setSearchState({
+          status: "error",
+          hits: [],
+          query,
+          isLoading: false,
+          error: message,
+          detail: null,
+          jobId: null,
+          confidence: null,
+          llmUsed: false,
+          triggerReason: null,
+          seedCount: null,
+          action: null,
+          code: null,
+          candidates: [],
+          lastIndexTime: null,
+          lastFetchedAt: timestamp,
+        });
+      } finally {
+        if (searchAbortRef.current === controller) {
+          searchAbortRef.current = null;
+        }
+      }
+    },
+    [registerJob]
+  );
+
+  const refreshSearch = useCallback(() => {
+    if (searchState.query) {
+      void handleSearch(searchState.query);
+    }
+  }, [handleSearch, searchState.query]);
+
   const createActionFromSelection = useCallback(
     (kind: ActionKind, payload: SelectionActionPayload) => {
       const action: ProposedAction = {
@@ -554,6 +695,19 @@ export function AppShell() {
     });
   }, [appendLog]);
 
+  const handleAskAgent = useCallback(
+    (question: string) => {
+      const prompt = question.trim();
+      if (!prompt) return;
+      if (isStreaming) {
+        handleStopStreaming();
+      }
+      setActiveTab("chat");
+      void handleSendChat(prompt);
+    },
+    [handleSendChat, handleStopStreaming, isStreaming]
+  );
+
   const handleOmniSubmit = useCallback(
     (value: string) => {
       const input = value.trim();
@@ -564,11 +718,10 @@ export function AppShell() {
         if (isStreaming) {
           handleStopStreaming();
         }
-        setActiveTab("chat");
-        void handleSendChat(input);
+        void handleSearch(input);
       }
     },
-    [handleNavigate, handleSendChat, handleStopStreaming, isStreaming, setActiveTab]
+    [handleNavigate, handleSearch, handleStopStreaming, isStreaming]
   );
 
   const handleApproveAction = useCallback(
@@ -872,6 +1025,12 @@ export function AppShell() {
   );
 
   useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -969,7 +1128,29 @@ export function AppShell() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="flex flex-1 flex-col lg:flex-row">
-        <section className="h-[45vh] flex-1 border-b lg:h-auto lg:flex-[1.4] lg:border-r">
+        <SearchResultsPanel
+          className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
+          query={searchState.query}
+          hits={searchState.hits}
+          status={searchState.status}
+          isLoading={searchState.isLoading}
+          error={searchState.error}
+          detail={searchState.detail}
+          onOpenHit={handleNavigate}
+          onAskAgent={handleAskAgent}
+          onRefresh={searchState.query ? refreshSearch : undefined}
+          currentUrl={currentUrl}
+          confidence={searchState.confidence}
+          llmUsed={searchState.llmUsed}
+          triggerReason={searchState.triggerReason}
+          seedCount={searchState.seedCount}
+          jobId={searchState.jobId}
+          lastFetchedAt={searchState.lastFetchedAt}
+          actionLabel={searchState.action}
+          code={searchState.code}
+          candidates={searchState.candidates}
+        />
+        <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
           <WebPreview
             url={currentUrl}
             history={previewState.history}
@@ -984,7 +1165,7 @@ export function AppShell() {
             onSelectionAction={createActionFromSelection}
           />
         </section>
-        <aside className="flex flex-1 flex-col">
+        <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
             <TabsList className="grid grid-cols-2 bg-muted/60">
               <TabsTrigger value="chat">Chat</TabsTrigger>

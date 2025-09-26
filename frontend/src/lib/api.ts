@@ -14,12 +14,158 @@ import type {
   ModelStatus,
   OllamaStatus,
   SelectionActionPayload,
+  SearchHit,
+  SearchIndexResponse,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
+
+export interface SearchIndexOptions {
+  signal?: AbortSignal;
+  limit?: number;
+  useLlm?: boolean;
+  model?: string | null;
+}
+
+function coerceNumber(input: unknown): number | null {
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return input;
+  }
+  if (typeof input === "string") {
+    const parsed = Number.parseFloat(input);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function coerceBoolean(input: unknown): boolean {
+  if (typeof input === "boolean") return input;
+  if (typeof input === "number") return input !== 0;
+  if (typeof input === "string") {
+    const normalized = input.trim().toLowerCase();
+    return normalized === "1" || normalized === "true" || normalized === "yes";
+  }
+  return false;
+}
+
+export async function searchIndex(
+  query: string,
+  options: SearchIndexOptions = {}
+): Promise<SearchIndexResponse> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    throw new Error("Search query is required");
+  }
+
+  const params = new URLSearchParams({ q: trimmed });
+  if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(options.limit));
+  }
+  if (typeof options.useLlm === "boolean") {
+    params.set("llm", options.useLlm ? "1" : "0");
+  }
+  if (options.model) {
+    params.set("model", options.model);
+  }
+
+  const response = await fetch(api(`/api/search?${params.toString()}`), {
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Search request failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const rawResults = Array.isArray(payload.results)
+    ? payload.results
+    : Array.isArray(payload.hits)
+    ? payload.hits
+    : [];
+
+  const hits: SearchHit[] = [];
+  rawResults.forEach((item, index) => {
+    if (!item || typeof item !== "object") {
+      return;
+    }
+    const entry = item as Record<string, unknown>;
+    const url = typeof entry.url === "string" ? entry.url.trim() : "";
+    const titleRaw = typeof entry.title === "string" ? entry.title.trim() : "";
+    const snippet = typeof entry.snippet === "string" ? entry.snippet : "";
+    const score = coerceNumber(entry.score);
+    const blended = coerceNumber(entry.blended_score ?? entry.blendedScore);
+    const lang = typeof entry.lang === "string" ? entry.lang : null;
+    const identifierCandidate =
+      typeof entry.id === "string" && entry.id.trim().length > 0
+        ? entry.id.trim()
+        : url
+        ? `${url}#${index}`
+        : `hit-${index}`;
+
+    const title = titleRaw || url || "Untitled";
+
+    hits.push({
+      id: identifierCandidate,
+      title,
+      url,
+      snippet,
+      score,
+      blendedScore: blended,
+      lang,
+    });
+  });
+
+  const status = typeof payload.status === "string" ? payload.status : "ok";
+  const jobIdValue =
+    typeof payload.job_id === "string"
+      ? payload.job_id
+      : typeof payload.jobId === "string"
+      ? payload.jobId
+      : undefined;
+  const lastIndexTime = coerceNumber(payload.last_index_time ?? payload.lastIndexTime) ?? undefined;
+  const confidence = coerceNumber(payload.confidence) ?? undefined;
+  const seedCount = coerceNumber(payload.seed_count ?? payload.seedCount);
+  const triggerReason =
+    typeof payload.trigger_reason === "string"
+      ? payload.trigger_reason
+      : typeof payload.triggerReason === "string"
+      ? payload.triggerReason
+      : undefined;
+  const detail = typeof payload.detail === "string" ? payload.detail : undefined;
+  const error = typeof payload.error === "string" ? payload.error : undefined;
+  const code = typeof payload.code === "string" ? payload.code : undefined;
+  const action = typeof payload.action === "string" ? payload.action : undefined;
+  const candidates = Array.isArray(payload.candidates)
+    ? payload.candidates.filter((candidate): candidate is Record<string, unknown> =>
+        candidate !== null && typeof candidate === "object"
+      )
+    : [];
+  const embedderStatus =
+    payload.embedder_status && typeof payload.embedder_status === "object"
+      ? (payload.embedder_status as Record<string, unknown>)
+      : undefined;
+
+  return {
+    status,
+    hits,
+    llmUsed: coerceBoolean(payload.llm_used ?? payload.llmUsed),
+    jobId: jobIdValue,
+    lastIndexTime,
+    confidence,
+    triggerReason,
+    seedCount: seedCount ?? undefined,
+    detail,
+    error,
+    code,
+    action,
+    candidates,
+    embedderStatus,
+  };
+}
 
 interface SerializableMessage {
   role: "user" | "assistant" | "system";
