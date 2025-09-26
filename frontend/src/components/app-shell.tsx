@@ -29,11 +29,13 @@ import { JobStatus } from "@/components/job-status";
 import { CrawlManager } from "@/components/crawl-manager";
 import { ActionEditor } from "@/components/action-editor";
 import {
+  extractSelection,
   fetchModelInventory,
   reindexUrl,
   startCrawlJob,
   streamChat,
   subscribeJob,
+  summarizeSelection,
 } from "@/lib/api";
 import type {
   ActionKind,
@@ -186,6 +188,23 @@ export function AppShell() {
     setAgentLog((prev) => [entry, ...prev].slice(0, 400));
   }, []);
 
+  const updateLogEntry = useCallback((entryId: string, patch: Partial<AgentLogEntry>) => {
+    setAgentLog((entries) =>
+      entries.map((entry) => {
+        if (entry.id !== entryId) return entry;
+        const nextMeta = {
+          ...(entry.meta ?? {}),
+          ...(patch.meta ?? {}),
+        };
+        return {
+          ...entry,
+          ...patch,
+          meta: Object.keys(nextMeta).length ? nextMeta : undefined,
+        };
+      })
+    );
+  }, []);
+
   const updateAction = useCallback((action: ProposedAction) => {
     setChatMessages((messages) =>
       messages.map((message) => {
@@ -197,6 +216,19 @@ export function AppShell() {
       })
     );
   }, []);
+
+  const updateMessageForAction = useCallback(
+    (actionId: string, updater: (message: ChatMessage) => ChatMessage) => {
+      setChatMessages((messages) =>
+        messages.map((message) => {
+          const hasAction = message.proposedActions?.some((existing) => existing.id === actionId);
+          if (!hasAction) return message;
+          return updater(message);
+        })
+      );
+    },
+    []
+  );
 
   const registerJob = useCallback(
     (jobId: string, description: string) => {
@@ -526,14 +558,112 @@ export function AppShell() {
             status: "info",
             timestamp: new Date().toISOString(),
           });
-        } else if (action.kind === "summarize") {
+        } else if (action.kind === "summarize" || action.kind === "extract") {
+          const payload = action.payload as SelectionActionPayload;
+          const selection = typeof payload?.selection === "string" ? payload.selection.trim() : "";
+          if (!selection) {
+            throw new Error("Selection payload is empty");
+          }
+          const metadata: Record<string, unknown> = { ...(action.metadata ?? {}) };
+          delete metadata.error;
+          delete metadata.result;
+          const progressLabel =
+            action.kind === "summarize" ? "Summarizing selection…" : "Extracting selection…";
+          metadata.progress = progressLabel;
+          updateAction({
+            ...action,
+            status: "executing",
+            metadata,
+          });
+          const logId = uid();
           appendLog({
-            id: uid(),
-            label: "Summary requested",
-            detail: "Summary will be provided in chat",
+            id: logId,
+            label: action.kind === "summarize" ? "Summarizing highlight" : "Extracting highlight",
+            detail: selection.slice(0, 120) + (selection.length > 120 ? "…" : ""),
             status: "info",
             timestamp: new Date().toISOString(),
+            meta: { inProgress: true, actionId: action.id },
           });
+          try {
+            const result =
+              action.kind === "summarize"
+                ? await summarizeSelection(payload)
+                : await extractSelection(payload);
+            const formattedLabel = action.kind === "summarize" ? "Summary" : "Extraction";
+            const truncated = result.text.slice(0, 160);
+            const metadataDone: Record<string, unknown> = {
+              ...(action.metadata ?? {}),
+              result: result.text,
+            };
+            if (metadataDone.progress) {
+              delete (metadataDone as { progress?: unknown }).progress;
+            }
+            if (metadataDone.error) {
+              delete (metadataDone as { error?: unknown }).error;
+            }
+            updateAction({
+              ...action,
+              status: "done",
+              metadata: metadataDone,
+            });
+            updateMessageForAction(action.id, (message) => {
+              const baseContent = message.content?.trim() ?? "";
+              const annotation = `${formattedLabel}:\n${result.text}`.trim();
+              const alreadyIncluded = baseContent.includes(annotation);
+              const combined = alreadyIncluded
+                ? baseContent
+                : [baseContent, annotation].filter(Boolean).join("\n\n");
+              return {
+                ...message,
+                content: combined,
+              };
+            });
+            updateLogEntry(logId, {
+              status: "success",
+              detail:
+                truncated.length === result.text.length
+                  ? `${formattedLabel} ready: ${truncated}`
+                  : `${formattedLabel} ready: ${truncated}…`,
+              meta: {
+                inProgress: false,
+                actionId: action.id,
+                preview:
+                  truncated.length === result.text.length ? truncated : `${truncated}…`,
+              },
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+            const failureMetadata: Record<string, unknown> = {
+              ...(action.metadata ?? {}),
+              error: message,
+            };
+            if (failureMetadata.progress) {
+              delete (failureMetadata as { progress?: unknown }).progress;
+            }
+            if (failureMetadata.result) {
+              delete (failureMetadata as { result?: unknown }).result;
+            }
+            updateAction({
+              ...action,
+              status: "error",
+              metadata: failureMetadata,
+            });
+            updateMessageForAction(action.id, (existing) => {
+              const baseContent = existing.content?.trim() ?? "";
+              const failureLine = `${action.kind === "summarize" ? "Summary" : "Extraction"} failed: ${message}`;
+              const combined = [baseContent, failureLine].filter(Boolean).join("\n\n");
+              return {
+                ...existing,
+                content: combined,
+              };
+            });
+            updateLogEntry(logId, {
+              status: "error",
+              detail: message,
+              meta: { inProgress: false, actionId: action.id },
+            });
+          }
+          return;
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
@@ -547,7 +677,17 @@ export function AppShell() {
         });
       }
     },
-    [appendLog, currentUrl, defaultScope, registerJob, updateAction]
+    [
+      appendLog,
+      currentUrl,
+      defaultScope,
+      registerJob,
+      summarizeSelection,
+      extractSelection,
+      updateAction,
+      updateLogEntry,
+      updateMessageForAction,
+    ]
   );
 
   const handleDismissAction = useCallback(

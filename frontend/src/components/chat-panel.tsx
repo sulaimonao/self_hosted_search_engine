@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { Loader2, StopCircle, UploadCloud } from "lucide-react";
+import { Loader2, OctagonAlert, StopCircle, UploadCloud } from "lucide-react";
 
 import { ActionCard } from "@/components/action-card";
 import { Button } from "@/components/ui/button";
@@ -105,16 +105,49 @@ export function ChatPanel({
                   </div>
                 </div>
                 {message.proposedActions?.length ? (
-                  <div className="space-y-2">
-                    {message.proposedActions.map((action) => (
-                      <ActionCard
-                        key={action.id}
-                        action={action}
-                        onApprove={onApproveAction}
-                        onEdit={onEditAction}
-                        onDismiss={onDismissAction}
-                      />
-                    ))}
+                  <div className="space-y-3">
+                    {message.proposedActions.map((action) => {
+                      const progress =
+                        typeof action.metadata?.progress === "string"
+                          ? action.metadata.progress
+                          : null;
+                      const result =
+                        typeof action.metadata?.result === "string"
+                          ? action.metadata.result
+                          : null;
+                      const errorMessage =
+                        typeof action.metadata?.error === "string" ? action.metadata.error : null;
+                      return (
+                        <div key={action.id} className="space-y-2">
+                          <ActionCard
+                            action={action}
+                            onApprove={onApproveAction}
+                            onEdit={onEditAction}
+                            onDismiss={onDismissAction}
+                          />
+                          {progress && action.status === "executing" ? (
+                            <div className="flex items-center gap-2 rounded-md border border-dashed border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              <span>{progress}</span>
+                            </div>
+                          ) : null}
+                          {result && action.status === "done" ? (
+                            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                              <p className="font-medium text-foreground/80">Result</p>
+                              <p className="mt-1 whitespace-pre-wrap leading-relaxed text-foreground/80">
+                                {result}
+                              </p>
+                            </div>
+                          ) : null}
+                          {errorMessage && action.status === "error" ? (
+                            <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                              <OctagonAlert className="h-3.5 w-3.5 flex-shrink-0" />
+                              <span className="whitespace-pre-wrap leading-relaxed">{errorMessage}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>

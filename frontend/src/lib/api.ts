@@ -271,19 +271,87 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
   };
 }
 
-export async function summarizeSelection(payload: SelectionActionPayload): Promise<string> {
-  const body = {
-    query: payload.selection,
-    model: "gpt-oss",
-  };
-  const response = await fetch(api("/api/research"), {
+export interface SelectionResult {
+  text: string;
+  raw?: unknown;
+}
+
+async function requestSelectionResult(
+  path: string,
+  body: Record<string, unknown>,
+  errorMessage: string
+): Promise<SelectionResult> {
+  const response = await fetch(api(path), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    throw new Error("Failed to summarize selection");
+
+  const contentType = response.headers.get("content-type") ?? "";
+  let payload: unknown;
+  try {
+    if (contentType.includes("application/json")) {
+      payload = await response.json();
+    } else {
+      payload = await response.text();
+    }
+  } catch (error) {
+    throw new Error(`${errorMessage}: Unable to parse response`);
   }
-  const result = await response.json();
-  return JSON.stringify(result);
+
+  if (!response.ok) {
+    const detail = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+    throw new Error(detail || errorMessage);
+  }
+
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (!trimmed) {
+      throw new Error(`${errorMessage}: Empty response`);
+    }
+    return { text: trimmed, raw: payload };
+  }
+
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    const candidate = [
+      record.summary,
+      record.result,
+      record.text,
+      record.content,
+      record.output,
+    ].find((value) => typeof value === "string" && value.trim().length > 0) as string | undefined;
+    if (candidate) {
+      return { text: candidate.trim(), raw: payload };
+    }
+    return { text: JSON.stringify(payload, null, 2), raw: payload };
+  }
+
+  throw new Error(`${errorMessage}: Unsupported response shape`);
+}
+
+export async function summarizeSelection(payload: SelectionActionPayload): Promise<SelectionResult> {
+  return requestSelectionResult(
+    "/api/research",
+    {
+      query: payload.selection,
+      model: "gpt-oss",
+      url: payload.url,
+      context: payload.context,
+    },
+    "Failed to summarize selection"
+  );
+}
+
+export async function extractSelection(payload: SelectionActionPayload): Promise<SelectionResult> {
+  return requestSelectionResult(
+    "/api/tools/extract",
+    {
+      url: payload.url,
+      selection: payload.selection,
+      context: payload.context,
+      boundingRect: payload.boundingRect,
+    },
+    "Failed to extract selection"
+  );
 }
