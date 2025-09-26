@@ -48,6 +48,8 @@ export function AgentLog({ entries, isStreaming = false }: AgentLogProps) {
           )}
           {entries.map((entry, index) => {
             const status = (entry.status ?? "info") as keyof typeof STATUS_ICON;
+            const inProgress = Boolean(entry.meta?.inProgress);
+            const preview = typeof entry.meta?.preview === "string" ? entry.meta.preview : null;
             return (
               <li key={entry.id} className="relative pl-5">
                 <span
@@ -60,7 +62,7 @@ export function AgentLog({ entries, isStreaming = false }: AgentLogProps) {
                   )}
                   aria-hidden
                 >
-                  {STATUS_ICON[status]}
+                  {inProgress ? <Loader2 className="h-3 w-3 animate-spin" /> : STATUS_ICON[status]}
                 </span>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-medium">{entry.label}</p>
@@ -71,6 +73,11 @@ export function AgentLog({ entries, isStreaming = false }: AgentLogProps) {
                 {entry.detail && (
                   <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">
                     {entry.detail}
+                  </p>
+                )}
+                {preview && (
+                  <p className="mt-1 rounded bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground whitespace-pre-wrap">
+                    {preview}
                   </p>
                 )}
                 {index < entries.length - 1 && <Separator className="mt-2" />}
