@@ -1,244 +1,371 @@
 # Self-Hosted Search Engine
 
-A fully local crawling + indexing stack powered by Scrapy, Whoosh, and Flask. Point the crawler at any site, rebuild the index, and search from the CLI or a lightweight web UI. No third-party APIs or hosted services required.
+A fully local crawling, indexing, and research stack powered by Scrapy, Whoosh,
+Chroma, and Flask. Point the crawler at any site, rebuild the index, and search
+from the CLI or the modern web UI—no hosted services or third-party APIs
+required.
+
+## Table of contents
+
+- [Stack overview](#stack-overview)
+- [Requirements](#requirements)
+- [Initial setup](#initial-setup)
+- [Running the application](#running-the-application)
+- [Command quick reference](#command-quick-reference)
+- [Data & storage layout](#data--storage-layout)
+- [Testing & quality gates](#testing--quality-gates)
+- [Observability & debugging](#observability--debugging)
+- [API surface](#api-surface)
+- [Discovery & enrichment flows](#discovery--enrichment-flows)
+- [LLM integration](#llm-integration)
+- [Diagnostics snapshot API](#diagnostics-snapshot-api)
+
+## Stack overview
+
+```
+frontend/        Next.js copilot UI (App Router, Tailwind 4, shadcn/ui)
+server/          Flask API surface and orchestration logic
+backend/         Index builders, retrieval, and CLI utilities
+crawler/         Focused crawler (Scrapy) + URL frontier
+engine/          Search pipelines (Whoosh BM25 + vector reranker)
+llm/             Ollama helpers for discovery, planning, and embeddings
+scripts/         Local tooling (change budget guard, telemetry tail, etc.)
+seeds/           Curated discovery registry (`docs/registry_structure.md`)
+static/, templates/   Assets served by Flask
+```
+
+Supporting assets live under `data/` at runtime. The directory is safe to delete
+while the services are stopped; the next boot will recreate it as needed.
 
 ## Requirements
 
-- Python 3.11.x (a `.python-version` file pins the project to 3.11.12)
-- macOS or Linux with the system dependencies needed for Playwright's Chromium build
-- (Optional) Node.js is **not** required
+- Python **3.11.x** (pinned via `.python-version` to 3.11.12)
+- macOS or Linux capable of running Playwright's Chromium build
+- Node.js **18+** (Node 20+ recommended) for the frontend dev server
+- npm (bundled with Node.js)
+- Optional: [Ollama](https://ollama.com/) for LLM-assisted discovery and chat
 
-Verify your interpreter before creating the virtual environment:
+Verify the interpreter that will back your virtual environment before running
+`make setup`:
 
 ```bash
 ./scripts/ensure_py311.sh python3
 ```
 
-## Quick start
+## Initial setup
+
+1. **Clone** the repository and `cd` into it.
+2. **Create a virtual environment** and install the Python packages plus the
+   editable package:
+
+   ```bash
+   make setup
+   ```
+
+   The target installs backend dependencies, Playwright Chromium, and runs a
+   quick import check.
+3. **Install frontend dependencies** (done automatically by `make dev`, but you
+   can pre-install):
+
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+4. **Configure environment overrides (optional)** by copying `.env.example`:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   The file exposes common knobs such as Flask host/port, Ollama endpoint,
+   telemetry locations, and agent limits. Any values left unset fall back to
+   sensible defaults baked into the Make targets.
+
+5. **Inspect repository paths** at any time with:
+
+   ```bash
+   make paths
+   ```
+
+## Running the application
+
+### One-command development stack
+
+The recommended workflow launches both the Flask API and the Next.js frontend in
+one terminal:
 
 ```bash
-make setup            # creates .venv, installs deps, installs Playwright Chromium
-make dev              # loads .env (if present) and starts the Flask dev server
-# UI is available at http://127.0.0.1:5000
+make dev
 ```
 
-### Deep research agent
+`make dev` performs the following:
 
-Enable the agent runtime to let chat turns expand the local index automatically:
+- Loads `.env` (if present) to populate environment variables.
+- Starts the Flask server (default `http://127.0.0.1:5000`).
+- Boots the Next.js dev server (default `http://127.0.0.1:3100`).
+- Exposes the API base URL to the frontend via `NEXT_PUBLIC_API_BASE_URL`.
+- Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>.
+
+Open the browser at `http://127.0.0.1:3100` to use the UI. The Flask server also
+serves a minimal UI at its root when you prefer not to run the Next.js app.
+
+### Backend or frontend individually
+
+Run just the Flask backend (using the existing `.venv`) with hot reload:
 
 ```bash
-make agent-dev        # identical to `make dev` but highlights agent-specific logs
+make run
 ```
 
-## Agent maintainer tools
-
-The repository now exposes a curated toolchain that lets the autonomous agent
-inspect and edit code without raw shell access. Writes are limited to the paths
-listed in `policy/allowlist.yml` and must stay within the configured change
-budget (≤10 files, ≤500 lines of churn per task). Attempting to touch
-disallowed paths such as `.env`, `.github/`, or anything under `data/` raises
-an immediate error.
-
-Run the full pre-flight suite locally before pushing changes:
+Launch the frontend in a separate terminal (remember to export
+`NEXT_PUBLIC_API_BASE_URL` when pointing at a remote API):
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-pip install -e .
+cd frontend
+npm run dev -- --hostname 0.0.0.0 --port 3100
+```
 
+### Crawling, indexing, and searching
+
+Once the stack is running you can drive the full crawl → normalize → index →
+search pipeline entirely from the CLI:
+
+```bash
+make crawl URL="https://example.com/"   # polite crawl with dedupe metadata
+make normalize                           # normalize newly crawled pages
+make reindex-incremental                 # embed + upsert changed docs
+make search Q="example setup guide"      # BM25 + vector blended retrieval
+```
+
+Set `SEEDS_FILE=/path/to/seeds.txt` when seeding the crawler from a curated URL
+list instead of a single entrypoint.
+
+## Command quick reference
+
+| Command | Purpose |
+| --- | --- |
+| `make setup` | Create `.venv`, install Python deps, install Playwright Chromium |
+| `make dev` | Launch Flask + Next.js together with shared environment |
+| `make run` | Run the Flask backend only (respects `.env`) |
+| `make crawl` | Crawl a URL or seeds file into `data/crawl/` |
+| `make normalize` | Convert raw crawl output into normalized JSON lines |
+| `make reindex-incremental` | Embed and upsert changed documents into the vector store |
+| `make search Q="..."` | Execute a blended CLI search (BM25 + vectors) |
+| `make focused Q="..."` | Run the focused crawler for a query (LLM optional) |
+| `make llm-status` | Check Ollama reachability via the Flask API |
+| `make llm-models` | List chat-capable models reported by Ollama |
+| `make tail JOB=focused` | Tail `data/logs/<JOB>.log` (e.g. focused crawl logs) |
+| `make check` | Run linting, typing, tests, security, and performance smoke |
+| `make clean` | Remove `.venv` and cached data stores |
+
+Use `make help` for the full phony target list (inspect the `Makefile` for more
+advanced flows such as `research` or `index-inc`).
+
+## Data & storage layout
+
+Runtime artefacts live under `data/`:
+
+| Path | Purpose |
+| --- | --- |
+| `data/crawl/` | Raw crawler outputs (HTML, metadata) |
+| `data/normalized/normalized.jsonl` | Normalized text documents ready for indexing |
+| `data/whoosh/` | On-disk Whoosh BM25 index |
+| `data/chroma/` | Local Chroma vector store for embeddings |
+| `data/index.duckdb` | DuckDB metadata used for dedupe and incremental indexing |
+| `data/agent/` | Planner artefacts (`frontier.sqlite3`, `documents/`, `vector_store/`) |
+| `data/logs/` | Log files (e.g. `focused.log`, diagnostics snapshots) |
+| `data/telemetry/` | Structured JSON telemetry written by the Flask API |
+
+Override any of these paths through `.env` or by exporting variables before
+invoking the relevant Make target (see `Makefile` for the full list). Fast local
+storage is strongly recommended because the Flask app and background workers
+share the same directories.
+
+## Testing & quality gates
+
+The repository ships with an opinionated pre-flight suite. Run it before opening
+pull requests:
+
+```bash
 make check
-python scripts/change_budget.py     # validate staged diff
-python scripts/perf_smoke.py        # standalone perf smoke
 ```
 
-The `check` target runs Ruff, Black (check mode), Mypy, pytest, pip-audit,
-Bandit, and the lightweight performance smoke test.
+`make check` executes:
 
-## Autonomy & safety
+1. `pytest -q` – unit, API, and e2e coverage (including
+   `tests/e2e/test_agent_improves_answer.py`).
+2. `ruff check` – linting across the maintainer surface (`server`, `scripts`,
+   `policy`).
+3. `black --check` – formatting guard for select modules.
+4. `mypy` – static type analysis (ignoring external stubs).
+5. `pip-audit` – dependency vulnerability scan (allowed to warn without failing).
+6. `bandit` – security lint for the maintainer entrypoints.
+7. `python scripts/perf_smoke.py` – lightweight performance regression check.
 
-Maintainer runs default to **Observe**, which keeps the agent read-only. Promote
-to **Patch** to allow applying a diff after verifying that every gate passes.
-The **Maintainer** level enables multi-file refactors while still respecting the
-change budgets enforced by `policy/allowlist.yml`. Regardless of autonomy, the
-agent must plan → patch → verify → document risks and rollback steps before
-opening a PR.
+For iterative work, a quick smoke test is usually enough:
 
-## Continuous integration
+```bash
+pytest -q
+```
 
-Pull requests run `make check` inside GitHub Actions (Python 3.11) and then
-invoke the budget guard. Linting covers Ruff, Black (check mode), and Mypy for
-the maintainer surface; pytest exercises the full suite; `pip-audit` and Bandit
-scan the same paths enforced locally. The budget guard fails the build if the
-staged diff exceeds 50 files or 4,000 lines.
+The change-budget guard (`python scripts/change_budget.py`) enforces ≤10 files
+and ≤500 lines of churn for autonomous agents. Invoke it manually to validate
+local diffs before committing.
 
-Key endpoints (all under `/api/tools/`):
+## Observability & debugging
+
+Structured telemetry is written to newline-delimited JSON under
+`data/telemetry/events.ndjson`. Tune the location with `LOG_DIR` and the maximum
+field length via `LOG_MAX_FIELD_BYTES`. Follow live events with:
+
+```bash
+./scripts/tail_telemetry.sh
+```
+
+Every Flask request emits `req.start` / `req.end` events with request, session,
+and user correlation IDs. Tool invocations emit
+`tool.start` / `tool.end` / `tool.error` events with redacted inputs and result
+previews. Planner responses append `agent.turn` summaries, and API responses
+include a `run_log` array so the UI can surface per-turn activity.
+
+Inspect the learned discovery database at any time:
+
+```bash
+sqlite3 data/learned_web.sqlite3 \
+  "SELECT query, url, reason, score FROM discoveries ORDER BY discovered_at DESC LIMIT 5;"
+```
+
+Focus crawl logs stream to `data/logs/focused.log`. Tail them with
+`make tail JOB=focused` while a crawl is active.
+
+## API surface
+
+Key endpoints (all under `/api/` unless otherwise noted):
 
 | Endpoint | Description |
 | --- | --- |
-| `POST /search_index` | Blend vector + BM25 retrieval, falling back to BM25 when embeddings are unavailable. |
-| `POST /enqueue_crawl` | Queue pages for polite background crawling with dedupe metadata (`topic`, `reason`, `source_task_id`). |
-| `POST /fetch_page` | Fetch and normalize a single page, storing it under `data/agent/documents/`. |
-| `POST /reindex` | Incrementally embed + upsert changed documents into the agent vector store (`data/agent/vector_store/`). |
-| `GET /status` | Return counters for the frontier queue and vector store. |
-| `POST /agent/turn` | Run the full policy loop (search → fetch ≤3 pages → reindex → synthesize answer with citations). |
+| `POST /api/tools/search_index` | Blend vector + BM25 retrieval, falling back to BM25 when embeddings are unavailable. |
+| `POST /api/tools/enqueue_crawl` | Queue pages for polite background crawling with dedupe metadata (`topic`, `reason`, `source_task_id`). |
+| `POST /api/tools/fetch_page` | Fetch and normalize a single page, storing it under `data/agent/documents/`. |
+| `POST /api/tools/reindex` | Incrementally embed + upsert changed documents into the agent vector store (`data/agent/vector_store/`). |
+| `GET /api/tools/status` | Return counters for the frontier queue and vector store. |
+| `POST /api/tools/agent/turn` | Run the full policy loop (search → fetch ≤3 pages → reindex → synthesize answer with citations). |
+| `POST /api/refresh` | Trigger a focused crawl for the supplied query and optional LLM model override. |
+| `GET /api/refresh/status` | Report background crawl state (`queued`, `crawling`, `indexing`) plus counters. |
+| `GET /api/llm/status` | Report Ollama installation status, reachability, and active host. |
+| `GET /api/llm/models` | List locally available chat-capable Ollama models. |
+| `POST /api/diagnostics` | Capture repository + runtime snapshot for debugging. |
 
 The agent persists its planning artefacts in `data/agent/`:
 
-- `frontier.sqlite3` stores the crawl queue with `source_task_id`, `topic`, and `reason` columns.
+- `frontier.sqlite3` stores the crawl queue with `source_task_id`, `topic`, and
+  `reason` columns.
 - `documents/` holds normalized JSON captures keyed by URL hash.
-- `vector_store/` maintains `index.json` + `embeddings.npy` for semantic retrieval.
+- `vector_store/` maintains `index.json` + `embeddings.npy` for semantic
+  retrieval.
 
-## Observability
+## Discovery & enrichment flows
 
-- Structured telemetry is written to newline-delimited JSON under `data/telemetry/events.ndjson`. Override the directory via `LOG_DIR` and tune field truncation with `LOG_MAX_FIELD_BYTES`.
-- Every Flask request emits `req.start`/`req.end` entries with request, session, and user correlation IDs. Tool invocations emit `tool.start`/`tool.end`/`tool.error` with redacted inputs and previews of the results.
-- Planner responses append `agent.turn` summaries, and API responses now return a `run_log` array so the UI can render a per-turn activity feed.
-- Follow live events locally with `./scripts/tail_telemetry.sh`. No external services are required; set `OTEL_EXPORTER_OTLP_ENDPOINT` to mirror the stream into an OpenTelemetry collector if desired.
+### Smart search enrichment
 
-Run the full test suite (unit + API + e2e):
+The `/search` endpoint now wraps the base Whoosh query with a smart layer. When
+fewer than `SMART_MIN_RESULTS` hits return, the app schedules the focused crawl
+(`bin/crawl_focused.py`) in the background and immediately responds with the
+current results. The focused crawl:
 
-```bash
-pytest -q
-```
+- Builds deterministic candidates from `search/frontier.py` (docs/blog/support
+  paths, Read the Docs/GitBook fallbacks, etc.).
+- Merges in the highest-scoring domains from the append-only
+  `data/seeds.jsonl` store (managed by `search/seeds.py`).
+- Optionally asks a local Ollama model for additional URLs through
+  `llm/seed_guesser.py` when the UI toggle is on.
+- Uses `FOCUSED_CRAWL_BUDGET` as its page limit so a background run stays
+  lightweight.
+- Records every touched domain back into `data/seeds.jsonl`, gradually improving
+  future crawls.
 
-The e2e test (`tests/e2e/test_agent_improves_answer.py`) proves that answering the same query twice increases coverage and surfaces new citations after the agent fetches and indexes pages.
-
-A quick smoke check is available too:
-
-```bash
-pytest -q
-```
-
-## RAG vector store configuration
-
-The retrieval layer persists embeddings in a local [Chroma](https://www.trychroma.com/) store and tracks crawl metadata in DuckDB. Both paths are configurable via `config.yaml`:
-
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `index.persist_dir` | `./data/chroma` | Directory holding the Chroma collection used during retrieval |
-| `index.db_path` | `./data/index.duckdb` | DuckDB database storing document metadata for crawl deduplication |
-
-Ensure these locations live on fast local storage—the cold-start indexer and Flask app share the same files, so the vector store must be accessible to both processes.
-
-## Crawl → Index → Search
-
-Seed the crawler with either a single URL or a seeds file:
-
-```bash
-make crawl URL="https://www.vmware.com/"
-# or
-make crawl SEEDS_FILE="/path/to/seeds.txt"
-```
-
-The crawler writes raw responses to `data/crawl/raw/` and normalized text to `data/normalized/normalized.jsonl`. When raw data changes you can normalize and index incrementally:
-
-```bash
-make normalize
-make reindex-incremental
-make tail               # follow the focused crawl log in another terminal
-```
-
-### Index schema upgrades
-
-The incremental indexer now validates the on-disk Whoosh schema before reusing it. If a legacy deployment only contains the
-`text`, `title`, and `url` fields, the index directory is automatically rebuilt so the modern `url`, `lang`, `title`, `h1h2`, and
-`body` fields are available. Existing postings are discarded during this migration, so plan to re-run your crawl or the
-incremental indexer afterwards to repopulate the upgraded schema.
-
-Run CLI searches straight from your terminal:
-
-```bash
-make search Q="VMware installation guide for macOS"
-# or directly
-python bin/search_cli.py --q "VMware installation guide for macOS" --limit 5
-```
-
-Open http://127.0.0.1:5000 in a browser for the minimal web UI. Results stream in via `fetch()` and render with highlighted snippets.
-
-## Smart search enrichment
-
-The `/search` endpoint now wraps the base Whoosh query with a "smart" layer. When fewer than `SMART_MIN_RESULTS` hits come back, the
-app schedules `bin/crawl_focused.py` in the background and immediately returns the current results. The focused crawl:
-
-- Builds deterministic candidates from `search/frontier.py` (docs/blog/support paths, readthedocs/gitbook fallbacks, etc.).
-- Merges in the highest-scoring domains from the append-only `data/seeds.jsonl` store (managed by `search/seeds.py`).
-- Optionally asks a local Ollama model for additional URLs through `llm/seed_guesser.py` when the UI toggle is on.
-- Uses `FOCUSED_CRAWL_BUDGET` as its page limit so a background run stays lightweight.
-- Records every touched domain back into `data/seeds.jsonl`, gradually improving future crawls.
-
-Results in the browser update automatically: if the first response returned fewer than the configured minimum, the UI polls the
-`/search` endpoint every four seconds (up to ~20 seconds) and re-renders as new hits arrive.
-
-With the cold-start upgrades the pipeline no longer requires a manual `make crawl` kick-off. When the index is empty the first search request:
-
-- Schedules a focused crawl using `python -m crawler.run` with the configured budget.
-- Streams crawler logs to `data/logs/focused.log` and exposes them via `/api/focused/status`.
-- Normalizes every newly fetched page with Trafilatura + language detection and incrementally indexes changed documents.
-- Emits `last_index_time` so the browser can auto-refresh results as soon as new hits land.
+Browser results update automatically: if the initial response returned fewer
+than the configured minimum, the UI polls `/search` every four seconds (for ~20
+seconds) and re-renders as new hits land.
 
 ### Cold-start discovery flow
 
-The Flask API now wires the cold-start indexer directly into `server.discover.DiscoveryEngine`. Every time a query triggers the bootstrap flow the engine:
+With the cold-start upgrades the pipeline no longer requires a manual
+`make crawl` kick-off. When the index is empty, the first search request:
 
-- Loads curated registry entries (YAML + JSONL) and previously learned domain hints from `data/learned_web.sqlite3`.
-- Adds optional LLM plans from `llm/seed_guesser.py` when the **Use LLM for discovery** toggle is on.
-- Calls `DiscoveryEngine.discover()` to score and rank `crawler.frontier.Candidate` objects, automatically falling back to the registry frontier instead of Wikipedia.
-- Walks each candidate through the crawler → chunker → embedder pipeline and writes embeddings into the vector store.
-- Persists the discovery metadata (query, URL, source, score) to the Learned Web database so subsequent searches can reuse the same domains without a fresh crawl.
+1. Schedules a focused crawl using `python -m crawler.run` with the configured
+   budget.
+2. Streams crawler logs to `data/logs/focused.log` and exposes them via
+   `/api/focused/status`.
+3. Normalizes every newly fetched page with Trafilatura + language detection and
+   incrementally indexes changed documents.
+4. Emits `last_index_time` so the browser can auto-refresh as new hits land.
 
-Hot reload verification checklist:
+`server.discover.DiscoveryEngine` orchestrates this bootstrap. Each time a query
+triggers the flow the engine:
 
-1. Start the dev server with `make dev` (or `FLASK_ENV=development make dev` for live reloads).
-2. Issue a search from the UI with the LLM toggle in both states to exercise the planner path.
-3. Inspect the learned database to confirm discoveries are persisted:
-
-   ```bash
-   sqlite3 data/learned_web.sqlite3 "SELECT query, url, reason, score FROM discoveries ORDER BY discovered_at DESC LIMIT 5;"
-   ```
-
-4. Re-run the same query in the UI. The hot reload path reuses the cached discoveries so new hits surface immediately without rerunning the crawler.
-5. Tail `data/logs/focused.log` with `make tail` if you want to watch the crawl complete in real time.
+- Loads curated registry entries (`seeds/registry.yaml`) and previously learned
+  domain hints from `data/learned_web.sqlite3`.
+- Adds optional LLM plans from `llm/seed_guesser.py` when the **Use LLM for
+  discovery** toggle is on.
+- Calls `DiscoveryEngine.discover()` to score and rank `crawler.frontier.Candidate`
+  objects, automatically falling back to the registry frontier instead of
+  Wikipedia.
+- Walks each candidate through the crawler → chunker → embedder pipeline and
+  writes embeddings into the vector store.
+- Persists the discovery metadata (query, URL, source, score) so subsequent
+  searches can reuse the same domains without a fresh crawl.
 
 ### Manual refresh controls
 
-When you want to trigger a focused crawl on demand, open the web UI and click **Refresh now**. The button lives under the status banner and:
+Trigger a focused crawl on demand by clicking **Refresh now** in the web UI. The
+button lives under the status banner and:
 
-- Calls `POST /api/refresh` with the current query, LLM toggle, and optional model override.
-- Streams progress from the background worker (`queued → crawling → indexing`) into a compact progress bar.
+- Calls `POST /api/refresh` with the current query, LLM toggle, and optional
+  model override.
+- Streams progress from the background worker (`queued → crawling → indexing`)
+  into a compact progress bar.
 - Unlocks once the run finishes so you can retry with a different prompt.
 
-The refresh API is also available for automation:
+The same API is available for automation:
 
+```bash
+curl -X POST http://127.0.0.1:5000/api/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "postgres vacuum best practices", "use_llm": true, "model": "llama3.1:8b-instruct"}'
+
+curl "http://127.0.0.1:5000/api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices"
 ```
-POST /api/refresh
-{ "query": "postgres vacuum best practices", "use_llm": true, "model": "llama3.1:8b-instruct" }
 
-GET /api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices
-```
+`POST` returns `{ job_id, status, created }` so callers can deduplicate
+concurrent requests. `GET` yields the current snapshot (`state`, `progress`, and
+counters for seeds/pages/docs). When no `job_id` is supplied the endpoint falls
+back to the most recent run for the supplied query or lists active jobs.
 
-`POST` returns `{ job_id, status, created }` so callers can deduplicate concurrent requests. `GET` yields the current snapshot (`state`, `progress`, and counters for seeds/pages/docs). When no `job_id` is supplied the endpoint falls back to the most recent run for the supplied query or lists all active jobs.
-
-You can tail progress from the CLI with `make tail` or fetch metrics from `/metrics` to verify crawl/index counters.
-
-To trigger a run manually, supply a query via `make focused`:
+Invoke the same functionality from the CLI:
 
 ```bash
 make focused Q="postgres vacuum best practices" USE_LLM=1 MODEL="llama3.1:8b-instruct"
-make tail
+make tail JOB=focused
 ```
 
-The command honours `.env`, allows a one-off `BUDGET=...` override, and respects `CRAWL_RESPECT_ROBOTS` unless you turn it off.
+The command honours `.env`, allows a one-off `BUDGET=...` override, and respects
+`CRAWL_RESPECT_ROBOTS` unless you disable it.
 
-## LLM Assist panel
+## LLM integration
 
-The web UI now includes an "LLM Assist" panel:
+### LLM Assist panel
 
-- The status row checks `ollama --version` and the Ollama HTTP API (`/api/tags`) to report whether the runtime is installed and
-  reachable.
-- A model dropdown lists locally available chat-capable models. Embedding-only entries are hidden to keep the picker focused on conversational models. The selection is stored in `localStorage` and passed to the focused crawl.
-- The "Use LLM for discovery" toggle persists in `localStorage` and controls whether `smart_search` adds the `--use-llm` flag.
-- Inline guidance appears when Ollama is missing, stopped, or running without any pulled models.
+The Next.js UI includes an **LLM Assist** panel that:
+
+- Checks `ollama --version` and `GET /api/tags` to report whether the runtime is
+  installed and reachable.
+- Lists locally available chat-capable models (embedding-only entries are
+  hidden). The selection is stored in `localStorage` and passed to the focused
+  crawl.
+- Provides inline guidance when Ollama is missing, stopped, or running without
+  pulled models.
 
 Install and start Ollama locally (macOS example):
 
@@ -250,63 +377,82 @@ ollama pull llama3.1:8b-instruct
 
 ### Embedding model defaults
 
-- The backend now targets the canonical `embeddinggemma` model. On the first semantic search the Flask API checks whether the model exists locally, streams the `ollama pull` progress to the UI, and queues concurrent queries until embeddings are available.
-- Manual preparation is still a single command if you prefer to pull models yourself:
+- The backend defaults to the `embeddinggemma` model. On the first semantic
+  search the Flask API checks whether the model exists locally, streams
+  `ollama pull` progress to the UI, and queues concurrent queries until
+  embeddings are available.
+- Pull models manually if you prefer:
 
   ```bash
   ollama pull embeddinggemma
   ```
 
-- Configure overrides through environment variables when needed:
-
-  - `EMBED_MODEL` – alternate embedding model name (defaults to `embeddinggemma`).
+- Configure overrides with environment variables:
+  - `EMBED_MODEL` – embedding model name (defaults to `embeddinggemma`).
   - `EMBED_AUTO_INSTALL` – set to `false` to disable automatic pulls.
-  - `EMBED_FALLBACKS` – comma-separated list of fallback embedding models (`nomic-embed-text,gte-small` by default).
+  - `EMBED_FALLBACKS` – comma-separated fallback models
+    (`nomic-embed-text,gte-small` by default).
 
-Troubleshooting tips when the auto-install flow stalls:
+Troubleshooting tips when auto-install stalls:
 
-- **Disk space** – Ollama needs several GB free before it can unpack models. Clear older models with `ollama rm <name>` if the pull fails with `no space left on device`.
-- **Network stalls** – ensure the host can reach `https://registry.ollama.ai`. The UI exposes a retry button and fallback picker, or you can pre-download/import the model into the Ollama cache.
-- **Runtime offline** – the “Start Ollama” button issues `brew services start ollama`/`systemctl start ollama` depending on the platform and surfaces errors when the daemon stays offline.
+- **Disk space** – ensure Ollama has several GB free. Remove older models with
+  `ollama rm <name>` if pulls fail with `no space left on device`.
+- **Network stalls** – verify the host can reach `https://registry.ollama.ai`.
+  The UI exposes a retry button and fallback picker, or you can pre-download the
+  model into the Ollama cache.
+- **Runtime offline** – the “Start Ollama” button issues
+  `brew services start ollama` / `systemctl start ollama` depending on the
+  platform and surfaces errors when the daemon remains offline.
 
-Once the embedding model is present and `ollama serve` is running, `/api/search` responses return to `200` and repeat queries reuse the local cache immediately.
+Once embeddings are available and `ollama serve` is running, `/api/search`
+responses return `200` and repeat queries reuse the cached vectors immediately.
 
-You can verify connectivity via:
+Verify connectivity via the Make targets:
 
 ```bash
-make llm-status   # reports installed/running/host
-make llm-models   # lists models returned by /api/tags
+make llm-status
+make llm-models
 ```
 
-The default behaviour stays fully local: no external APIs are contacted unless you explicitly enable Ollama. Set `SMART_USE_LLM=true`
-in `.env` if you want the toggle pre-enabled for every user.
+The default behaviour stays fully local: no external APIs are contacted unless
+Ollama is enabled. Set `SMART_USE_LLM=true` in `.env` if you want the toggle
+pre-enabled for every user.
 
 ### Planner LLM fallback
 
-- `models.llm_primary` in `config.yaml` selects the planner's primary Ollama model.
-- `models.llm_fallback` defines an optional backup automatically used when the primary returns `404`/`model not found`.
-- Pull at least one model locally: `ollama pull gpt-oss:20b` or `ollama pull gemma3:27b`.
-- When both models are missing the `/api/search` planner response stays `200` and returns `{"type":"final","answer":"Planner LLM is unavailable."}` so the UI can degrade gracefully.
+- `models.llm_primary` in `config.yaml` selects the planner's primary Ollama
+  model.
+- `models.llm_fallback` defines an optional backup used when the primary returns
+  `404` / `model not found`.
+- Pull at least one model locally (`ollama pull gpt-oss:20b`,
+  `ollama pull gemma3:27b`, etc.).
+- When both models are missing the planner responds with
+  `{ "type": "final", "answer": "Planner LLM is unavailable." }` so the UI can
+  degrade gracefully.
 
 ## Diagnostics snapshot API
 
-Operators can capture the current repository state and runtime logs without leaving the browser. `POST /api/diagnostics` enqueues a
-background job and returns `{ "job_id": "<hex>" }`. Poll `/api/jobs/<job_id>/status` until `state` becomes `done`; the `result`
-payload contains:
+Operators can capture the current repository state and runtime logs without
+leaving the browser. `POST /api/diagnostics` enqueues a background job and
+returns `{ "job_id": "<hex>" }`. Poll `/api/jobs/<job_id>/status` until `state`
+becomes `done`; the `result` payload contains:
 
-- `summary_markdown` – rendered report with git metadata, dependency versions, and log excerpts.
-- `summary_path` – on-disk markdown file under `data/logs/diagnostics/` that operators can download for full context.
-- Structured fields for git status, dependency snapshots, and the (optional) `pytest --collect-only` run.
+- `summary_markdown` – rendered report with git metadata, dependency versions,
+  and log excerpts.
+- `summary_path` – on-disk markdown file under `data/logs/diagnostics/` that can
+  be downloaded for full context.
+- Structured fields for git status, dependency snapshots, and the optional
+  `pytest --collect-only` run.
 
-Toggle expensive steps through environment variables (all optional):
+Toggle expensive steps through environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DIAGNOSTICS_RUN_PYTEST` | `false` | Enable `pytest --collect-only -q` in the diagnostics job. Override per-request with `{ "include_pytest": true }`. |
+| `DIAGNOSTICS_RUN_PYTEST` | `false` | Enable `pytest --collect-only -q` inside the diagnostics job (override per-request with `{ "include_pytest": true }`). |
 | `DIAGNOSTICS_PYTEST_ARGS` | *(empty)* | Extra CLI arguments appended to the pytest collect command. |
 | `DIAGNOSTICS_CMD_TIMEOUT` | `60` | Seconds before git/pytest/pip commands are aborted. |
 | `DIAGNOSTICS_LOG_FILES` | `3` | Number of recent `*.log` files to sample from `data/logs`. |
-| `DIAGNOSTICS_LOG_LINES` | `40` | Tail length captured for each log file. |
+| `DIAGNOSTICS_LOG_LINES` | `40` | Tail length captured for each sampled log file. |
 
 Example macOS workflow:
 
@@ -319,110 +465,16 @@ curl -X POST http://127.0.0.1:5000/api/diagnostics \
 curl http://127.0.0.1:5000/api/jobs/abc123.../status | jq .result.summary_path
 ```
 
-This endpoint keeps all diagnostics local—no external uploads occur. Long-running checks remain opt-in so you can keep the job
-lightweight during routine health checks.
+## Continuous integration
 
-## Project layout
+GitHub Actions runs `make check` on Python 3.11 and enforces the same change
+budget guard used locally. Linting covers Ruff, Black (check mode), and Mypy for
+the maintainer surface; pytest exercises the full suite; `pip-audit` and Bandit
+scan the policy-limited paths. The guard fails the build if a staged diff exceeds
+50 files or 4,000 lines.
 
-```
-.
-├── app.py                # Flask application with /, /search, /healthz
-├── bin/
-│   ├── crawl.py          # Scrapy wrapper (seeds, env vars, Playwright toggle)
-│   ├── crawl_focused.py  # Query-driven focused crawl with small page budgets
-│   ├── dev_check.py      # Ensures index/crawl dirs exist before dev server starts
-│   ├── reindex.py        # Rebuilds the Whoosh index from normalized crawl data
-│   └── search_cli.py     # Terminal search client with score + snippet output
-├── llm/
-│   ├── __init__.py
-│   └── seed_guesser.py   # Lightweight Ollama client for seed guessing
-├── crawler/
-│   ├── pipelines.py      # Writes raw JSONL to data/crawl/raw/ and normalized output under data/normalized/
-│   ├── seeds.txt         # Default seeds list (one URL per line)
-│   ├── settings.py       # Scrapy settings factory (robots, concurrency, Playwright)
-│   └── spiders/
-│       └── generic_spider.py
-├── search/
-│   ├── frontier.py       # Deterministic candidate URL generation for focused crawls
-│   ├── indexer.py        # create_or_open_index + JSONL ingestion helpers
-│   ├── query.py          # Multifield Whoosh query utilities
-│   ├── seeds.py          # Append-only JSONL store tracking useful domains
-│   └── smart_search.py   # Wrapper that triggers focused crawls when results are sparse
-├── static/style.css      # Clean, minimal styling for the web UI
-├── templates/index.html  # Browser UI (search box + async results)
-└── tests/test_health.py  # Smoke test for /healthz
-```
-
-## Environment variables
-
-Export variables via `.env` (auto-loaded by `make` targets) or the shell:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `APP_ENV` | `development` | Controls environment-specific behaviour such as telemetry defaults |
-| `TELEMETRY_ENABLED` | _(auto)_ | Override to force telemetry on/off (`1`/`0`); defaults to disabled in development |
-| `TELEMETRY_LOG_LOCAL` | _(empty)_ | When set, append JSONL telemetry events to `/tmp/telemetry.log` |
-| `INDEX_DIR` | `./data/whoosh` | Location of the Whoosh index |
-| `CRAWL_STORE` | `./data/crawl` | Where crawler JSONL data is persisted |
-| `CRAWL_MAX_PAGES` | `100` | Stop after visiting this many pages |
-| `CRAWL_RESPECT_ROBOTS` | `true` | Toggle robots.txt compliance |
-| `CRAWL_ALLOW_LIST` | _(empty)_ | Comma-separated substrings URLs must contain |
-| `CRAWL_DENY_LIST` | _(empty)_ | Comma-separated substrings URLs must not contain |
-| `CRAWL_USE_PLAYWRIGHT` | `auto` | `0` disables, `1` forces, `auto` re-renders JS-heavy pages |
-| `CRAWL_DOWNLOAD_DELAY` | `0.25` | Delay between requests in seconds |
-| `CRAWL_CONCURRENT_REQUESTS` | `8` | Global Scrapy concurrency |
-| `CRAWL_CONCURRENT_PER_DOMAIN` | `4` | Per-domain concurrency cap |
-| `SEARCH_DEFAULT_LIMIT` | `20` | Default number of web UI results |
-| `SMART_MIN_RESULTS` | `1` | Minimum results before auto-triggering a focused crawl |
-| `FOCUSED_CRAWL_ENABLED` | `1` | Enable the cold-start focused crawl pipeline |
-| `FOCUSED_CRAWL_BUDGET` | `10` | Page budget for each focused crawl run |
-| `SMART_TRIGGER_COOLDOWN` | `900` | Seconds to wait before re-running a crawl for the same query |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Base URL for the local Ollama API (aliased as `OLLAMA_URL`) |
-| `EMBED_MODEL` | `embeddinggemma` | Embedding model to install and use for semantic search |
-| `EMBED_AUTO_INSTALL` | `true` | Automatically pull the embedding model when missing |
-| `EMBED_FALLBACKS` | `nomic-embed-text,gte-small` | Ordered list of fallback embedding models to try if the primary pull fails |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Legacy alias for the Ollama base URL |
-| `SMART_USE_LLM` | `false` | Default toggle for LLM-assisted discovery |
-| `USE_LLM_RERANK` | `false` | Enable LLM reranking of the top N results |
-| `SEED_QUOTA_NON_EN` | `0.30` | Minimum non-English share in curated seeds |
-| `SEED_QUOTA_NON_US` | `0.40` | Minimum non-US share in curated seeds |
-| `FRONTIER_W_VALUE` | `0.5` | Weight applied to value priors when ranking frontier URLs |
-| `FRONTIER_W_FRESH` | `0.3` | Weight applied to freshness hints |
-| `FRONTIER_W_AUTH` | `0.2` | Weight applied to host authority |
-| `INDEX_INC_WINDOW_MIN` | `60` | Sliding window (minutes) for incremental reindex |
-| `SEEDS_PATH` | `data/seeds.jsonl` | Append-only JSONL store of known helpful domains |
-| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Base URL for the local Ollama API |
-| `OLLAMA_MODEL` | `llama3.1:8b-instruct` | Default model used when the UI does not pick one |
-| `OLLAMA_TIMEOUT` | `30` | Seconds to wait for Ollama seed generation responses |
-| `LOG_LEVEL` | `INFO` | Logging level for the Flask app |
-
-## Scripts & automation
-
-- `make setup` – creates `.venv`, installs Python deps, installs Chromium via Playwright.
-- `make dev` – loads `.env`, runs `bin/dev_check.py`, and starts the Flask dev server with auto-reload.
-- `make crawl` – wraps `python bin/crawl.py`; accepts `URL`, `SEEDS_FILE`, and respects `.env` overrides.
-- `make reindex` – rebuilds the Whoosh index (use `make index-inc` for incremental updates).
-- `python -m bin.reindex_incremental` and `python bin/reindex_incremental.py` are interchangeable entrypoints when you need to run the incremental job manually.
-- `make search` – executes the CLI search client with optional `LIMIT`.
-- `make focused` – runs `bin/crawl_focused.py` for a specific query (`Q="..."`) with optional `BUDGET`, `USE_LLM`, and `MODEL` overrides.
-- `make llm-status` – quick health check for the Ollama HTTP API exposed through Flask.
-- `make llm-models` – list locally installed Ollama models via the API.
-- `pytest -q` – runs the smoke test hitting `/healthz`.
-
-## Troubleshooting
-
-- **“No seeds provided”** – pass `URL=...` to `make crawl` or populate `crawler/seeds.txt`.
-- **Empty results** – confirm `data/normalized/normalized.jsonl` exists, then run `make reindex` (or the equivalent `python -m bin.reindex_incremental`).
-- **Playwright prompts** – `make setup` installs Chromium automatically; re-run if browsers are missing.
-- **Non-3.11 Python** – run `./scripts/ensure_py311.sh python3` before `make setup`.
-
-## Cold-start & LLM enhancements
-
-- `make seeds` generates `data/seeds/curated_seeds.jsonl` by merging local lists, CommonCrawl dumps, stored sitemaps, and (when enabled) Ollama suggestions. Domains are merged into `data/seeds.jsonl` with diversity quotas applied.
-- `make index-inc` performs a single incremental indexing pass using the `INDEX_INC_WINDOW_MIN` sliding window. Run `bin/index_inc.py` without `--once` to keep indexing continuously.
-- Focused crawls now prioritise seeds via value priors, freshness hints, and host authority metrics while avoiding duplicate URLs and content fingerprints.
-- Optional LLM reranking (`USE_LLM_RERANK=1`) adjusts the top results. `/metrics` exposes coverage, freshness lag, focused trigger rates, enqueue counts, and LLM usage.
-
-## Docker (optional)
-
-The included Dockerfile + Compose definition build on Python 3.11. Update the bind mounts or environment variables if you want to persist data outside the container.
+Maintainer autonomy defaults to **Observe** (read-only). Promote to **Patch** to
+allow applying a diff after every gate passes. **Maintainer** unlocks multi-file
+refactors while still respecting the budgets enforced by `policy/allowlist.yml`.
+Regardless of autonomy level, always plan → patch → verify → document risks and
+rollback steps before opening a PR.
