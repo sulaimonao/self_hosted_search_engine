@@ -1,6 +1,12 @@
 {
   "compilerOptions": {
+<<<<<<< ours
+<<<<<<< ours
     "target": "ES2017",
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
