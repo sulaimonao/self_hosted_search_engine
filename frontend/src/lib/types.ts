@@ -59,9 +59,32 @@ export interface CrawlQueueItem {
   url: string;
   scope: CrawlScope;
   notes?: string;
+  directory?: string;
+  editable?: boolean;
+  entrypoints?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type CrawlScope = "page" | "domain" | "allowed-list" | "custom";
+
+export interface SeedRecord {
+  id: string;
+  directory: string;
+  entrypoints: string[];
+  url: string | null;
+  scope: CrawlScope;
+  notes?: string | null;
+  editable: boolean;
+  created_at?: string;
+  updated_at?: string;
+  extras?: Record<string, unknown>;
+}
+
+export interface SeedRegistryResponse {
+  revision: string;
+  seeds: SeedRecord[];
+}
 
 export interface ModelStatus {
   model: string;

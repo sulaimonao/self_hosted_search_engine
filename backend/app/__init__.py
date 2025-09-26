@@ -46,6 +46,7 @@ def create_app() -> Flask:
     from .api import metrics as metrics_api
     from .api import refresh as refresh_api
     from .api import research as research_api
+    from .api import seeds as seeds_api
     from .api import search as search_api
     from .config import AppConfig
     from .jobs.focused_crawl import FocusedCrawlManager
@@ -124,6 +125,11 @@ def create_app() -> Flask:
         LEARNED_WEB_DB=db,
         AGENT_RUNTIME=agent_runtime,
     )
+    app.config.setdefault(
+        "SEED_REGISTRY_PATH",
+        Path(__file__).resolve().parents[2] / "seeds" / "registry.yaml",
+    )
+    app.config.setdefault("SEED_WORKSPACE_DIRECTORY", "workspace")
 
     app.register_blueprint(search_api.bp)
     app.register_blueprint(jobs_api.bp)
@@ -133,6 +139,7 @@ def create_app() -> Flask:
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(agent_tools_api.bp)
+    app.register_blueprint(seeds_api.bp)
 
     @app.get("/healthz")
     def healthz():

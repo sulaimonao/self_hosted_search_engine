@@ -31,7 +31,9 @@ import { ActionEditor } from "@/components/action-editor";
 import {
   extractSelection,
   fetchModelInventory,
+  fetchSeeds,
   reindexUrl,
+  saveSeed,
   startCrawlJob,
   streamChat,
   subscribeJob,
@@ -43,11 +45,13 @@ import type {
   ChatMessage,
   CrawlQueueItem,
   CrawlScope,
+  SeedRegistryResponse,
   JobStatusSummary,
   ModelStatus,
   OllamaStatus,
   ProposedAction,
   SelectionActionPayload,
+  SeedRecord,
 } from "@/lib/types";
 
 const INITIAL_URL = "https://news.ycombinator.com";
@@ -101,6 +105,9 @@ export function AppShell() {
   const [agentLog, setAgentLog] = useState<AgentLogEntry[]>(DEFAULT_AGENT_LOG);
   const [jobSummaries, setJobSummaries] = useState<JobStatusSummary[]>(DEFAULT_JOB_STATUS);
   const [crawlQueue, setCrawlQueue] = useState<CrawlQueueItem[]>([]);
+  const [seedRevision, setSeedRevision] = useState<string | null>(null);
+  const [isSeedsLoading, setIsSeedsLoading] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const [defaultScope, setDefaultScope] = useState<CrawlScope>("page");
   const [omniboxValue, setOmniboxValue] = useState(INITIAL_URL);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -117,6 +124,7 @@ export function AppShell() {
   const streamingController = useRef<AbortController | null>(null);
   const jobSubscriptions = useRef(new Map<string, () => void>());
   const chatHistoryRef = useRef<ChatMessage[]>(chatMessages);
+  const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
 
   const currentUrl = previewState.history[previewState.index];
 
@@ -228,6 +236,79 @@ export function AppShell() {
       );
     },
     []
+  );
+
+  const mapSeedsToQueue = useCallback((seeds: SeedRecord[]): CrawlQueueItem[] => {
+    const items = seeds
+      .filter((seed) => typeof seed.url === "string" && seed.url.trim().length > 0)
+      .map((seed) => ({
+        id: seed.id,
+        url: (seed.url as string).trim(),
+        scope: seed.scope,
+        notes: seed.notes ?? undefined,
+        editable: seed.editable,
+        directory: seed.directory,
+        entrypoints: seed.entrypoints,
+        createdAt: seed.created_at,
+        updatedAt: seed.updated_at,
+      }));
+    return items.sort((a, b) => Number(b.editable) - Number(a.editable));
+  }, []);
+
+  const applySeedRegistry = useCallback(
+    (payload: SeedRegistryResponse) => {
+      setSeedRevision(payload.revision);
+      setCrawlQueue(mapSeedsToQueue(payload.seeds));
+    },
+    [mapSeedsToQueue]
+  );
+
+  const refreshSeeds = useCallback(async () => {
+    setIsSeedsLoading(true);
+    try {
+      const payload = await fetchSeeds();
+      applySeedRegistry(payload);
+      setSeedError(null);
+      return payload.revision;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSeedError(message);
+      throw error instanceof Error ? error : new Error(message);
+    } finally {
+      setIsSeedsLoading(false);
+    }
+  }, [applySeedRegistry]);
+
+  const ensureSeedRevision = useCallback(async () => {
+    if (seedRevision) {
+      return seedRevision;
+    }
+    const revision = await refreshSeeds();
+    if (!revision) {
+      throw new Error("Unable to resolve seed registry revision");
+    }
+    return revision;
+  }, [refreshSeeds, seedRevision]);
+
+  const handleSeedError = useCallback(
+    async (error: unknown) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      const status = (error as { status?: number }).status;
+      const revisionHint = (error as { revision?: string }).revision;
+      if (status === 409 && revisionHint) {
+        try {
+          await refreshSeeds();
+        } catch (refreshError) {
+          console.warn("Failed to refresh seeds after conflict", refreshError);
+        }
+        const conflict = new Error("Seed registry updated. Please retry the action.");
+        setSeedError(conflict.message);
+        return conflict;
+      }
+      setSeedError(err.message);
+      return err;
+    },
+    [refreshSeeds]
   );
 
   const registerJob = useCallback(
@@ -512,13 +593,6 @@ export function AppShell() {
           const response = await startCrawlJob({ url, scope, maxPages, maxDepth });
           const jobId = (response as { job_id?: string; jobId?: string }).jobId ??
             (response as { job_id?: string }).job_id;
-          const queuedItem: CrawlQueueItem = {
-            id: uid(),
-            url,
-            scope,
-            notes: action.description,
-          };
-          setCrawlQueue((queue) => [queuedItem, ...queue]);
           if (jobId) {
             registerJob(jobId, description);
           } else {
@@ -530,6 +604,7 @@ export function AppShell() {
               timestamp: new Date().toISOString(),
             });
           }
+          await handleQueueAdd(url, scope, action.description);
         } else if (action.kind === "index") {
           const target = String(action.payload.url ?? currentUrl);
           await reindexUrl(target);
@@ -542,22 +617,11 @@ export function AppShell() {
           });
         } else if (action.kind === "add_seed") {
           const seed = String(action.payload.url ?? currentUrl);
-          setCrawlQueue((queue) => [
-            {
-              id: uid(),
-              url: seed,
-              scope: "allowed-list",
-              notes: action.description ?? "Seed captured",
-            },
-            ...queue,
-          ]);
-          appendLog({
-            id: uid(),
-            label: "Seed queued",
-            detail: `Added ${seed} to crawl seeds`,
-            status: "info",
-            timestamp: new Date().toISOString(),
-          });
+          await handleQueueAdd(
+            seed,
+            (action.payload.scope as CrawlScope) || "allowed-list",
+            action.description ?? "Seed captured"
+          );
         } else if (action.kind === "summarize" || action.kind === "extract") {
           const payload = action.payload as SelectionActionPayload;
           const selection = typeof payload?.selection === "string" ? payload.selection.trim() : "";
@@ -681,6 +745,7 @@ export function AppShell() {
       appendLog,
       currentUrl,
       defaultScope,
+      handleQueueAdd,
       registerJob,
       summarizeSelection,
       extractSelection,
@@ -710,33 +775,101 @@ export function AppShell() {
   }, []);
 
   const handleQueueAdd = useCallback(
-    (url: string, scope: CrawlScope) => {
-      const item: CrawlQueueItem = {
-        id: uid(),
-        url,
-        scope,
-      };
-      setCrawlQueue((queue) => [item, ...queue]);
-      appendLog({
-        id: uid(),
-        label: "Queued crawl",
-        detail: `Added ${url} [${scope}] to queue`,
-        status: "info",
-        timestamp: new Date().toISOString(),
-      });
+    async (url: string, scope: CrawlScope, notes?: string) => {
+      try {
+        const revision = await ensureSeedRevision();
+        const payload = await saveSeed({
+          action: "create",
+          revision,
+          seed: { url, scope, notes },
+        });
+        applySeedRegistry(payload);
+        setSeedError(null);
+        appendLog({
+          id: uid(),
+          label: "Queued crawl",
+          detail: `Saved ${url} [${scope}] to seed registry`,
+          status: "info",
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        const normalized = await handleSeedError(error);
+        appendLog({
+          id: uid(),
+          label: "Seed update failed",
+          detail: normalized.message,
+          status: "error",
+          timestamp: new Date().toISOString(),
+        });
+        throw normalized;
+      }
     },
-    [appendLog]
+    [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
   );
 
-  const handleQueueRemove = useCallback((id: string) => {
-    setCrawlQueue((queue) => queue.filter((item) => item.id !== id));
-  }, []);
+  const handleQueueRemove = useCallback(
+    async (id: string) => {
+      const target = crawlQueueRef.current.find((item) => item.id === id);
+      try {
+        const revision = await ensureSeedRevision();
+        const payload = await saveSeed({ action: "delete", revision, seed: { id } });
+        applySeedRegistry(payload);
+        setSeedError(null);
+        appendLog({
+          id: uid(),
+          label: "Seed removed",
+          detail: target ? `Removed ${target.url}` : `Removed ${id}`,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        const normalized = await handleSeedError(error);
+        appendLog({
+          id: uid(),
+          label: "Seed removal failed",
+          detail: normalized.message,
+          status: "error",
+          timestamp: new Date().toISOString(),
+        });
+        throw normalized;
+      }
+    },
+    [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
+  );
 
-  const handleQueueScopeUpdate = useCallback((id: string, scope: CrawlScope) => {
-    setCrawlQueue((queue) =>
-      queue.map((item) => (item.id === id ? { ...item, scope } : item))
-    );
-  }, []);
+  const handleQueueScopeUpdate = useCallback(
+    async (id: string, scope: CrawlScope) => {
+      const target = crawlQueueRef.current.find((item) => item.id === id);
+      try {
+        const revision = await ensureSeedRevision();
+        const payload = await saveSeed({
+          action: "update",
+          revision,
+          seed: { id, scope },
+        });
+        applySeedRegistry(payload);
+        setSeedError(null);
+        appendLog({
+          id: uid(),
+          label: "Seed updated",
+          detail: target ? `Scope for ${target.url} set to ${scope}` : `Updated ${id}`,
+          status: "info",
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        const normalized = await handleSeedError(error);
+        appendLog({
+          id: uid(),
+          label: "Seed update failed",
+          detail: normalized.message,
+          status: "error",
+          timestamp: new Date().toISOString(),
+        });
+        throw normalized;
+      }
+    },
+    [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -762,6 +895,10 @@ export function AppShell() {
   useEffect(() => {
     chatHistoryRef.current = chatMessages;
   }, [chatMessages]);
+
+  useEffect(() => {
+    crawlQueueRef.current = crawlQueue;
+  }, [crawlQueue]);
 
   useEffect(() => {
     const loadModels = async () => {
@@ -880,6 +1017,9 @@ export function AppShell() {
                     onRemove={handleQueueRemove}
                     onUpdateScope={handleQueueScopeUpdate}
                     onScopePresetChange={setDefaultScope}
+                    onRefresh={refreshSeeds}
+                    isLoading={isSeedsLoading}
+                    errorMessage={seedError}
                   />
                 </div>
               </div>
