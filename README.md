@@ -6,7 +6,7 @@ A fully local crawling + indexing stack powered by Scrapy, Whoosh, and Flask. Po
 
 - Python 3.11.x (a `.python-version` file pins the project to 3.11.12)
 - macOS or Linux with the system dependencies needed for Playwright's Chromium build
-- Node.js 18+ (required for the co-pilot web UI)
+- (Optional) Node.js is **not** required
 
 Verify your interpreter before creating the virtual environment:
 
@@ -18,8 +18,8 @@ Verify your interpreter before creating the virtual environment:
 
 ```bash
 make setup            # creates .venv, installs deps, installs Playwright Chromium
-make dev              # loads .env, runs checks, and starts Flask + Next.js dev servers
-# Agent console: http://127.0.0.1:3000  |  API: http://127.0.0.1:5000
+make dev              # loads .env (if present) and starts the Flask dev server
+# UI is available at http://127.0.0.1:5000
 ```
 
 ### Deep research agent
