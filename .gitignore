@@ -18,3 +18,5 @@ node_modules/
 _MAIN_0.toc
 /worktrees/
 /data/telemetry/
+*.py
+*.json
