@@ -4,8 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "next dev --hostname 0.0.0.0 --port 3100",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "dependencies": {
+    "next": "^14.2.7",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@radix-ui/react-progress": "^1.0.3",
@@ -15,6 +21,7 @@
     "@testing-library/jest-dom": "^6.4.2",
     "@testing-library/react": "^14.3.0",
     "@testing-library/user-event": "^14.5.2",
+    "@types/node": "24.5.2",
     "@types/react": "^18.2.74",
     "@types/react-dom": "^18.2.25",
     "class-variance-authority": "^0.7.0",
@@ -22,8 +29,6 @@
     "date-fns": "^3.6.0",
     "jsdom": "^24.0.0",
     "lucide-react": "^0.379.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "tailwind-merge": "^3.3.1",
     "typescript": "^5.4.5",
     "vitest": "^1.5.3"
