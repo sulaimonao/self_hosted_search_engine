@@ -10,7 +10,24 @@ import httpx
 
 LOGGER = logging.getLogger(__name__)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "embedding-gemma")
+DEFAULT_EMBED_MODEL = "embeddinggemma"
+
+
+def _canonicalize_model(model: str | None) -> str:
+    """Return the canonical Ollama slug for the configured embedding model."""
+
+    if not model:
+        return DEFAULT_EMBED_MODEL
+    slug = str(model).strip()
+    if not slug:
+        return DEFAULT_EMBED_MODEL
+    normalized = slug.lower().replace("-", "").replace("_", "")
+    if normalized == DEFAULT_EMBED_MODEL:
+        return DEFAULT_EMBED_MODEL
+    return slug
+
+
+EMBED_MODEL = _canonicalize_model(os.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL))
 
 
 def _normalize_payload(response_json: dict) -> List[List[float]] | None:
