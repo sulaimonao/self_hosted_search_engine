@@ -64,9 +64,20 @@ dev:
 	    if [ -n "${BACKEND_PID:-}" ]; then kill "$$BACKEND_PID" 2>/dev/null || true; fi; \
 	  }; \
 	  trap cleanup EXIT INT TERM; \
-	  $(PY) -m flask --app app --debug run & \
-	  BACKEND_PID=$$!; \
-	  wait -n $$FRONTEND_PID $$BACKEND_PID; \
+          wait_for_any() { \
+            while :; do \
+              for pid in "$$@"; do \
+                if ! kill -0 "$$pid" 2>/dev/null; then \
+                  wait "$$pid" 2>/dev/null; \
+                  return $$?; \
+                fi; \
+              done; \
+              sleep 0.2; \
+            done; \
+          }; \
+          $(PY) -m flask --app app --debug run & \
+          BACKEND_PID=$$!; \
+          wait_for_any $$FRONTEND_PID $$BACKEND_PID; \
 	  STATUS=$$?; \
 	  wait $$FRONTEND_PID $$BACKEND_PID 2>/dev/null || true; \
 	  exit $$STATUS'
