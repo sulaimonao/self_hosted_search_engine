@@ -1,7 +1,7 @@
 models:
   llm_primary: "gemma2:latest"
   llm_fallback: "gpt-oss:latest"
-  embed: "embedding-gemma"
+  embed: "embeddinggemma"
 ollama:
   base_url: "http://localhost:11434"
 retrieval:
