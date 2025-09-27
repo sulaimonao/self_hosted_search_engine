@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 
 from engine.data.store import RetrievedChunk, VectorStore
 from engine.indexing.chunk import Chunk
@@ -105,3 +106,17 @@ def test_upsert_sanitizes_metadata(tmp_path):
     metadata = recording.add_calls[0]["metadatas"][0]
     assert "etag" not in metadata
     assert metadata["token_count"] == json.dumps(["tok", "tok2"], ensure_ascii=False)
+
+
+def test_vector_store_does_not_emit_chroma_telemetry_warning(tmp_path, caplog):
+    caplog.set_level(logging.WARNING)
+
+    persist_dir = tmp_path / "chroma"
+    db_path = tmp_path / "index.duckdb"
+
+    VectorStore(persist_dir, db_path)
+
+    telemetry_logs = [record.message for record in caplog.records]
+    assert all(
+        "Failed to send telemetry event" not in message for message in telemetry_logs
+    ), telemetry_logs
