@@ -358,6 +358,39 @@ export function AppShell() {
     [refreshSeeds]
   );
 
+  const handleQueueAdd = useCallback(
+    async (url: string, scope: CrawlScope, notes?: string) => {
+      try {
+        const revision = await ensureSeedRevision();
+        const payload = await saveSeed({
+          action: "create",
+          revision,
+          seed: { url, scope, notes },
+        });
+        applySeedRegistry(payload);
+        setSeedError(null);
+        appendLog({
+          id: uid(),
+          label: "Queued crawl",
+          detail: `Saved ${url} [${scope}] to seed registry`,
+          status: "info",
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        const normalized = await handleSeedError(error);
+        appendLog({
+          id: uid(),
+          label: "Seed update failed",
+          detail: normalized.message,
+          status: "error",
+          timestamp: new Date().toISOString(),
+        });
+        throw normalized;
+      }
+    },
+    [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
+  );
+
   const registerJob = useCallback(
     (jobId: string, description: string) => {
       setJobSummaries((jobs) => {
@@ -926,39 +959,6 @@ export function AppShell() {
     setEditorAction(action);
     setEditorOpen(true);
   }, []);
-
-  const handleQueueAdd = useCallback(
-    async (url: string, scope: CrawlScope, notes?: string) => {
-      try {
-        const revision = await ensureSeedRevision();
-        const payload = await saveSeed({
-          action: "create",
-          revision,
-          seed: { url, scope, notes },
-        });
-        applySeedRegistry(payload);
-        setSeedError(null);
-        appendLog({
-          id: uid(),
-          label: "Queued crawl",
-          detail: `Saved ${url} [${scope}] to seed registry`,
-          status: "info",
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        const normalized = await handleSeedError(error);
-        appendLog({
-          id: uid(),
-          label: "Seed update failed",
-          detail: normalized.message,
-          status: "error",
-          timestamp: new Date().toISOString(),
-        });
-        throw normalized;
-      }
-    },
-    [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
-  );
 
   const handleQueueRemove = useCallback(
     async (id: string) => {
