@@ -11,7 +11,6 @@ import os
 import threading
 
 import duckdb
-from chromadb import PersistentClient
 from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings
 
@@ -19,12 +18,91 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 os.environ.setdefault("CHROMADB_DISABLE_TELEMETRY", "1")
 
-try:  # pragma: no cover - best effort shielding
-    import chromadb.telemetry as _chroma_telemetry
-except ImportError:  # pragma: no cover - library structure changed
-    _chroma_telemetry = None
-else:
-    _chroma_telemetry.capture = lambda *args, **kwargs: True
+
+def _disable_chroma_telemetry() -> None:
+    """Best-effort guard to silence Chroma telemetry side-effects."""
+
+    try:  # pragma: no cover - optional dependency internals vary
+        import chromadb.telemetry as telemetry_pkg  # type: ignore[import]
+    except Exception:  # pragma: no cover - library structure changed
+        return
+
+    modules_to_patch: set[Any] = {telemetry_pkg}
+
+    for attr_name, import_path in (
+        ("telemetry", "chromadb.telemetry.telemetry"),
+        ("product", "chromadb.telemetry.product"),
+    ):
+        module_attr = getattr(telemetry_pkg, attr_name, None)
+        if module_attr is None:
+            try:  # pragma: no cover - module renamed/moved
+                module_attr = __import__(import_path, fromlist=["_"])  # type: ignore[import]
+            except Exception:  # pragma: no cover - ignore if missing
+                module_attr = None
+        if module_attr is not None:
+            modules_to_patch.add(module_attr)
+
+    try:  # pragma: no cover - optional dependency
+        import chromadb.telemetry.product.posthog as product_posthog  # type: ignore[import]
+    except Exception:
+        product_posthog = None
+    else:
+        modules_to_patch.add(product_posthog)
+
+        posthog_lib = getattr(product_posthog, "posthog", None)
+        if posthog_lib is not None:
+            modules_to_patch.add(posthog_lib)
+
+    class _NoOpTelemetryClient:
+        __slots__ = ()
+
+        def capture(self, *args: Any, **kwargs: Any) -> bool:  # noqa: D401
+            return True
+
+    _noop_client = _NoOpTelemetryClient()
+
+    def _patch_module(module: Any) -> None:
+        if hasattr(module, "capture"):
+            try:
+                module.capture = lambda *args, **kwargs: True  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - guard against readonly attributes
+                pass
+
+        telemetry_cls = getattr(module, "Telemetry", None)
+        if telemetry_cls is not None and hasattr(telemetry_cls, "capture"):
+            try:
+                telemetry_cls.capture = lambda self, *args, **kwargs: True  # type: ignore[assignment]
+            except Exception:  # pragma: no cover - guard against readonly attributes
+                pass
+
+        if hasattr(module, "telemetry_client"):
+            try:
+                module.telemetry_client = _noop_client  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - guard against readonly attributes
+                pass
+
+        for class_name in ("Telemetry", "Posthog", "ProductTelemetryClient"):
+            telemetry_cls = getattr(module, class_name, None)
+            if telemetry_cls is not None and hasattr(telemetry_cls, "capture"):
+                try:
+                    telemetry_cls.capture = lambda self, *args, **kwargs: True  # type: ignore[assignment]
+                except Exception:  # pragma: no cover - guard against readonly attributes
+                    pass
+
+        get_default = getattr(module, "get_default_client", None)
+        if callable(get_default):
+            try:
+                module.get_default_client = lambda *args, **kwargs: _noop_client  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - guard against readonly attributes
+                pass
+
+    for module in modules_to_patch:
+        _patch_module(module)
+
+
+_disable_chroma_telemetry()
+
+from chromadb import PersistentClient
 
 
 def _ensure_safe_directory(path: Path, *, label: str) -> Path:
