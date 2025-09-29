@@ -14,6 +14,7 @@ import yaml
 
 import requests
 from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
 
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,15 @@ def create_app() -> Flask:
 
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
+
+    frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:3100")
+    app.config.setdefault("FRONTEND_ORIGIN", frontend_origin)
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": frontend_origin}},
+        supports_credentials=True,
+        expose_headers=["X-Request-Id"],
+    )
 
     config = AppConfig.from_env()
     config.ensure_dirs()

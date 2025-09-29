@@ -40,6 +40,8 @@ dev:
           set -a; [ -f .env ] && source .env; set +a; \
           FRONTEND_HOST="$${FRONTEND_HOST:-0.0.0.0}"; \
           FRONTEND_PORT="$${FRONTEND_PORT:-3100}"; \
+          FRONTEND_ORIGIN_DEFAULT="http://127.0.0.1:$$FRONTEND_PORT"; \
+          FRONTEND_ORIGIN="$${FRONTEND_ORIGIN:-$$FRONTEND_ORIGIN_DEFAULT}"; \
           INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; \
           CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; \
           NORMALIZED_PATH="${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"; \
@@ -49,7 +51,7 @@ dev:
           FLASK_RUN_HOST="$${FLASK_RUN_HOST:-127.0.0.1}"; \
 	  API_HOST="$$FLASK_RUN_HOST"; \
 	  if [ "$$API_HOST" = "0.0.0.0" ]; then API_HOST="127.0.0.1"; fi; \
-	  export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST; \
+          export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY FLASK_RUN_PORT FLASK_RUN_HOST FRONTEND_ORIGIN; \
 	  NEXT_PUBLIC_API_BASE_URL="http://$$API_HOST:$$FLASK_RUN_PORT"; \
 	  export NEXT_PUBLIC_API_BASE_URL; \
 	  $(PY) bin/dev_check.py; \
