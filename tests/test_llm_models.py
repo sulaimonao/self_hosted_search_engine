@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+from engine.config import EngineConfig
 
 app_module = import_module("backend.app.__init__")
 
@@ -43,16 +46,30 @@ def _fake_requests_get(url: str, timeout: int) -> _FakeResponse:  # noqa: D401 -
     return _FakeResponse(status_code=200)
 
 
-def test_llm_models_filters_embedding_tags(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Ensure embedding models are filtered from the response."""
+def test_llm_models_returns_configured_primary_and_embed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Ensure configured models lead the response and extras are appended."""
 
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(app_module.requests, "get", _fake_requests_get)
 
     app = app_module.create_app()
+    app.config["RAG_ENGINE_CONFIG"] = EngineConfig.from_yaml(Path("config.yaml"))
     client = app.test_client()
 
     response = client.get("/api/llm/models")
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload == {"models": [{"name": "llama3.1:8b"}, {"name": "phi4"}]}
+    models = payload["models"]
+
+    leading = [(entry["name"], entry.get("role")) for entry in models[:3]]
+    assert leading == [
+        ("gpt-oss", "primary"),
+        ("gemma3", "fallback"),
+        ("embeddinggemma", "embedding"),
+    ]
+    assert models[0]["kind"] == "chat"
+    assert models[2]["kind"] == "embedding"
+
+    extra_names = {entry["name"] for entry in models[3:]}
+    assert "llama3.1:8b" in extra_names
+    assert "phi4" in extra_names

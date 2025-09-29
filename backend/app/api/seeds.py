@@ -11,11 +11,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import yaml
 from flask import Blueprint, Response, current_app, jsonify, request
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -130,16 +129,35 @@ def _write_registry(registry: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _normalize_url(url: str) -> str:
+_HTTP_SCHEMES = {"http", "https"}
+
+
+def parse_http_url(url: str):
     candidate = (url or "").strip()
     if not candidate:
         raise ValueError("URL is required")
-    parsed = urlparse(candidate)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    try:
+        parsed = urlparse(candidate)
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise ValueError("URL is not valid") from exc
+    if parsed.scheme not in _HTTP_SCHEMES or not parsed.netloc:
         raise ValueError("Provide an absolute http(s) URL")
-    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path or ''}"
-    if parsed.query:
-        normalized = f"{normalized}?{parsed.query}"
+    if parsed.username or parsed.password or "@" in parsed.netloc:
+        raise ValueError("URL may not include embedded credentials")
+    return parsed
+
+
+def is_safe_http_url(url: str) -> bool:
+    try:
+        parse_http_url(url)
+    except ValueError:
+        return False
+    return True
+
+
+def _normalize_url(url: str) -> str:
+    parsed = parse_http_url(url)
+    normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path or "", "", parsed.query, ""))
     return normalized.rstrip("/")
 
 

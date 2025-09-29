@@ -92,6 +92,7 @@ export interface ModelStatus {
   available: boolean;
   isPrimary?: boolean;
   kind: "chat" | "embedding";
+  role?: "primary" | "fallback" | "embedding" | "extra";
 }
 
 export interface OllamaStatus {

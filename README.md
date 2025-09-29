@@ -72,18 +72,22 @@ Verify the interpreter that will back your virtual environment before running
    npm install
    cd ..
    ```
-4. **Configure environment overrides (optional)** by copying `.env.example`:
+4. **Configure environment overrides (optional)** by copying `.env.example`
+   (backend) and/or `frontend/.env.example`:
 
    ```bash
    cp .env.example .env
+   cp frontend/.env.example frontend/.env
    ```
 
-   The file exposes common knobs such as Flask host/port, Ollama endpoint,
-   telemetry locations, agent limits, and the CORS origin (`FRONTEND_ORIGIN`).
-   Any values left unset fall back to sensible defaults baked into the Make
-   targets. When the frontend runs on a different hostname (or via HTTPS),
-   update `FRONTEND_ORIGIN` so API responses include the matching
-   `Access-Control-Allow-*` headers.
+   The root file exposes common knobs such as Flask host/port, Ollama endpoint
+   (`OLLAMA_HOST=http://127.0.0.1:11434`), telemetry locations, agent limits,
+   and the CORS origin (`FRONTEND_ORIGIN`). Any values left unset fall back to
+   sensible defaults baked into the Make targets. When the frontend runs on a
+   different hostname (or via HTTPS), update `FRONTEND_ORIGIN` so API responses
+   include the matching `Access-Control-Allow-*` headers. The frontend example
+   exposes `NEXT_PUBLIC_API_BASE[_URL]` if you ever need to point the UI at a
+   remote API during development.
 
 5. **Inspect repository paths** at any time with:
 
@@ -105,17 +109,21 @@ make dev
 `make dev` performs the following:
 
 - Loads `.env` (if present) to populate environment variables.
-- Starts the Flask server (default `http://127.0.0.1:5050`; overrides via
-  `UI_PORT` or `FLASK_RUN_PORT`).
+- Starts the Flask server (default `http://127.0.0.1:5050`; override with
+  `BACKEND_PORT` or `FLASK_RUN_PORT`).
 - Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
   `FRONTEND_PORT`).
 - Exposes the API base URL to the frontend via `NEXT_PUBLIC_API_BASE_URL`.
 - Publishes the browser origin to the Flask API via `FRONTEND_ORIGIN` for CORS.
 - Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>,
-  even when one process exits early.
+  even when one process exits early, and records PID files under `.dev/`.
+
+Run `make stop` to terminate lingering dev servers from another terminal
+without hunting for process IDs.
 
 Open the browser at `http://127.0.0.1:3100` to use the UI. If `127.0.0.1:5050`
-is busy (macOS ships AirPlay on that port), set `UI_PORT=5051 make dev` instead.
+is busy (macOS ships AirPlay on that port), run `BACKEND_PORT=5051 make dev`
+instead.
 The Flask server also serves a minimal UI at its root when you prefer not to run
 the Next.js app.
 
@@ -156,6 +164,7 @@ list instead of a single entrypoint.
 | --- | --- |
 | `make setup` | Create `.venv`, install Python deps, install Playwright Chromium |
 | `make dev` | Launch Flask + Next.js together with shared environment |
+| `make stop` | Stop dev servers started by `make dev` (removes `.dev/*.pid`) |
 | `make run` | Run the Flask backend only (respects `.env`) |
 | `make crawl` | Crawl a URL or seeds file into `data/crawl/` |
 | `make normalize` | Convert raw crawl output into normalized JSON lines |
@@ -199,6 +208,19 @@ pull requests:
 ```bash
 make check
 ```
+
+### Dev environment verification
+
+When the stack is running, execute the helper script for quick diagnostics:
+
+```bash
+./scripts/dev_verify.sh
+```
+
+It checks the frontend/backend listeners, confirms Ollama exposes the expected
+model tags (`gpt-oss`, `gemma3`, `embeddinggemma`), exercises the Flask LLM
+endpoints (including CORS preflight), and verifies that `/api/crawl` accepts
+URLs containing colons in the path.
 
 `make check` executes:
 
@@ -340,11 +362,11 @@ button lives under the status banner and:
 The same API is available for automation:
 
 ```bash
-curl -X POST http://127.0.0.1:5000/api/refresh \
+curl -X POST http://127.0.0.1:5050/api/refresh \
   -H 'Content-Type: application/json' \
   -d '{"query": "postgres vacuum best practices", "use_llm": true, "model": "llama3.1:8b-instruct"}'
 
-curl "http://127.0.0.1:5000/api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices"
+curl "http://127.0.0.1:5050/api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices"
 ```
 
 `POST` returns `{ job_id, status, created }` so callers can deduplicate
@@ -370,9 +392,9 @@ The Next.js UI includes an **LLM Assist** panel that:
 
 - Checks `ollama --version` and `GET /api/tags` to report whether the runtime is
   installed and reachable.
-- Lists locally available chat-capable models (embedding-only entries are
-  hidden). The selection is stored in `localStorage` and passed to the focused
-  crawl.
+- Lists configured chat and embedding models (primary, fallback, and embedder)
+  as reported by the backend. The selection is stored in `localStorage` and
+  passed to the focused crawl.
 - Provides inline guidance when Ollama is missing, stopped, or running without
   pulled models.
 
@@ -381,26 +403,30 @@ Install and start Ollama locally (macOS example):
 ```bash
 brew install --cask ollama
 ollama serve
-ollama pull llama3.1:8b-instruct
+ollama pull gpt-oss
+ollama pull gemma3
+ollama pull embeddinggemma
 ```
 
 ### Embedding model defaults
 
-- The backend defaults to the `embeddinggemma` model. On the first semantic
-  search the Flask API checks whether the model exists locally, streams
+- The backend defaults to the `embeddinggemma` embedder, with `gpt-oss` as the
+  primary chat model and `gemma3` as the fallback. On the first semantic search
+  the Flask API checks whether the models exist locally, streams
   `ollama pull` progress to the UI, and queues concurrent queries until
   embeddings are available.
-- Pull models manually if you prefer:
+- Pull the models manually if you prefer:
 
   ```bash
-  ollama pull embeddinggemma
+  ollama pull gpt-oss gemma3 embeddinggemma
   ```
 
 - Configure overrides with environment variables:
-  - `EMBED_MODEL` – embedding model name (defaults to `embeddinggemma`).
-  - `EMBED_AUTO_INSTALL` – set to `false` to disable automatic pulls.
-  - `EMBED_FALLBACKS` – comma-separated fallback models
-    (`nomic-embed-text,gte-small` by default).
+  - `RAG_EMBED_MODEL_NAME` – embedding model name (defaults to
+    `embeddinggemma`).
+  - `PLANNER_FALLBACK` – override the planner fallback chat model (defaults to
+    the value in `config.yaml`).
+  - `OLLAMA_HOST` – Ollama base URL (defaults to `http://127.0.0.1:11434`).
 
 Troubleshooting tips when auto-install stalls:
 
@@ -467,11 +493,11 @@ Example macOS workflow:
 
 ```bash
 source .venv/bin/activate
-curl -X POST http://127.0.0.1:5000/api/diagnostics \
+curl -X POST http://127.0.0.1:5050/api/diagnostics \
      -H 'Content-Type: application/json' \
      -d '{"include_pytest": true}'
 # => {"job_id":"abc123..."}
-curl http://127.0.0.1:5000/api/jobs/abc123.../status | jq .result.summary_path
+curl http://127.0.0.1:5050/api/jobs/abc123.../status | jq .result.summary_path
 ```
 
 ## Continuous integration

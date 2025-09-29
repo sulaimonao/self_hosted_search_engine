@@ -79,12 +79,20 @@ class EngineConfig:
         crawl = data.get("crawl", {})
         bootstrap = data.get("bootstrap")
 
+        primary_value = models.get("llm_primary", "gpt-oss")
+        fallback_value = models.get("llm_fallback", "gemma3")
+        embed_value = models.get("embed", "embeddinggemma")
+        primary_text = str(primary_value).strip() if primary_value else ""
+        fallback_text = str(fallback_value).strip() if fallback_value else ""
+        embed_text = str(embed_value).strip() if embed_value else ""
         model_cfg = ModelConfig(
-            llm_primary=str(models.get("llm_primary", "gemma2:latest")),
-            llm_fallback=str(models.get("llm_fallback")) if models.get("llm_fallback") else None,
-            embed=str(models.get("embed", "embeddinggemma")),
+            llm_primary=primary_text or "gpt-oss",
+            llm_fallback=fallback_text or None,
+            embed=embed_text or "embeddinggemma",
         )
-        ollama_cfg = OllamaConfig(base_url=str(ollama.get("base_url", "http://localhost:11434")))
+        env_ollama = os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_HOST")
+        base_url_value = env_ollama or ollama.get("base_url") or "http://127.0.0.1:11434"
+        ollama_cfg = OllamaConfig(base_url=str(base_url_value).rstrip("/"))
         retrieval_cfg = RetrievalConfig(
             k=int(retrieval.get("k", 5)),
             min_hits=int(retrieval.get("min_hits", 1)),

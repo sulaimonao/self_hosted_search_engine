@@ -6,6 +6,7 @@ import textwrap
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlunparse
 
 from flask import Blueprint, current_app, g, jsonify, request
 from markupsafe import escape
@@ -18,6 +19,7 @@ from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.indexing.coldstart import ColdStartIndexer
 from engine.llm.ollama_client import OllamaClientError
 from backend.app.embedding_manager import EmbeddingManager
+from backend.app.api.seeds import parse_http_url
 from backend.logging_utils import event_base, redact, write_event
 from server.llm import LLMError
 from server.runlog import add_run_log_line, current_run_log
@@ -438,6 +440,33 @@ def embedder_ensure_endpoint():
     else:
         status = manager.ensure()
     return jsonify(status)
+
+
+@bp.post("/crawl")
+def crawl_validation_endpoint():
+    payload = request.get_json(silent=True) or {}
+    url_value = payload.get("url")
+    if not isinstance(url_value, str) or not url_value.strip():
+        return jsonify({"error": "url is required"}), 400
+    try:
+        parsed = parse_http_url(url_value)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    depth_value = payload.get("depth", 1)
+    try:
+        depth = max(1, int(depth_value))
+    except (TypeError, ValueError):
+        return jsonify({"error": "depth must be a positive integer"}), 400
+
+    normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path or "", "", parsed.query, ""))
+    response = {
+        "url": normalized.rstrip("/"),
+        "depth": depth,
+        "queued": False,
+        "detail": "URL validated; queue long-running crawls via /api/seeds or the Crawl Manager UI.",
+    }
+    return jsonify(response)
 
 
 @bp.get("/search")

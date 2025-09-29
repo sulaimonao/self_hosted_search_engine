@@ -387,28 +387,65 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
   }
 
   const status = (await statusResponse.json()) as OllamaStatus;
-  const rawModels = ((await modelsResponse.json()) as { models?: Array<{ name: string }> }).models ?? [];
+  type RawModel = {
+    name?: unknown;
+    role?: unknown;
+    kind?: unknown;
+    installed?: unknown;
+    available?: unknown;
+  };
+
+  const rawModels = ((await modelsResponse.json()) as { models?: RawModel[] }).models ?? [];
 
   const knownModels: ModelStatus[] = [];
+  const seenModels = new Set<string>();
+
   for (const entry of rawModels) {
-    const name = entry?.name?.trim();
-    if (!name) continue;
-    const isEmbedding = /embed|embedding/i.test(name);
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as RawModel;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!name || seenModels.has(name)) continue;
+    seenModels.add(name);
+
+    const normalizedRole = typeof record.role === "string" ? record.role.trim().toLowerCase() : undefined;
+    let role: ModelStatus["role"];
+    switch (normalizedRole) {
+      case "primary":
+      case "fallback":
+      case "embedding":
+      case "extra":
+        role = normalizedRole;
+        break;
+      default:
+        role = undefined;
+    }
+
+    const normalizedKind = typeof record.kind === "string" ? record.kind.trim().toLowerCase() : undefined;
+    const isEmbedding =
+      normalizedKind === "embedding" || role === "embedding" || /embed|embedding/i.test(name);
+
+    const installed =
+      record.installed === undefined ? status.running : coerceBoolean(record.installed);
+    const available =
+      record.available === undefined ? status.running : coerceBoolean(record.available);
+
     knownModels.push({
       model: name,
-      installed: true,
-      available: status.running,
+      installed,
+      available,
       kind: isEmbedding ? "embedding" : "chat",
-      isPrimary: name.toLowerCase() === "gpt-oss",
+      isPrimary: role === "primary" || name.toLowerCase() === "gpt-oss",
+      role,
     });
   }
 
-  if (!knownModels.some((model) => /embeddinggemma/i.test(model.model))) {
+  if (!knownModels.some((model) => model.kind === "embedding")) {
     knownModels.push({
       model: "embeddinggemma",
       installed: false,
       available: status.running,
       kind: "embedding",
+      role: "embedding",
     });
   }
 

@@ -13,8 +13,9 @@ from typing import Optional
 import yaml
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, current_app, jsonify, render_template, request
 from flask_cors import CORS
+from urllib.parse import urlparse
 
 
 LOGGER = logging.getLogger(__name__)
@@ -72,11 +73,50 @@ def create_app() -> Flask:
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
 
-    frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:3100")
+    frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:3100").strip()
+
+    def _collect_allowed_origins(origin: str) -> list[str]:
+        allowed: list[str] = []
+
+        def _add(candidate: str | None) -> None:
+            if not candidate:
+                return
+            cleaned = candidate.rstrip("/")
+            if cleaned and cleaned not in allowed:
+                allowed.append(cleaned)
+
+        _add(origin)
+
+        parsed = urlparse(origin)
+        scheme = parsed.scheme or "http"
+        default_port = os.getenv("FRONTEND_PORT") or parsed.port or 3100
+        try:
+            port = int(default_port)
+        except (TypeError, ValueError):
+            port = 3100
+        port_text = str(port)
+        hostname = parsed.hostname or "127.0.0.1"
+        host_aliases = {hostname}
+        if hostname in {"127.0.0.1", "0.0.0.0"}:
+            host_aliases.add("localhost")
+        elif hostname == "localhost":
+            host_aliases.add("127.0.0.1")
+        else:
+            host_aliases.add("127.0.0.1")
+            host_aliases.add("localhost")
+        for host in host_aliases:
+            _add(f"{scheme}://{host}:{port_text}")
+        if port in {80, 443}:
+            for host in host_aliases:
+                _add(f"{scheme}://{host}")
+        return allowed
+
+    allowed_origins = _collect_allowed_origins(frontend_origin)
     app.config.setdefault("FRONTEND_ORIGIN", frontend_origin)
+    app.config.setdefault("FRONTEND_ALLOWED_ORIGINS", tuple(allowed_origins))
     CORS(
         app,
-        resources={r"/api/*": {"origins": frontend_origin}},
+        resources={r"/api/*": {"origins": allowed_origins}},
         supports_credentials=True,
         expose_headers=["X-Request-Id"],
     )
@@ -203,22 +243,67 @@ def create_app() -> Flask:
     @app.get("/api/llm/models")
     def llm_models():
         tags = _ollama_tags()
-        models: list[dict] = []
+        installed: set[str] = set()
         if tags:
-            for model in tags.get("models", []):
-                name: Optional[str]
-                if isinstance(model, str):
-                    name = model
-                elif isinstance(model, dict):
-                    candidate = model.get("name")
-                    name = candidate if isinstance(candidate, str) else None
+            for entry in tags.get("models", []):
+                if isinstance(entry, str):
+                    name = entry.strip()
+                elif isinstance(entry, dict):
+                    raw = entry.get("name")
+                    name = raw.strip() if isinstance(raw, str) else ""
                 else:
-                    name = None
+                    name = ""
                 if not name:
                     continue
-                cleaned = name.strip()
-                if cleaned and not _is_embedding_model(cleaned):
-                    models.append({"name": cleaned})
+                installed.add(name)
+                if ":" in name:
+                    installed.add(name.split(":", 1)[0])
+
+        engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
+        configured: list[tuple[str, str]] = []
+        if engine_config is not None:
+            primary = (engine_config.models.llm_primary or "").strip()
+            fallback = (engine_config.models.llm_fallback or "").strip()
+            embed = (engine_config.models.embed or "").strip()
+            for name, role in (
+                (primary, "primary"),
+                (fallback, "fallback"),
+                (embed, "embedding"),
+            ):
+                if name and all(existing[0] != name for existing in configured):
+                    configured.append((name, role))
+
+        models: list[dict[str, object]] = []
+        ollama_running = bool(tags)
+        for name, role in configured:
+            kind = "embedding" if role == "embedding" else "chat"
+            model_payload = {
+                "name": name,
+                "role": role,
+                "kind": kind,
+                "installed": name in installed,
+                "available": name in installed and ollama_running,
+            }
+            models.append(model_payload)
+
+        extras = []
+        if installed:
+            configured_names = {entry[0] for entry in configured}
+            for name in installed:
+                if name in configured_names:
+                    continue
+                extras.append(
+                    {
+                        "name": name,
+                        "role": "extra",
+                        "kind": "embedding" if _is_embedding_model(name) else "chat",
+                        "installed": True,
+                        "available": ollama_running,
+                    }
+                )
+        if extras:
+            models.extend(sorted(extras, key=lambda item: str(item["name"]).lower()))
+
         return jsonify({"models": models})
 
     @app.post("/api/llm/guess-seeds")

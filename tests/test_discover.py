@@ -1,4 +1,6 @@
 import json
+from importlib import import_module
+from pathlib import Path
 from typing import Iterable, Mapping
 
 import pytest
@@ -7,6 +9,10 @@ import server.discover as discover
 from crawler.frontier import Candidate
 from seed_loader.sources import SeedSource
 from server.discover import DiscoveryEngine, LLMReranker, extract_links, score_candidate
+from backend.app.api.seeds import is_safe_http_url
+from engine.config import EngineConfig
+
+app_module = import_module("backend.app.__init__")
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +48,45 @@ def test_score_candidate_respects_weights():
         + discover.AUTH_WEIGHT * 0.25
     )
     assert value == pytest.approx(expected)
+
+
+def test_is_safe_http_url_allows_colon_path():
+    assert is_safe_http_url("https://www.wikidata.org/wiki/Wikidata:Main_Page")
+
+
+def test_is_safe_http_url_rejects_credentials():
+    assert not is_safe_http_url("https://user:pass@example.com/secret")
+
+
+def test_crawl_endpoint_accepts_colon(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    app = app_module.create_app()
+    app.config["RAG_ENGINE_CONFIG"] = EngineConfig.from_yaml(Path("config.yaml"))
+    client = app.test_client()
+
+    response = client.post(
+        "/api/crawl",
+        json={"url": "https://www.wikidata.org/wiki/Wikidata:Main_Page", "depth": 2},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["url"] == "https://www.wikidata.org/wiki/Wikidata:Main_Page"
+    assert payload["depth"] == 2
+
+
+def test_crawl_endpoint_rejects_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    app = app_module.create_app()
+    app.config["RAG_ENGINE_CONFIG"] = EngineConfig.from_yaml(Path("config.yaml"))
+    client = app.test_client()
+
+    response = client.post(
+        "/api/crawl",
+        json={"url": "https://user:pass@example.com/private"},
+    )
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "URL may not include embedded credentials"
 
 
 class StubAuthority:

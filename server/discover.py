@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 
+from backend.app.api.seeds import parse_http_url
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -76,12 +78,10 @@ def _sanitize_url(url: str, base_url: str | None = None) -> Optional[str]:
     else:
         probe = "https://" + candidate.lstrip("/")
     try:
-        parsed = urlparse(probe)
+        parsed = parse_http_url(probe)
     except ValueError:
         return None
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
+    scheme = parsed.scheme
     path = parsed.path or "/"
     sanitized = f"{scheme}://{parsed.netloc}{path}"
     if parsed.query:
