@@ -102,13 +102,18 @@ make dev
 `make dev` performs the following:
 
 - Loads `.env` (if present) to populate environment variables.
-- Starts the Flask server (default `http://127.0.0.1:5000`).
-- Boots the Next.js dev server (default `http://127.0.0.1:3100`).
+- Starts the Flask server (default `http://127.0.0.1:5050`; overrides via
+  `UI_PORT` or `FLASK_RUN_PORT`).
+- Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
+  `FRONTEND_PORT`).
 - Exposes the API base URL to the frontend via `NEXT_PUBLIC_API_BASE_URL`.
-- Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>.
+- Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>,
+  even when one process exits early.
 
-Open the browser at `http://127.0.0.1:3100` to use the UI. The Flask server also
-serves a minimal UI at its root when you prefer not to run the Next.js app.
+Open the browser at `http://127.0.0.1:3100` to use the UI. If `127.0.0.1:5050`
+is busy (macOS ships AirPlay on that port), set `UI_PORT=5051 make dev` instead.
+The Flask server also serves a minimal UI at its root when you prefer not to run
+the Next.js app.
 
 ### Backend or frontend individually
 
