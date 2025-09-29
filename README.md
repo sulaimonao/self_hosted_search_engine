@@ -79,8 +79,11 @@ Verify the interpreter that will back your virtual environment before running
    ```
 
    The file exposes common knobs such as Flask host/port, Ollama endpoint,
-   telemetry locations, and agent limits. Any values left unset fall back to
-   sensible defaults baked into the Make targets.
+   telemetry locations, agent limits, and the CORS origin (`FRONTEND_ORIGIN`).
+   Any values left unset fall back to sensible defaults baked into the Make
+   targets. When the frontend runs on a different hostname (or via HTTPS),
+   update `FRONTEND_ORIGIN` so API responses include the matching
+   `Access-Control-Allow-*` headers.
 
 5. **Inspect repository paths** at any time with:
 
@@ -107,6 +110,7 @@ make dev
 - Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
   `FRONTEND_PORT`).
 - Exposes the API base URL to the frontend via `NEXT_PUBLIC_API_BASE_URL`.
+- Publishes the browser origin to the Flask API via `FRONTEND_ORIGIN` for CORS.
 - Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>,
   even when one process exits early.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
-from flask import Response, g, request
+from flask import Response, current_app, g, request
 
 from backend.logging_utils import event_base, new_request_id, redact, write_event
 from server.runlog import current_run_log
@@ -62,6 +62,26 @@ def after_request(response: Response) -> Response:
         )
     )
     response.headers.setdefault("X-Request-Id", str(getattr(g, "request_id", "")))
+
+    if request.path.startswith("/api"):
+        allowed_origin = current_app.config.get("FRONTEND_ORIGIN")
+        if allowed_origin:
+            response.headers.setdefault("Access-Control-Allow-Origin", allowed_origin)
+            response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+            response.headers.setdefault(
+                "Access-Control-Allow-Headers",
+                "Content-Type,Authorization,X-Requested-With",
+            )
+            response.headers.setdefault(
+                "Access-Control-Allow-Methods",
+                "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            )
+            vary_header = response.headers.get("Vary")
+            if vary_header:
+                if "origin" not in vary_header.lower():
+                    response.headers["Vary"] = f"{vary_header}, Origin"
+            else:
+                response.headers["Vary"] = "Origin"
     return response
 
 
