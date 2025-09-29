@@ -59,17 +59,27 @@ def test_llm_models_returns_configured_primary_and_embed(monkeypatch: pytest.Mon
     response = client.get("/api/llm/models")
     assert response.status_code == 200
     payload = response.get_json()
-    models = payload["models"]
+    assert payload["ollama_host"].startswith("http://127.0.0.1")
 
-    leading = [(entry["name"], entry.get("role")) for entry in models[:3]]
-    assert leading == [
-        ("gpt-oss", "primary"),
-        ("gemma3", "fallback"),
-        ("embeddinggemma", "embedding"),
-    ]
-    assert models[0]["kind"] == "chat"
-    assert models[2]["kind"] == "embedding"
+    available = payload["available"]
+    assert "llama3.1:8b" in available
+    assert "phi4" in available
 
-    extra_names = {entry["name"] for entry in models[3:]}
-    assert "llama3.1:8b" in extra_names
-    assert "phi4" in extra_names
+    configured = payload["configured"]
+    assert configured["primary"] == "gpt-oss"
+    assert configured["fallback"] == "gemma3"
+    assert configured["embedder"] == "embeddinggemma"
+
+
+def test_llm_health_reports_reachability(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module.requests, "get", _fake_requests_get)
+
+    app = app_module.create_app()
+    client = app.test_client()
+
+    response = client.get("/api/llm/health")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["reachable"] is True
+    assert payload["model_count"] == 7

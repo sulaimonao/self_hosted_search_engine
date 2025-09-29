@@ -88,11 +88,30 @@ export interface SeedRegistryResponse {
 
 export interface ModelStatus {
   model: string;
-  installed: boolean;
-  available: boolean;
+  installed?: boolean;
+  available?: boolean;
   isPrimary?: boolean;
   kind: "chat" | "embedding";
   role?: "primary" | "fallback" | "embedding" | "extra";
+}
+
+export interface ConfiguredModels {
+  primary: string | null;
+  fallback: string | null;
+  embedder: string | null;
+}
+
+export interface LlmModelsResponse {
+  available: string[];
+  configured: ConfiguredModels;
+  ollama_host: string;
+}
+
+export interface LlmHealth {
+  reachable: boolean;
+  model_count: number;
+  duration_ms: number;
+  host?: string;
 }
 
 export interface OllamaStatus {

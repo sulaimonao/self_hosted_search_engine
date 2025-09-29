@@ -15,12 +15,22 @@ printf '== Ollama tags ==\n'
 curl -s http://127.0.0.1:11434/api/tags | jq '.models[].name' | grep -E 'gpt-oss|gemma3|embeddinggemma'
 
 echo
-printf '== Backend model inventory ==\n'
+printf '== Backend LLM models ==\n'
 curl -sS http://127.0.0.1:5050/api/llm/models | jq .
 
 echo
-printf '== Backend LLM status ==\n'
+printf '== Backend LLM health ==\n'
+curl -sS http://127.0.0.1:5050/api/llm/health | jq .
+
+echo
+printf '== Backend LLM status (legacy) ==\n'
 curl -sS http://127.0.0.1:5050/api/llm/status | jq .
+
+echo
+printf '== Chat endpoint (fallback demo) ==\n'
+curl -sS -X POST http://127.0.0.1:5050/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-oss","messages":[{"role":"user","content":"say hi"}]}' | jq .
 
 echo
 printf '== Embedder status ==\n'

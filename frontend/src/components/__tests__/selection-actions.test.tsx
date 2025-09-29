@@ -151,6 +151,10 @@ describe("selection action surfaces", () => {
         onApproveAction={() => undefined}
         onEditAction={() => undefined}
         onDismissAction={() => undefined}
+        modelOptions={["gpt-oss"]}
+        selectedModel="gpt-oss"
+        onModelChange={() => undefined}
+        noModelsWarning={null}
       />
     );
 

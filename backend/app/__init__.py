@@ -233,6 +233,18 @@ def create_app() -> Flask:
         except ValueError:  # pragma: no cover - defensive
             return None
 
+    def _configured_models() -> dict[str, str | None]:
+        engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
+        primary = "gpt-oss"
+        fallback: str | None = "gemma3"
+        embed = "embeddinggemma"
+        if engine_config is not None:
+            primary = (engine_config.models.llm_primary or primary).strip() or primary
+            fallback_value = (engine_config.models.llm_fallback or "").strip()
+            fallback = fallback_value or None
+            embed = (engine_config.models.embed or embed).strip() or embed
+        return {"primary": primary, "fallback": fallback, "embedder": embed}
+
     @app.get("/api/llm/status")
     def llm_status():
         installed = _ollama_installed()
@@ -243,8 +255,9 @@ def create_app() -> Flask:
     @app.get("/api/llm/models")
     def llm_models():
         tags = _ollama_tags()
-        installed: set[str] = set()
+        available: list[str] = []
         if tags:
+            seen: set[str] = set()
             for entry in tags.get("models", []):
                 if isinstance(entry, str):
                     name = entry.strip()
@@ -255,56 +268,37 @@ def create_app() -> Flask:
                     name = ""
                 if not name:
                     continue
-                installed.add(name)
-                if ":" in name:
-                    installed.add(name.split(":", 1)[0])
+                if name not in seen:
+                    available.append(name)
+                    seen.add(name)
+        available.sort(key=lambda value: value.lower())
 
-        engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
-        configured: list[tuple[str, str]] = []
-        if engine_config is not None:
-            primary = (engine_config.models.llm_primary or "").strip()
-            fallback = (engine_config.models.llm_fallback or "").strip()
-            embed = (engine_config.models.embed or "").strip()
-            for name, role in (
-                (primary, "primary"),
-                (fallback, "fallback"),
-                (embed, "embedding"),
-            ):
-                if name and all(existing[0] != name for existing in configured):
-                    configured.append((name, role))
-
-        models: list[dict[str, object]] = []
-        ollama_running = bool(tags)
-        for name, role in configured:
-            kind = "embedding" if role == "embedding" else "chat"
-            model_payload = {
-                "name": name,
-                "role": role,
-                "kind": kind,
-                "installed": name in installed,
-                "available": name in installed and ollama_running,
+        configured = _configured_models()
+        return jsonify(
+            {
+                "available": available,
+                "configured": configured,
+                "ollama_host": _ollama_host(),
             }
-            models.append(model_payload)
+        )
 
-        extras = []
-        if installed:
-            configured_names = {entry[0] for entry in configured}
-            for name in installed:
-                if name in configured_names:
-                    continue
-                extras.append(
-                    {
-                        "name": name,
-                        "role": "extra",
-                        "kind": "embedding" if _is_embedding_model(name) else "chat",
-                        "installed": True,
-                        "available": ollama_running,
-                    }
-                )
-        if extras:
-            models.extend(sorted(extras, key=lambda item: str(item["name"]).lower()))
-
-        return jsonify({"models": models})
+    @app.get("/api/llm/health")
+    def llm_health():
+        start = time.perf_counter()
+        tags = _ollama_tags()
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        reachable = tags is not None
+        count = 0
+        if tags and isinstance(tags.get("models"), list):
+            count = len(tags["models"])  # type: ignore[index]
+        return jsonify(
+            {
+                "reachable": reachable,
+                "model_count": count,
+                "duration_ms": duration_ms,
+                "host": _ollama_host(),
+            }
+        )
 
     @app.post("/api/llm/guess-seeds")
     def llm_guess():

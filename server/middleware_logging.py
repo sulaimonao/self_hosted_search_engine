@@ -1,4 +1,4 @@
-"""Flask middleware emitting structured request telemetry."""
+"""Flask middleware emitting JSON request/response traces."""
 
 from __future__ import annotations
 
@@ -7,61 +7,73 @@ from typing import Any, Dict
 
 from flask import Response, current_app, g, request
 
-from backend.logging_utils import event_base, new_request_id, redact, write_event
+from backend.logging_utils import new_request_id, redact
+from server.json_logger import log_event
 from server.runlog import current_run_log
 
 
 def before_request() -> None:
     g.request_start = time.time()
-    g.request_id = request.headers.get("X-Request-Id") or new_request_id()
+    trace_id = request.headers.get("X-Request-Id") or new_request_id()
+    g.request_id = trace_id
+    g.trace_id = trace_id
     g.session_id = request.headers.get("X-Session-Id", "sess_anon")
     g.user_id = request.headers.get("X-User-Id", "anon")
     current_run_log(create=True)
 
     payload = request.get_json(silent=True) or {}
-    meta: Dict[str, Any] = {
-        "route": f"{request.method} {request.path}",
-        "payload": redact(payload),
+    headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() in {"content-type", "user-agent"}
     }
-    headers = {k: v for k, v in request.headers.items() if k.lower() in {"content-type", "user-agent"}}
+    meta: Dict[str, Any] = {"payload": redact(payload)}
     if headers:
         meta["headers"] = redact(headers)
 
-    write_event(
-        event_base(
-            event="req.start",
-            level="INFO",
-            route=f"{request.method} {request.path}",
-            request_id=g.request_id,
-            session_id=g.session_id,
-            user_id=g.user_id,
-            bytes_in=len(request.data or b""),
-            msg="incoming request",
-            meta=meta,
-        )
+    log_event(
+        "INFO",
+        "http.request",
+        trace=trace_id,
+        method=request.method,
+        path=request.path,
+        bytes_in=len(request.data or b""),
+        session=g.session_id,
+        user=g.user_id,
+        **meta,
     )
 
 
 def after_request(response: Response) -> Response:
     start = getattr(g, "request_start", time.time())
     duration_ms = int((time.time() - start) * 1000)
-    content_length = response.calculate_content_length()
-    write_event(
-        event_base(
-            event="req.end",
-            level="INFO",
-            route=f"{request.method} {request.path}",
-            request_id=getattr(g, "request_id", None),
-            session_id=getattr(g, "session_id", None),
-            user_id=getattr(g, "user_id", None),
-            duration_ms=duration_ms,
-            http_status=response.status_code,
-            bytes_out=content_length if content_length is not None else 0,
-            msg="request complete",
-            meta={"headers": redact(dict(response.headers))},
+    content_length = response.calculate_content_length() or 0
+    trace_id = getattr(g, "trace_id", None)
+
+    extras: Dict[str, Any] = {}
+    if request.path.startswith("/api/chat"):
+        extras.update(
+            {
+                "model": getattr(g, "chat_model", None),
+                "fallback_used": getattr(g, "chat_fallback_used", None),
+                "error": getattr(g, "chat_error_class", None),
+                "error_msg": getattr(g, "chat_error_message", None),
+            }
         )
+
+    log_event(
+        "INFO",
+        "http.response",
+        trace=trace_id,
+        method=request.method,
+        path=request.path,
+        status=response.status_code,
+        duration_ms=duration_ms,
+        bytes_out=content_length,
+        **{k: v for k, v in extras.items() if v is not None},
     )
-    response.headers.setdefault("X-Request-Id", str(getattr(g, "request_id", "")))
+
+    response.headers.setdefault("X-Request-Id", str(trace_id or ""))
 
     if request.path.startswith("/api"):
         allowed_origin = current_app.config.get("FRONTEND_ORIGIN")
