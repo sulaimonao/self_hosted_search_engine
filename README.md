@@ -390,13 +390,15 @@ The command honours `.env`, allows a one-off `BUDGET=...` override, and respects
 
 The Next.js UI includes an **LLM Assist** panel that:
 
-- Checks `ollama --version` and `GET /api/tags` to report whether the runtime is
-  installed and reachable.
-- Lists configured chat and embedding models (primary, fallback, and embedder)
-  as reported by the backend. The selection is stored in `localStorage` and
-  passed to the focused crawl.
-- Provides inline guidance when Ollama is missing, stopped, or running without
-  pulled models.
+- Calls `GET /api/llm/models` to display the configured primary/fallback/embedder
+  models alongside the complete list detected from Ollama. The active chat model
+  can be switched from the Copilot header dropdown and is persisted in
+  `localStorage` (`chat:model`).
+- Surfaces a red inline banner when no local models are detected to suggest
+  running `ollama pull gpt-oss` (or your preferred model) before retrying.
+- Checks `ollama --version`, `GET /api/llm/health`, and `GET /api/tags` to
+  report whether the runtime is installed and reachable, including the Ollama
+  host URL.
 
 Install and start Ollama locally (macOS example):
 
@@ -449,6 +451,9 @@ make llm-status
 make llm-models
 ```
 
+Run `scripts/dev_verify.sh` to print the detected models, Ollama health, and a
+chat fallback smoke test in one go.
+
 The default behaviour stays fully local: no external APIs are contacted unless
 Ollama is enabled. Set `SMART_USE_LLM=true` in `.env` if you want the toggle
 pre-enabled for every user.
@@ -464,6 +469,16 @@ pre-enabled for every user.
 - When both models are missing the planner responds with
   `{ "type": "final", "answer": "Planner LLM is unavailable." }` so the UI can
   degrade gracefully.
+
+### Debug traces
+
+- Every backend request now emits single-line JSON logs containing
+  `trace`, `method`, `path`, status codes, and chat metadata. Example:
+  `{"lvl":"INFO","evt":"http.request","trace":"req_abc123","path":"/api/chat"}`.
+- The same `trace_id` is exposed via the `X-Request-Id` response header and is
+  included in chat error payloads. Copy the value into the browser console logs
+  (prefixed with `[UI]`) to correlate UI actions with backend activity when
+  debugging end-to-end flows.
 
 ## Diagnostics snapshot API
 

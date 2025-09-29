@@ -16,6 +16,9 @@ import type {
   SelectionActionPayload,
   SearchHit,
   SearchIndexResponse,
+  LlmModelsResponse,
+  ConfiguredModels,
+  LlmHealth,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -187,6 +190,38 @@ function serializeMessages(history: ChatMessage[], nextUser: string): Serializab
   return values;
 }
 
+export class ChatRequestError extends Error {
+  status: number;
+  traceId: string | null;
+  code?: string;
+  hint?: string;
+  tried?: string[];
+
+  constructor(
+    message: string,
+    options: {
+      status: number;
+      traceId: string | null;
+      code?: string;
+      hint?: string;
+      tried?: string[];
+    },
+  ) {
+    super(message);
+    this.name = "ChatRequestError";
+    this.status = options.status;
+    this.traceId = options.traceId;
+    this.code = options.code;
+    this.hint = options.hint;
+    this.tried = options.tried;
+  }
+}
+
+export interface ChatStreamResult {
+  traceId: string | null;
+  model: string | null;
+}
+
 export async function streamChat(
   history: ChatMessage[],
   input: string,
@@ -194,8 +229,8 @@ export async function streamChat(
     model?: string | null;
     signal?: AbortSignal;
     onEvent: (chunk: ChatStreamChunk) => void;
-  }
-): Promise<void> {
+  },
+): Promise<ChatStreamResult> {
   const { signal, onEvent, model } = options;
   const response = await fetch(api("/api/chat"), {
     method: "POST",
@@ -208,9 +243,53 @@ export async function streamChat(
     signal,
   });
 
+  const traceId = response.headers.get("X-Request-Id");
+  const servedModel = response.headers.get("X-LLM-Model");
+
   if (!response.ok || !response.body) {
-    const reason = await response.text();
-    throw new Error(reason || `Chat request failed (${response.status})`);
+    let payload: Record<string, unknown> | null = null;
+    try {
+      payload = (await response.clone().json()) as Record<string, unknown>;
+    } catch (error) {
+      payload = null;
+    }
+
+    const fallbackText = await response.text();
+    let message = fallbackText || `Chat request failed (${response.status})`;
+    let code: string | undefined;
+    let hint: string | undefined;
+    let tried: string[] | undefined;
+    if (payload) {
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        code = payload.error.trim();
+      }
+      if (typeof payload.hint === "string" && payload.hint.trim()) {
+        hint = payload.hint.trim();
+        message = hint;
+      }
+      if (Array.isArray(payload.tried)) {
+        tried = payload.tried.filter((item): item is string => typeof item === "string");
+      }
+      const messageValue = payload["message"];
+      const detailValue =
+        typeof messageValue === "string"
+          ? messageValue
+          : (payload["detail"] as unknown);
+      const detail = typeof detailValue === "string" ? detailValue : null;
+      if (typeof detail === "string" && detail.trim()) {
+        message = detail.trim();
+      } else if (!hint && typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error.trim();
+      }
+    }
+
+    throw new ChatRequestError(message, {
+      status: response.status,
+      traceId,
+      code,
+      hint,
+      tried,
+    });
   }
 
   const reader = response.body.getReader();
@@ -236,6 +315,8 @@ export async function streamChat(
       }
     }
   }
+
+  return { traceId, model: servedModel ?? model ?? null };
 }
 
 export interface CrawlJobRequest {
@@ -371,87 +452,107 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
 export interface ModelInventory {
   status: OllamaStatus;
   models: ModelStatus[];
+  available: string[];
+  configured: ConfiguredModels;
+  health: LlmHealth;
+}
+
+function normalizeModelName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function fetchModelInventory(): Promise<ModelInventory> {
-  const [statusResponse, modelsResponse] = await Promise.all([
-    fetch(api("/api/llm/status")),
+  const [modelsResponse, healthResponse] = await Promise.all([
     fetch(api("/api/llm/models")),
+    fetch(api("/api/llm/health")),
   ]);
 
-  if (!statusResponse.ok) {
-    throw new Error("Unable to reach Ollama status endpoint");
-  }
   if (!modelsResponse.ok) {
     throw new Error("Unable to retrieve model list");
   }
+  if (!healthResponse.ok) {
+    throw new Error("Unable to reach Ollama health endpoint");
+  }
 
-  const status = (await statusResponse.json()) as OllamaStatus;
-  type RawModel = {
-    name?: unknown;
-    role?: unknown;
-    kind?: unknown;
-    installed?: unknown;
-    available?: unknown;
+  const modelsPayload = (await modelsResponse.json()) as LlmModelsResponse;
+  const healthPayload = (await healthResponse.json()) as LlmHealth;
+
+  const available = Array.isArray(modelsPayload.available)
+    ? modelsPayload.available
+        .map((entry) => normalizeModelName(entry))
+        .filter((entry): entry is string => typeof entry === "string")
+    : [];
+
+  const configuredRaw = modelsPayload.configured ?? ({} as ConfiguredModels);
+  const configured: ConfiguredModels = {
+    primary: normalizeModelName(configuredRaw.primary) ?? null,
+    fallback: normalizeModelName(configuredRaw.fallback) ?? null,
+    embedder: normalizeModelName(configuredRaw.embedder) ?? null,
   };
 
-  const rawModels = ((await modelsResponse.json()) as { models?: RawModel[] }).models ?? [];
+  const status: OllamaStatus = {
+    installed: available.length > 0,
+    running: !!healthPayload.reachable,
+    host: normalizeModelName(modelsPayload.ollama_host) ?? "",
+  };
 
-  const knownModels: ModelStatus[] = [];
-  const seenModels = new Set<string>();
+  const candidates = new Set<string>();
+  if (configured.primary) candidates.add(configured.primary);
+  if (configured.fallback) candidates.add(configured.fallback);
+  if (configured.embedder) candidates.add(configured.embedder);
+  for (const name of available) {
+    candidates.add(name);
+  }
 
-  for (const entry of rawModels) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as RawModel;
-    const name = typeof record.name === "string" ? record.name.trim() : "";
-    if (!name || seenModels.has(name)) continue;
-    seenModels.add(name);
-
-    const normalizedRole = typeof record.role === "string" ? record.role.trim().toLowerCase() : undefined;
-    let role: ModelStatus["role"];
-    switch (normalizedRole) {
+  const asArray = Array.from(candidates);
+  const weight = (model: ModelStatus): number => {
+    switch (model.role) {
       case "primary":
+        return 0;
       case "fallback":
+        return 1;
       case "embedding":
-      case "extra":
-        role = normalizedRole;
-        break;
+        return 2;
       default:
-        role = undefined;
+        return 3;
     }
+  };
 
-    const normalizedKind = typeof record.kind === "string" ? record.kind.trim().toLowerCase() : undefined;
-    const isEmbedding =
-      normalizedKind === "embedding" || role === "embedding" || /embed|embedding/i.test(name);
-
-    const installed =
-      record.installed === undefined ? status.running : coerceBoolean(record.installed);
-    const available =
-      record.available === undefined ? status.running : coerceBoolean(record.available);
-
-    knownModels.push({
-      model: name,
-      installed,
-      available,
-      kind: isEmbedding ? "embedding" : "chat",
-      isPrimary: role === "primary" || name.toLowerCase() === "gpt-oss",
-      role,
+  const models: ModelStatus[] = asArray
+    .map((name) => {
+      const isPrimary = configured.primary === name;
+      const role: ModelStatus["role"] = isPrimary
+        ? "primary"
+        : configured.fallback === name
+        ? "fallback"
+        : configured.embedder === name
+        ? "embedding"
+        : "extra";
+      const installed = available.includes(name);
+      const isEmbedding = role === "embedding";
+      return {
+        model: name,
+        kind: isEmbedding ? "embedding" : "chat",
+        role,
+        isPrimary,
+        installed,
+        available: installed && !!healthPayload.reachable,
+      } satisfies ModelStatus;
+    })
+    .sort((a, b) => {
+      const diff = weight(a) - weight(b);
+      if (diff !== 0) return diff;
+      return a.model.localeCompare(b.model);
     });
-  }
-
-  if (!knownModels.some((model) => model.kind === "embedding")) {
-    knownModels.push({
-      model: "embeddinggemma",
-      installed: false,
-      available: status.running,
-      kind: "embedding",
-      role: "embedding",
-    });
-  }
 
   return {
     status,
-    models: knownModels,
+    models,
+    available,
+    configured,
+    health: healthPayload,
   };
 }
 

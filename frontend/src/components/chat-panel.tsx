@@ -9,6 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, ProposedAction } from "@/lib/types";
 
@@ -23,6 +30,10 @@ interface ChatPanelProps {
   onEditAction: (action: ProposedAction) => void;
   onDismissAction: (action: ProposedAction) => void;
   onUploadFile?: () => void;
+  modelOptions: string[];
+  selectedModel: string | null;
+  onModelChange: (model: string) => void;
+  noModelsWarning?: string | null;
 }
 
 export function ChatPanel({
@@ -36,6 +47,10 @@ export function ChatPanel({
   onEditAction,
   onDismissAction,
   onUploadFile,
+  modelOptions,
+  selectedModel,
+  onModelChange,
+  noModelsWarning,
 }: ChatPanelProps) {
   const formRef = useRef<HTMLFormElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -65,13 +80,39 @@ export function ChatPanel({
 
   return (
     <Card className="flex h-full flex-col">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm">Copilot chat</CardTitle>
-          <div className="flex gap-2 text-xs text-muted-foreground">
-            <span>Streaming {isStreaming ? "live" : "idle"}</span>
+      <CardHeader className="space-y-2 pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-sm">Copilot chat</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Streaming {isStreaming ? "live" : "idle"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Model</span>
+            <Select
+              value={selectedModel ?? undefined}
+              onValueChange={onModelChange}
+              disabled={modelOptions.length === 0}
+            >
+              <SelectTrigger className="h-8 w-44">
+                <SelectValue placeholder="Select model" />
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
+        {noModelsWarning ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {noModelsWarning}
+          </div>
+        ) : null}
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden">
         <ScrollArea className="h-full pr-4">

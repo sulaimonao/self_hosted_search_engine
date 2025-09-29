@@ -29,6 +29,7 @@ import { AgentLog } from "@/components/agent-log";
 import { JobStatus } from "@/components/job-status";
 import { CrawlManager } from "@/components/crawl-manager";
 import { ActionEditor } from "@/components/action-editor";
+import { ToastContainer, ToastMessage } from "@/components/toast-container";
 import {
   extractSelection,
   fetchModelInventory,
@@ -40,7 +41,10 @@ import {
   streamChat,
   subscribeJob,
   summarizeSelection,
+  ChatRequestError,
+  ChatStreamResult,
 } from "@/lib/api";
+import { resolveChatModelSelection } from "@/lib/chat-model";
 import type {
   ActionKind,
   AgentLogEntry,
@@ -56,8 +60,10 @@ import type {
   SeedRecord,
   SearchHit,
 } from "@/lib/types";
+import { devlog } from "@/lib/devlog";
 
 const INITIAL_URL = "https://news.ycombinator.com";
+const MODEL_STORAGE_KEY = "chat:model";
 
 function uid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -162,6 +168,9 @@ export function AppShell() {
   const [chatModel, setChatModel] = useState<string | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState<string | null>(null);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelWarning, setModelWarning] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
@@ -172,13 +181,34 @@ export function AppShell() {
   const chatHistoryRef = useRef<ChatMessage[]>(chatMessages);
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
   const searchAbortRef = useRef<AbortController | null>(null);
+  const lastSuccessfulModelRef = useRef<string | null>(null);
 
   const currentUrl = previewState.history[previewState.index];
+
+  const pushToast = useCallback(
+    (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
+      const id = uid();
+      setToasts((items) => [
+        ...items,
+        { id, message, variant: options?.variant, traceId: options?.traceId ?? null },
+      ]);
+    },
+    [],
+  );
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((items) => items.filter((toast) => toast.id !== id));
+  }, []);
+
+  useEffect(() => {
+    devlog("mount");
+  }, []);
 
   const navigateTo = useCallback(
     (inputValue: string) => {
       const value = inputValue.trim();
       if (!value) return;
+      devlog("navigate", { url: value });
       setIsPreviewLoading(true);
       setPreviewState((state) => {
         const nextHistory = state.history.slice(0, state.index + 1);
@@ -369,6 +399,7 @@ export function AppShell() {
         });
         applySeedRegistry(payload);
         setSeedError(null);
+        devlog("crawl.queue", { url, scope });
         appendLog({
           id: uid(),
           label: "Queued crawl",
@@ -472,6 +503,7 @@ export function AppShell() {
       const controller = new AbortController();
       searchAbortRef.current = controller;
       const timestamp = new Date().toISOString();
+      devlog("search", { query });
 
       setSearchState((state) => ({
         ...state,
@@ -631,8 +663,10 @@ export function AppShell() {
         );
       };
 
+      devlog("chat.send", { model: chatModel ?? "auto" });
+
       try {
-        await streamChat(historySnapshot, content, {
+        const result: ChatStreamResult = await streamChat(historySnapshot, content, {
           model: chatModel,
           signal: controller.signal,
           onEvent: (chunk) => {
@@ -685,22 +719,50 @@ export function AppShell() {
             }
           },
         });
+        devlog("chat.ok", { trace: result.traceId, model: result.model ?? chatModel ?? "unknown" });
+        if (result.model && result.model !== chatModel) {
+          setChatModel(result.model);
+        }
+        lastSuccessfulModelRef.current = result.model ?? chatModel;
       } catch (error) {
         const abort = controller.signal.aborted;
         if (!abort) {
-          const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
-          updateAssistant((assistant) => ({
-            ...assistant,
-            streaming: false,
-            content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
-          }));
-          appendLog({
-            id: uid(),
-            label: "Chat failure",
-            detail: message,
-            status: "error",
-            timestamp: new Date().toISOString(),
-          });
+          if (error instanceof ChatRequestError) {
+            const message = error.hint ?? error.message;
+            devlog("chat.fail", { trace: error.traceId, code: error.code });
+            updateAssistant((assistant) => ({
+              ...assistant,
+              streaming: false,
+              content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
+            }));
+            appendLog({
+              id: uid(),
+              label: "Chat failure",
+              detail: error.traceId ? `${message} (trace ${error.traceId})` : message,
+              status: "error",
+              timestamp: new Date().toISOString(),
+            });
+            pushToast(message, { variant: "destructive", traceId: error.traceId });
+            if (error.code === "model_not_found" && lastSuccessfulModelRef.current) {
+              setChatModel(lastSuccessfulModelRef.current);
+            }
+          } else {
+            const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+            devlog("chat.fail", { trace: null, code: "unexpected" });
+            updateAssistant((assistant) => ({
+              ...assistant,
+              streaming: false,
+              content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
+            }));
+            appendLog({
+              id: uid(),
+              label: "Chat failure",
+              detail: message,
+              status: "error",
+              timestamp: new Date().toISOString(),
+            });
+            pushToast(message, { variant: "destructive" });
+          }
         }
       } finally {
         if (streamingController.current === controller) {
@@ -710,7 +772,7 @@ export function AppShell() {
         updateAssistant((message) => ({ ...message, streaming: false }));
       }
     },
-    [appendLog, appendMessage, chatModel, currentUrl]
+    [appendLog, appendMessage, chatModel, currentUrl, pushToast]
   );
 
   const handleStopStreaming = useCallback(() => {
@@ -719,6 +781,7 @@ export function AppShell() {
       streamingController.current = null;
     }
     setIsStreaming(false);
+    devlog("chat.stop");
     appendLog({
       id: uid(),
       label: "Streaming stopped",
@@ -727,6 +790,11 @@ export function AppShell() {
       timestamp: new Date().toISOString(),
     });
   }, [appendLog]);
+
+  const handleModelSelect = useCallback((value: string) => {
+    setChatModel(value);
+    devlog("modelChanged", { model: value });
+  }, []);
 
   const handleAskAgent = useCallback(
     (question: string) => {
@@ -767,6 +835,7 @@ export function AppShell() {
         status: "success",
         timestamp: new Date().toISOString(),
       });
+      devlog("action.approve", { kind: action.kind, id: action.id });
 
       try {
         if (action.kind === "crawl" || action.kind === "queue") {
@@ -775,6 +844,7 @@ export function AppShell() {
           const maxPages = Number(action.payload.maxPages ?? 25);
           const maxDepth = Number(action.payload.maxDepth ?? 2);
           const description = `Crawl ${new URL(url).hostname}`;
+          devlog("crawl.start", { url, scope, maxPages, maxDepth });
 
           const response = await startCrawlJob({ url, scope, maxPages, maxDepth });
           const jobId = (response as { job_id?: string; jobId?: string }).jobId ??
@@ -968,6 +1038,7 @@ export function AppShell() {
         const payload = await saveSeed({ action: "delete", revision, seed: { id } });
         applySeedRegistry(payload);
         setSeedError(null);
+        devlog("crawl.remove", { id, url: target?.url });
         appendLog({
           id: uid(),
           label: "Seed removed",
@@ -1002,6 +1073,7 @@ export function AppShell() {
         });
         applySeedRegistry(payload);
         setSeedError(null);
+        devlog("crawl.scope", { id, scope, url: target?.url });
         appendLog({
           id: uid(),
           label: "Seed updated",
@@ -1060,18 +1132,41 @@ export function AppShell() {
   }, [crawlQueue]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (chatModel) {
+      window.localStorage.setItem(MODEL_STORAGE_KEY, chatModel);
+    } else {
+      window.localStorage.removeItem(MODEL_STORAGE_KEY);
+    }
+  }, [chatModel]);
+
+  useEffect(() => {
     const loadModels = async () => {
       try {
         const inventory = await fetchModelInventory();
         setModelStatus(inventory.models);
         setOllamaStatus(inventory.status);
-        const primaryChat = inventory.models.find((model) => model.kind === "chat" && model.isPrimary);
-        const anyChat = inventory.models.find((model) => model.kind === "chat");
-        const embedding = inventory.models.find((model) => model.kind === "embedding");
-        setChatModel(primaryChat?.model ?? anyChat?.model ?? null);
-        setEmbeddingModel(embedding?.model ?? null);
+        setAvailableModels(inventory.available);
+        setEmbeddingModel(inventory.configured.embedder);
+        setModelWarning(
+          inventory.available.length === 0
+            ? "No local models detected. Run: `ollama pull gpt-oss` (or your choice) then refresh."
+            : null,
+        );
+        const stored =
+          typeof window !== "undefined" ? window.localStorage.getItem(MODEL_STORAGE_KEY) : null;
+        const nextModel = resolveChatModelSelection({
+          available: inventory.available,
+          configured: inventory.configured,
+          stored: stored && stored.trim() ? stored.trim() : null,
+          previous: lastSuccessfulModelRef.current,
+        });
+        setChatModel(nextModel);
+        lastSuccessfulModelRef.current = nextModel;
+        devlog("models.loaded", { available: inventory.available.length, model: nextModel });
       } catch (error) {
         console.warn("Unable to load model inventory", error);
+        devlog("models.error", { message: error instanceof Error ? error.message : String(error) });
       }
     };
     loadModels();
@@ -1116,6 +1211,16 @@ export function AppShell() {
     ],
     [handleReload]
   );
+
+  const chatModelOptions = useMemo(() => {
+    if (!chatModel) {
+      return availableModels;
+    }
+    if (availableModels.includes(chatModel)) {
+      return availableModels;
+    }
+    return [chatModel, ...availableModels.filter((model) => model !== chatModel)];
+  }, [availableModels, chatModel]);
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -1183,6 +1288,10 @@ export function AppShell() {
                   onApproveAction={handleApproveAction}
                   onEditAction={handleEditAction}
                   onDismissAction={handleDismissAction}
+                  modelOptions={chatModelOptions}
+                  selectedModel={chatModel}
+                  onModelChange={handleModelSelect}
+                  noModelsWarning={modelWarning}
                 />
               </div>
             </TabsContent>
@@ -1336,9 +1445,9 @@ export function AppShell() {
                             {model.isPrimary ? " · primary" : ""}
                           </p>
                         </div>
-                        <Badge variant={model.available ? "default" : "destructive"}>
-                          {model.available ? "Available" : "Unavailable"}
-                        </Badge>
+                      <Badge variant={model.available !== false ? "default" : "destructive"}>
+                        {model.available !== false ? "Available" : "Unavailable"}
+                      </Badge>
                       </div>
                     ))}
                   </div>
@@ -1360,6 +1469,7 @@ export function AppShell() {
           </Button>
         </SheetContent>
       </Sheet>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
