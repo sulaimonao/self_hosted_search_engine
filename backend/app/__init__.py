@@ -13,7 +13,7 @@ from typing import Optional
 import yaml
 
 import requests
-from flask import Flask, current_app, jsonify, request
+from flask import Flask, Response, current_app, jsonify, request
 from flask_cors import CORS
 
 
@@ -77,6 +77,20 @@ def create_app() -> Flask:
         supports_credentials=True,
         expose_headers=["X-Request-Id"],
     )
+
+    @app.post("/api/dev/log")
+    def dev_log() -> Response:
+        """Forward frontend dev instrumentation to stdout when developing."""
+
+        if os.getenv("NODE_ENV") == "production":
+            return jsonify({"ok": False, "reason": "disabled"}), 403
+
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {"_raw": request.data.decode("utf-8", "ignore")}
+
+        print({"lvl": "DEBUG", "evt": "ui.devlog", "data": payload}, flush=True)
+        return jsonify({"ok": True}), 200
 
     config = AppConfig.from_env()
     config.ensure_dirs()

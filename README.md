@@ -110,18 +110,30 @@ make dev
   `http://localhost:5050` from the host; override with
   `BACKEND_PORT`). Auto-reload stays off so a `git pull` or file sync won't
   restart your dev server; opt back in with `BACKEND_RELOAD=1 make dev`.
-- Boots the Next.js dev server (binds to `0.0.0.0` and is reachable at
-  `http://localhost:3100`; override with `FRONTEND_PORT`).
+- Waits for `/api/llm/health` to report ready before booting the frontend. The
+  command aborts if the API never becomes healthy, preventing the UI from
+  spamming `ECONNREFUSED` during startup.
+- Installs frontend dependencies on demand (skips work when `node_modules`
+  already exists) and starts the Next.js dev server (binds to `0.0.0.0` and is
+  reachable at `http://localhost:3100`; override with `FRONTEND_PORT`).
+- Streams frontend dev instrumentation (via `/api/dev/log`) into the backend
+  terminal so you can observe chat/search actions alongside Flask logs.
 - Tears both processes down when either exits or you press
   <kbd>Ctrl</kbd> + <kbd>C</kbd>.
+
+If Ollama is running but no chat-capable models are installed, the UI
+automatically calls `/api/llm/autopull` to download `gemma3` (falling back to
+`gpt-oss`). Expect the first run of `make dev` to spend a few minutes fetching
+model weights.
 
 Run `make stop` to terminate lingering dev servers from another terminal
 without hunting for process IDs.
 
-Open the browser at `http://localhost:3100` to use the UI. If `localhost:5050`
-is busy (macOS ships AirPlay on that port), run `BACKEND_PORT=5051 make dev`
-instead. The Flask API root now returns a JSON 404 to indicate that the UI lives
-entirely in Next.js.
+Open the browser at `http://localhost:3100` to use the UI. Make sure `ollama`
+is listening on `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
+`localhost:5050` is busy (macOS ships AirPlay on that port), run
+`BACKEND_PORT=5051 make dev` instead. The Flask API root now returns a JSON 404
+to indicate that the UI lives entirely in Next.js.
 
 Verify the stack after startup with:
 

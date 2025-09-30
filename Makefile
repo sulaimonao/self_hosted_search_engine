@@ -35,35 +35,49 @@ setup:
 
 dev:
 	@bash -c 'set -euo pipefail; \
-	  echo "Starting API-only backend and Next.js UI..."; \
-	  set -a; [ -f .env ] && source .env; set +a; \
-	  FRONTEND_PORT="$${FRONTEND_PORT:-3100}"; \
-          FRONTEND_HOST="$${FRONTEND_HOST:-0.0.0.0}"; \
-          BACKEND_PORT="$${BACKEND_PORT:-5050}"; \
-          BACKEND_HOST="$${BACKEND_HOST:-0.0.0.0}"; \
-	  BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; \
-	  FLASK_RELOAD_FLAG="--no-reload"; \
-	  if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; \
-	  DATA_ROOT="$(DATA_DIR)"; \
-	  INDEX_DIR="$${INDEX_DIR:-$$DATA_ROOT/whoosh}"; \
-	  CRAWL_STORE="$${CRAWL_STORE:-$$DATA_ROOT/crawl}"; \
-	  NORMALIZED_PATH="$${NORMALIZED_PATH:-$$DATA_ROOT/normalized/normalized.jsonl}"; \
-	  CHROMA_PERSIST_DIR="$${CHROMA_PERSIST_DIR:-$$DATA_ROOT/chroma}"; \
-	  CHROMADB_DISABLE_TELEMETRY="$${CHROMADB_DISABLE_TELEMETRY:-1}"; \
-	  export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY; \
-	  PYTHON_BIN="$(PY)"; \
-	  if [ ! -x "$$PYTHON_BIN" ]; then PYTHON_BIN="$(PYTHON)"; fi; \
-          trap "kill 0" EXIT INT TERM; \
-	  "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT" & \
-	  BACK_PID=$$!; \
-	  (cd frontend && npm install >/dev/null && npm run dev -- --hostname "$$FRONTEND_HOST" --port "$$FRONTEND_PORT") & \
-	  FRONT_PID=$$!; \
-          DISPLAY_FRONT_HOST="$$FRONTEND_HOST"; \
-          if [ "$$DISPLAY_FRONT_HOST" = "0.0.0.0" ]; then DISPLAY_FRONT_HOST="localhost"; fi; \
-          DISPLAY_BACK_HOST="$$BACKEND_HOST"; \
-          if [ "$$DISPLAY_BACK_HOST" = "0.0.0.0" ]; then DISPLAY_BACK_HOST="localhost"; fi; \
-          echo "UI: http://$$DISPLAY_FRONT_HOST:$$FRONTEND_PORT (bound to $$FRONTEND_HOST) | API: http://$$DISPLAY_BACK_HOST:$$BACKEND_PORT (bound to $$BACKEND_HOST)"; \
-	  wait $$BACK_PID $$FRONT_PID'
+  echo "Starting API-only backend and Next.js UI..."; \
+  set -a; [ -f .env ] && source .env; set +a; \
+  FRONTEND_PORT="$${FRONTEND_PORT:-3100}"; \
+  FRONTEND_HOST="$${FRONTEND_HOST:-0.0.0.0}"; \
+  BACKEND_PORT="$${BACKEND_PORT:-5050}"; \
+  BACKEND_HOST="$${BACKEND_HOST:-0.0.0.0}"; \
+  BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; \
+  FLASK_RELOAD_FLAG="--no-reload"; \
+  if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; \
+  DATA_ROOT="$(DATA_DIR)"; \
+  INDEX_DIR="$${INDEX_DIR:-$$DATA_ROOT/whoosh}"; \
+  CRAWL_STORE="$${CRAWL_STORE:-$$DATA_ROOT/crawl}"; \
+  NORMALIZED_PATH="$${NORMALIZED_PATH:-$$DATA_ROOT/normalized/normalized.jsonl}"; \
+  CHROMA_PERSIST_DIR="$${CHROMA_PERSIST_DIR:-$$DATA_ROOT/chroma}"; \
+  CHROMADB_DISABLE_TELEMETRY="$${CHROMADB_DISABLE_TELEMETRY:-1}"; \
+  export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY; \
+  PYTHON_BIN="$(PY)"; \
+  if [ ! -x "$$PYTHON_BIN" ]; then PYTHON_BIN="$(PYTHON)"; fi; \
+  trap "kill 0" EXIT INT TERM; \
+  stdbuf -oL -eL "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT" & \
+  BACK_PID=$$!; \
+  HEALTH_URL="http://127.0.0.1:$$BACKEND_PORT/api/llm/health"; \
+  echo "Waiting for backend at $$HEALTH_URL..."; \
+  READY=0; \
+  for attempt in $$(seq 1 60); do \
+    if curl -fsS "$$HEALTH_URL" >/dev/null 2>&1; then READY=1; break; fi; \
+    if ! kill -0 $$BACK_PID >/dev/null 2>&1; then echo "Backend process exited early" >&2; wait $$BACK_PID; exit 1; fi; \
+    sleep 0.5; \
+  done; \
+  if [ "$$READY" -ne 1 ]; then echo "Backend did not become ready in time" >&2; kill $$BACK_PID; wait $$BACK_PID || true; exit 1; fi; \
+  if [ ! -d frontend/node_modules ]; then \
+    echo "Installing frontend dependencies..."; \
+    (cd frontend && npm install); \
+  fi; \
+  echo "Starting Next.js dev server..."; \
+  (cd frontend && FRONTEND_PORT="$$FRONTEND_PORT" npm run dev -- --hostname "$$FRONTEND_HOST" --port "$$FRONTEND_PORT") & \
+  FRONT_PID=$$!; \
+  DISPLAY_FRONT_HOST="$$FRONTEND_HOST"; \
+  if [ "$$DISPLAY_FRONT_HOST" = "0.0.0.0" ]; then DISPLAY_FRONT_HOST="localhost"; fi; \
+  DISPLAY_BACK_HOST="$$BACKEND_HOST"; \
+  if [ "$$DISPLAY_BACK_HOST" = "0.0.0.0" ]; then DISPLAY_BACK_HOST="localhost"; fi; \
+  echo "UI: http://$$DISPLAY_FRONT_HOST:$$FRONTEND_PORT (bound to $$FRONTEND_HOST) | API: http://$$DISPLAY_BACK_HOST:$$BACKEND_PORT (bound to $$BACKEND_HOST)"; \
+  wait $$BACK_PID $$FRONT_PID'
 
 stop:
 	@bash -c 'set -euo pipefail; \
