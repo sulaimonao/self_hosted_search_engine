@@ -31,7 +31,6 @@ engine/          Search pipelines (Whoosh BM25 + vector reranker)
 llm/             Ollama helpers for discovery, planning, and embeddings
 scripts/         Local tooling (change budget guard, telemetry tail, etc.)
 seeds/           Curated discovery registry (`docs/registry_structure.md`)
-static/, templates/   Assets served by Flask
 ```
 
 Supporting assets live under `data/` at runtime. The directory is safe to delete
@@ -82,12 +81,9 @@ Verify the interpreter that will back your virtual environment before running
 
    The root file exposes common knobs such as Flask host/port, Ollama endpoint
    (`OLLAMA_HOST=http://127.0.0.1:11434`), telemetry locations, agent limits,
-   and the CORS origin (`FRONTEND_ORIGIN`). Any values left unset fall back to
-   sensible defaults baked into the Make targets. When the frontend runs on a
-   different hostname (or via HTTPS), update `FRONTEND_ORIGIN` so API responses
-   include the matching `Access-Control-Allow-*` headers. The frontend example
-   exposes `NEXT_PUBLIC_API_BASE[_URL]` if you ever need to point the UI at a
-   remote API during development.
+   and crawler paths. Any values left unset fall back to sensible defaults in
+   the Make targets. The frontend example exposes `NEXT_PUBLIC_API_BASE[_URL]`
+   if you ever need to point the UI at a remote API during development.
 
 5. **Inspect repository paths** at any time with:
 
@@ -109,23 +105,30 @@ make dev
 `make dev` performs the following:
 
 - Loads `.env` (if present) to populate environment variables.
-- Starts the Flask server (default `http://127.0.0.1:5050`; override with
-  `BACKEND_PORT` or `FLASK_RUN_PORT`).
+- Exports crawl/index directories so both processes share the same data roots.
+- Starts the Flask API only (default `http://127.0.0.1:5050`; override with
+  `BACKEND_PORT`).
 - Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
   `FRONTEND_PORT`).
-- Exposes the API base URL to the frontend via `NEXT_PUBLIC_API_BASE_URL`.
-- Publishes the browser origin to the Flask API via `FRONTEND_ORIGIN` for CORS.
-- Shuts everything down gracefully when you hit <kbd>Ctrl</kbd> + <kbd>C</kbd>,
-  even when one process exits early, and records PID files under `.dev/`.
+- Tears both processes down when either exits or you press
+  <kbd>Ctrl</kbd> + <kbd>C</kbd>.
 
 Run `make stop` to terminate lingering dev servers from another terminal
 without hunting for process IDs.
 
 Open the browser at `http://127.0.0.1:3100` to use the UI. If `127.0.0.1:5050`
 is busy (macOS ships AirPlay on that port), run `BACKEND_PORT=5051 make dev`
-instead.
-The Flask server also serves a minimal UI at its root when you prefer not to run
-the Next.js app.
+instead. The Flask API root now returns a JSON 404 to indicate that the UI lives
+entirely in Next.js.
+
+Verify the stack after startup with:
+
+```bash
+./scripts/dev_verify.sh
+```
+
+The helper checks the API directly, confirms the Next.js HTML shell, and ensures
+the `/api/*` rewrite succeeds.
 
 ### Backend or frontend individually
 

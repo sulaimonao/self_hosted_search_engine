@@ -13,9 +13,8 @@ from typing import Optional
 import yaml
 
 import requests
-from flask import Flask, current_app, jsonify, render_template, request
+from flask import Flask, current_app, jsonify, request
 from flask_cors import CORS
-from urllib.parse import urlparse
 
 
 LOGGER = logging.getLogger(__name__)
@@ -64,61 +63,14 @@ def create_app() -> Flask:
 
     metrics = metrics_module
 
-    package_root = Path(__file__).resolve().parents[2]
-    static_folder = package_root / "static"
-    template_folder = package_root / "templates"
-    app = Flask(
-        __name__,
-        static_folder=str(static_folder),
-        template_folder=str(template_folder),
-    )
+    app = Flask(__name__)
 
     app.before_request(request_id_middleware.before_request)
     app.after_request(request_id_middleware.after_request)
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
 
-    frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:3100").strip()
-
-    def _collect_allowed_origins(origin: str) -> list[str]:
-        allowed: list[str] = []
-
-        def _add(candidate: str | None) -> None:
-            if not candidate:
-                return
-            cleaned = candidate.rstrip("/")
-            if cleaned and cleaned not in allowed:
-                allowed.append(cleaned)
-
-        _add(origin)
-
-        parsed = urlparse(origin)
-        scheme = parsed.scheme or "http"
-        default_port = os.getenv("FRONTEND_PORT") or parsed.port or 3100
-        try:
-            port = int(default_port)
-        except (TypeError, ValueError):
-            port = 3100
-        port_text = str(port)
-        hostname = parsed.hostname or "127.0.0.1"
-        host_aliases = {hostname}
-        if hostname in {"127.0.0.1", "0.0.0.0"}:
-            host_aliases.add("localhost")
-        elif hostname == "localhost":
-            host_aliases.add("127.0.0.1")
-        else:
-            host_aliases.add("127.0.0.1")
-            host_aliases.add("localhost")
-        for host in host_aliases:
-            _add(f"{scheme}://{host}:{port_text}")
-        if port in {80, 443}:
-            for host in host_aliases:
-                _add(f"{scheme}://{host}")
-        return allowed
-
-    allowed_origins = _collect_allowed_origins(frontend_origin)
-    app.config.setdefault("FRONTEND_ORIGIN", frontend_origin)
-    app.config.setdefault("FRONTEND_ALLOWED_ORIGINS", tuple(allowed_origins))
+    allowed_origins = ["http://127.0.0.1:3100", "http://localhost:3100"]
     CORS(
         app,
         resources={r"/api/*": {"origins": allowed_origins}},
@@ -198,22 +150,14 @@ def create_app() -> Flask:
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
 
-    @app.get("/healthz")
-    def healthz():
-        return "ok", 200
+    @app.get("/api/healthz")
+    def healthz() -> tuple[dict[str, str], int]:
+        return {"status": "ok"}, 200
 
-    @app.get("/")
-    def root():
-        last_query = request.args.get("q", "")
-        return render_template(
-            "index.html",
-            query=last_query,
-            smart_min_results=config.smart_min_results,
-        )
-
-    @app.get("/search")
-    def legacy_search():
-        return search_api.search_endpoint()
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def not_found(path: str) -> tuple[dict[str, str], int]:
+        return {"error": "ui_moved_to_frontend"}, 404
 
     def _ollama_host() -> str:
         return config.ollama_url
