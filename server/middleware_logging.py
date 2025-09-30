@@ -13,8 +13,9 @@ from server.runlog import current_run_log
 
 
 def before_request() -> None:
-    g.request_start = time.time()
-    trace_id = request.headers.get("X-Request-Id") or new_request_id()
+    if not hasattr(g, "request_start"):
+        g.request_start = time.time()
+    trace_id = getattr(g, "trace_id", None) or request.headers.get("X-Request-Id") or new_request_id()
     g.request_id = trace_id
     g.trace_id = trace_id
     g.session_id = request.headers.get("X-Session-Id", "sess_anon")

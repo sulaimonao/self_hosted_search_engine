@@ -61,14 +61,15 @@ def test_llm_models_returns_configured_primary_and_embed(monkeypatch: pytest.Mon
     payload = response.get_json()
     assert payload["ollama_host"].startswith("http://127.0.0.1")
 
-    available = payload["available"]
-    assert "llama3.1:8b" in available
-    assert "phi4" in available
+    chat_models = payload["chat_models"]
+    assert "llama3.1:8b" in chat_models
+    assert "phi4" in chat_models
+    assert all("embed" not in name for name in chat_models)
 
     configured = payload["configured"]
     assert configured["primary"] == "gpt-oss"
     assert configured["fallback"] == "gemma3"
-    assert configured["embedder"] == "embeddinggemma"
+    assert payload["embedder"] == "embeddinggemma"
 
 
 def test_llm_health_reports_reachability(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -83,3 +84,14 @@ def test_llm_health_reports_reachability(monkeypatch: pytest.MonkeyPatch, tmp_pa
     payload = response.get_json()
     assert payload["reachable"] is True
     assert payload["model_count"] == 7
+
+
+def test_autopull_disabled_without_flag(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    app = app_module.create_app()
+    client = app.test_client()
+
+    response = client.post("/api/llm/autopull", json={"candidates": ["gemma3"]})
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload["error"] == "autopull_disabled"

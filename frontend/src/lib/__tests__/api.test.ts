@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchModelInventory, streamChat, ChatRequestError } from "@/lib/api";
+import { fetchModelInventory, sendChat, ChatRequestError } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
 
 afterEach(() => {
@@ -13,12 +13,13 @@ describe("fetchModelInventory", () => {
       if (typeof input === "string" && input.includes("/api/llm/models")) {
         return new Response(
           JSON.stringify({
-            available: ["gpt-oss", "gemma3"],
+            chat_models: ["gpt-oss", "gemma3"],
+            available: ["gpt-oss", "gemma3", "embeddinggemma"],
             configured: {
               primary: "gpt-oss",
               fallback: "gemma3",
-              embedder: "embeddinggemma",
             },
+            embedder: "embeddinggemma",
             ollama_host: "http://127.0.0.1:11434",
           }),
           { status: 200 },
@@ -35,51 +36,51 @@ describe("fetchModelInventory", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const inventory = await fetchModelInventory();
-    expect(inventory.available).toEqual(["gpt-oss", "gemma3"]);
+    expect(inventory.chatModels).toEqual(["gpt-oss", "gemma3"]);
     expect(inventory.configured.primary).toBe("gpt-oss");
     expect(inventory.status.running).toBe(true);
     expect(inventory.models[0].model).toBe("gpt-oss");
   });
 });
 
-describe("streamChat", () => {
+describe("sendChat", () => {
   it("sends the selected model and returns trace info", async () => {
     const history: ChatMessage[] = [];
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
-        controller.close();
+    const response = new Response(
+      JSON.stringify({
+        reasoning: "Because",
+        answer: "Hi!",
+        citations: ["https://example.com"],
+        model: "gemma3",
+        trace_id: "req_test",
+      }),
+      {
+        status: 200,
+        headers: {
+          "X-Request-Id": "req_test",
+          "X-LLM-Model": "gemma3",
+        },
       },
-    });
-    const response = new Response(stream, {
-      status: 200,
-      headers: {
-        "X-Request-Id": "req_test",
-        "X-LLM-Model": "gemma3",
-      },
-    });
+    );
 
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = init?.body as string;
       const payload = JSON.parse(body);
       expect(payload.model).toBe("gpt-oss");
+      expect(payload.url).toBe("https://example.com");
       return response;
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const events: string[] = [];
-    const result = await streamChat(history, "hi", {
+    const result = await sendChat(history, "hi", {
       model: "gpt-oss",
-      onEvent: (chunk) => {
-        if (chunk.type === "done") {
-          events.push("done");
-        }
-      },
+      url: "https://example.com",
     });
 
-    expect(events).toContain("done");
     expect(result.traceId).toBe("req_test");
     expect(result.model).toBe("gemma3");
+    expect(result.payload.answer).toBe("Hi!");
+    expect(result.payload.reasoning).toBe("Because");
   });
 
   it("throws ChatRequestError with metadata when upstream fails", async () => {
@@ -94,7 +95,7 @@ describe("streamChat", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      streamChat([], "hi", { model: "gpt-oss", onEvent: () => {} }),
+      sendChat([], "hi", { model: "gpt-oss" }),
     ).rejects.toMatchObject({
       traceId: "req_fail",
       hint: "ollama pull gpt-oss",

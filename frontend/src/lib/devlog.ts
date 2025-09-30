@@ -1,12 +1,17 @@
-const isDev = process.env.NODE_ENV === "development";
+const isDev = process.env.NODE_ENV !== "production";
 
-type LogPayload = Record<string, unknown> | undefined;
+let seq = 0;
 
-export function devlog(event: string, payload?: LogPayload) {
+export function devlog(entry: Record<string, unknown>) {
   if (!isDev) return;
-  const parts: unknown[] = ["[UI]", event];
-  if (payload && Object.keys(payload).length > 0) {
-    parts.push(payload);
+  const payload = {
+    ts: new Date().toISOString(),
+    seq: ++seq,
+    ...entry,
+  };
+  try {
+    console.debug(JSON.stringify(payload));
+  } catch (error) {
+    console.debug("{\"evt\":\"devlog.fallback\",\"error\":\"serialization_failed\"}");
   }
-  console.debug(...parts);
 }

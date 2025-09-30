@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  ArrowLeft,
-  ArrowRight,
-  ExternalLink,
-  Loader2,
-  RefreshCcw,
-  Sparkles,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, Loader2, RefreshCcw } from "lucide-react";
 import {
   FormEvent,
   useCallback,
@@ -27,7 +20,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ActionKind, SelectionActionPayload } from "@/lib/types";
 
 const DEFAULT_URL = "https://duckduckgo.com";
 
@@ -58,7 +50,6 @@ interface WebPreviewProps {
   onHistoryForward: () => void;
   onReload: () => void;
   onOpenInNewTab?: (url: string) => void;
-  onSelectionAction?: (kind: ActionKind, payload: SelectionActionPayload) => void;
 }
 
 export function WebPreview({
@@ -72,51 +63,14 @@ export function WebPreview({
   onHistoryForward,
   onReload,
   onOpenInNewTab,
-  onSelectionAction,
 }: WebPreviewProps) {
   const [addressValue, setAddressValue] = useState(url || DEFAULT_URL);
-  const [highlightMode, setHighlightMode] = useState(false);
-  const [selectionText, setSelectionText] = useState("");
-  const [selectionError, setSelectionError] = useState<string | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const highlightPollRef = useRef<number | null>(null);
 
   useEffect(() => {
     setAddressValue(url);
   }, [url]);
 
-  useEffect(() => {
-    if (!highlightMode) {
-      setSelectionText("");
-      setSelectionError(null);
-      if (highlightPollRef.current) {
-        window.clearInterval(highlightPollRef.current);
-      }
-      return;
-    }
-    highlightPollRef.current = window.setInterval(() => {
-      try {
-        const frame = frameRef.current;
-        const selection = frame?.contentWindow?.getSelection();
-        if (!selection) return;
-        const text = selection.toString();
-        if (text && text.trim().length > 0) {
-          setSelectionText(text.trim());
-          setSelectionError(null);
-        }
-      } catch {
-        setSelectionError(
-          "Selection access blocked by this site. Try copying the text manually."
-        );
-        setSelectionText("");
-      }
-    }, 400);
-    return () => {
-      if (highlightPollRef.current) {
-        window.clearInterval(highlightPollRef.current);
-      }
-    };
-  }, [highlightMode]);
 
   const canGoBack = historyIndex > 0;
   const canGoForward = historyIndex < history.length - 1;
@@ -128,25 +82,6 @@ export function WebPreview({
       onNavigate(nextUrl);
     },
     [addressValue, onNavigate]
-  );
-
-  const handleSelectionAction = useCallback(
-    (kind: ActionKind) => {
-      if (!onSelectionAction) return;
-      const text = selectionText.trim();
-      if (!text) {
-        setSelectionError("Select text in the preview before choosing an action.");
-        return;
-      }
-      const payload: SelectionActionPayload = {
-        selection: text,
-        url,
-      };
-      onSelectionAction(kind, payload);
-      setHighlightMode(false);
-      setSelectionText("");
-    },
-    [onSelectionAction, selectionText, url]
   );
 
   const dragData = useMemo(() => ({
@@ -233,23 +168,6 @@ export function WebPreview({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant={highlightMode ? "default" : "outline"}
-                size="icon"
-                aria-label="Toggle highlight mode"
-                onClick={() => setHighlightMode((value) => !value)}
-              >
-                <Sparkles className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {highlightMode ? "Capturing selection" : "Highlight & extract"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
                 variant="outline"
                 size="icon"
                 aria-label="Open in new tab"
@@ -262,49 +180,6 @@ export function WebPreview({
           </Tooltip>
         </TooltipProvider>
       </div>
-      {highlightMode && (
-        <div className="px-3 py-2 border-b bg-muted/60 text-xs sm:text-sm flex items-center gap-2 flex-wrap">
-          <span className="font-medium">Highlight mode:</span>
-          <span>Select text in the preview, then choose an action.</span>
-          <div className="ml-auto flex gap-1">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => handleSelectionAction("extract")}
-            >
-              Extract
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => handleSelectionAction("summarize")}
-            >
-              Summarize
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => handleSelectionAction("queue")}
-            >
-              Queue for crawl
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setHighlightMode(false)}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
-      {selectionError && (
-        <div className="px-3 py-2 text-xs text-destructive bg-destructive/10 border-b">
-          {selectionError}
-        </div>
-      )}
-      {highlightMode && selectionText && (
-        <div className="px-3 py-2 text-xs bg-muted/50 border-b">
-          <span className="font-medium">Selection preview:</span> {selectionText.slice(0, 220)}
-          {selectionText.length > 220 ? "…" : ""}
-        </div>
-      )}
       <div className="relative flex-1">
         <iframe
           key={reloadKey}

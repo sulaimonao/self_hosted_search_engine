@@ -390,15 +390,20 @@ The command honours `.env`, allows a one-off `BUDGET=...` override, and respects
 
 The Next.js UI includes an **LLM Assist** panel that:
 
-- Calls `GET /api/llm/models` to display the configured primary/fallback/embedder
-  models alongside the complete list detected from Ollama. The active chat model
-  can be switched from the Copilot header dropdown and is persisted in
-  `localStorage` (`chat:model`).
-- Surfaces a red inline banner when no local models are detected to suggest
-  running `ollama pull gpt-oss` (or your preferred model) before retrying.
-- Checks `ollama --version`, `GET /api/llm/health`, and `GET /api/tags` to
-  report whether the runtime is installed and reachable, including the Ollama
-  host URL.
+- Calls `GET /api/llm/models` to retrieve chat-capable models and the configured
+  primary/fallback pair. The dropdown appears only when the backend detects at
+  least one chat model and the selection is persisted in `localStorage`
+  (`chat:model`).
+- When no chat models exist locally and you set `DEV_ALLOW_AUTOPULL=true`, the
+  UI surfaces an “Install model” banner that triggers the safe development-only
+  `/api/llm/autopull` endpoint (prefers Gemma3, falls back to gpt-oss) and polls
+  until the model is ready.
+- Adds a **Page context** panel that captures the active preview tab via
+  `POST /api/extract` (Playwright + Trafilatura). When the selected model
+  supports vision, a base64 PNG screenshot is attached and the next chat request
+  automatically includes `{ url, text_context, image_context }`.
+- Assistant responses adhere to a strict schema, splitting **Answer** and
+  collapsible **Reasoning**, and listing any citations returned by the model.
 
 Install and start Ollama locally (macOS example):
 

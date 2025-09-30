@@ -1,38 +1,31 @@
-"""LLM chat endpoint streaming responses from Ollama via SSE."""
+"""LLM chat endpoint returning structured responses from Ollama."""
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Iterable, Iterator, List
+import time
+from typing import Any, Iterable, Mapping
 
 import requests
-from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
+from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from server.json_logger import log_event
 
 from ..config import AppConfig
+from ..services import ollama_client
 
 bp = Blueprint("chat_api", __name__, url_prefix="/api")
 
-
 LOGGER = logging.getLogger(__name__)
-_MAX_LOGGED_MESSAGES = 5
-_MAX_MESSAGE_PREVIEW = 200
 _MAX_ERROR_PREVIEW = 500
-
-
-def _resolve_logger() -> logging.Logger:
-    """Return the logger configured for chat telemetry."""
-
-    try:
-        app = current_app._get_current_object()
-    except RuntimeError:  # pragma: no cover - fallback for out-of-context use
-        return LOGGER
-    configured = app.config.get("CHAT_LOGGER")
-    if configured is not None:
-        return configured
-    return app.logger
+_MAX_CONTEXT_CHARS = 8_000
+_SCHEMA_PROMPT = (
+    "You are a helpful assistant embedded in a self-hosted search engine. "
+    "Always reply with strict JSON containing only the keys reasoning, answer, and citations (an array of strings). "
+    "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in answer. "
+    "Include citations when you reference external facts; omit when not applicable."
+)
 
 
 def _truncate(value: str, max_length: int) -> str:
@@ -41,60 +34,19 @@ def _truncate(value: str, max_length: int) -> str:
     return value[: max_length - 3] + "..."
 
 
-def _sanitize_messages(messages: List[dict]) -> list[dict[str, object]]:
-    sanitized: list[dict[str, object]] = []
-    for message in messages[:_MAX_LOGGED_MESSAGES]:
-        if not isinstance(message, dict):
-            sanitized.append({"type": type(message).__name__})
+def _sanitize_messages(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for raw in messages:
+        if not isinstance(raw, Mapping):
             continue
-        role = message.get("role")
-        role_str = role if isinstance(role, str) else repr(role)
-        content = message.get("content")
-        if isinstance(content, str):
-            preview = _truncate(content, _MAX_MESSAGE_PREVIEW)
-            char_count: int | None = len(content)
-        elif content is None:
-            preview = ""
-            char_count = 0
-        else:
-            preview = _truncate(str(content), _MAX_MESSAGE_PREVIEW)
-            char_count = None
-        sanitized.append({
-            "role": role_str,
-            "preview": preview,
-            "chars": char_count,
-        })
-    if len(messages) > _MAX_LOGGED_MESSAGES:
-        sanitized.append({"omitted": len(messages) - _MAX_LOGGED_MESSAGES})
+        role = raw.get("role")
+        content = raw.get("content")
+        if isinstance(role, str) and isinstance(content, str):
+            entry: dict[str, Any] = {"role": role, "content": content}
+            if "images" in raw and isinstance(raw["images"], list):
+                entry["images"] = [str(item) for item in raw["images"] if isinstance(item, str)]
+            sanitized.append(entry)
     return sanitized
-
-
-def _iter_chat_chunks(response: requests.Response, *, model: str | None) -> Iterable[str]:
-    logger = _resolve_logger()
-    try:
-        for line in response.iter_lines():
-            if not line:
-                continue
-            try:
-                chunk = json.loads(line.decode("utf-8"))
-            except json.JSONDecodeError:
-                logger.debug("discarding non-json chunk from ollama: %s", line)
-                continue
-            message = chunk.get("message", {})
-            content = message.get("content")
-            if content:
-                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
-            if chunk.get("done"):
-                final = {
-                    "type": "done",
-                    "total_duration": chunk.get("total_duration"),
-                    "load_duration": chunk.get("load_duration"),
-                    "model": model,
-                }
-                yield f"data: {json.dumps(final)}\n\n"
-                break
-    finally:
-        response.close()
 
 
 def _configured_models() -> tuple[str, str | None, str | None]:
@@ -109,64 +61,174 @@ def _configured_models() -> tuple[str, str | None, str | None]:
     return primary, fallback, embed
 
 
+def _strip_code_fence(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped[3:]
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+        if "```" in stripped:
+            stripped = stripped.split("```", 1)[0]
+    return stripped.strip()
+
+
+def _coerce_schema(text: str) -> dict[str, Any]:
+    candidate = _strip_code_fence(text)
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = candidate[start : end + 1]
+    try:
+        data = json.loads(candidate)
+    except json.JSONDecodeError as exc:  # pragma: no cover - repair attempts best effort
+        raise ValueError(f"Model response was not valid JSON: {exc}") from exc
+
+    reasoning = data.get("reasoning")
+    answer = data.get("answer")
+    citations = data.get("citations")
+
+    if not isinstance(reasoning, str):
+        reasoning = json.dumps(reasoning) if reasoning is not None else ""
+    if not isinstance(answer, str):
+        answer = json.dumps(answer) if answer is not None else ""
+
+    if isinstance(citations, str):
+        citations_list = [citations]
+    elif isinstance(citations, Iterable):
+        citations_list = [str(item) for item in citations if isinstance(item, (str, int, float))]
+        citations_list = [item for item in citations_list if item]
+    else:
+        citations_list = []
+
+    return {
+        "reasoning": reasoning.strip(),
+        "answer": answer.strip(),
+        "citations": citations_list,
+    }
+
+
+def _extract_model_content(payload: Mapping[str, Any]) -> str:
+    message = payload.get("message")
+    if isinstance(message, Mapping):
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    response_field = payload.get("response")
+    if isinstance(response_field, str) and response_field.strip():
+        return response_field
+    raise ValueError("Upstream response missing assistant content")
+
+
+def _prepare_messages(
+    *,
+    candidate: str,
+    base_messages: list[dict[str, Any]],
+    url: str | None,
+    text_context: str | None,
+    image_context: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    messages: list[dict[str, Any]] = [{"role": "system", "content": _SCHEMA_PROMPT}]
+    context_bits: list[str] = []
+    if url:
+        context_bits.append(f"Current page URL: {url}")
+    if text_context:
+        clipped = text_context[:_MAX_CONTEXT_CHARS]
+        context_bits.append("Extracted page text:\n" + clipped)
+    if context_bits:
+        messages.append({"role": "system", "content": "\n\n".join(context_bits)})
+    image_used = False
+    if image_context:
+        if ollama_client.supports_vision(candidate):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Image context captured from the current page.",
+                    "images": [image_context],
+                }
+            )
+            image_used = True
+    messages.extend(base_messages)
+    return messages, image_used
+
+
+def _chat_endpoint(config: AppConfig) -> str:
+    return f"{config.ollama_url.rstrip('/')}/api/chat"
+
+
 @bp.post("/chat")
-def chat_stream() -> Response:
+def chat_invoke() -> Response:
+    start = time.perf_counter()
     payload = request.get_json(silent=True) or {}
-    messages = payload.get("messages")
-    if not isinstance(messages, list):
-        _resolve_logger().warning(
-            "chat request rejected due to invalid messages payload: %s",
-            type(messages).__name__,
-        )
+    messages_raw = payload.get("messages")
+    if not isinstance(messages_raw, list):
         g.chat_error_class = "ValidationError"
         g.chat_error_message = "messages must be a list"
         return jsonify({"error": "messages must be a list", "trace_id": getattr(g, "trace_id", None)}), 400
-    model = (payload.get("model") or "").strip() or None
+
+    sanitized_messages = _sanitize_messages(messages_raw)
+    if not sanitized_messages:
+        g.chat_error_class = "ValidationError"
+        g.chat_error_message = "messages must contain at least one message"
+        return jsonify({"error": "messages must contain at least one message", "trace_id": getattr(g, "trace_id", None)}), 400
+
+    requested_model = (payload.get("model") or "").strip() or None
+    url_value = (payload.get("url") or "").strip() or None
+    text_context = (payload.get("text_context") or "").strip() or None
+    image_context_raw = payload.get("image_context")
+    image_context = image_context_raw if isinstance(image_context_raw, str) and image_context_raw.strip() else None
 
     trace_id = getattr(g, "trace_id", None)
-    logger = _resolve_logger()
-    logger.info(
-        "chat request received model=%s prompts=%s",
-        model or "<default>",
-        json.dumps(_sanitize_messages(messages), ensure_ascii=False),
-    )
-
     primary_model, fallback_model, _ = _configured_models()
-    config: AppConfig = current_app.config["APP_CONFIG"]
-    url = f"{config.ollama_url}/api/chat"
 
-    attempted: list[str] = []
-    missing_errors: list[str] = []
     candidates: list[str] = []
-    if model:
-        candidates.append(model)
+    if requested_model:
+        candidates.append(requested_model)
     else:
         candidates.append(primary_model)
         if fallback_model and fallback_model != primary_model:
             candidates.append(fallback_model)
 
-    body_base = {"messages": messages, "stream": True}
-    selected_model: str | None = None
-    fallback_used = False
+    config: AppConfig = current_app.config["APP_CONFIG"]
+    endpoint = _chat_endpoint(config)
 
-    response: requests.Response | None = None
-    for index, candidate in enumerate(candidates):
+    attempted: list[str] = []
+    missing_reasons: list[str] = []
+
+    for attempt_index, candidate in enumerate(candidates, start=1):
         attempted.append(candidate)
-        attempt_body = dict(body_base)
-        attempt_body["model"] = candidate
+        prepared_messages, image_used = _prepare_messages(
+            candidate=candidate,
+            base_messages=sanitized_messages,
+            url=url_value,
+            text_context=text_context,
+            image_context=image_context,
+        )
+
         log_event(
             "INFO",
             "chat.request",
             trace=trace_id,
             model=candidate,
-            attempt=index + 1,
+            attempt=attempt_index,
+            url=url_value,
+            has_text=bool(text_context),
+            has_img=bool(image_context),
         )
+
         try:
-            response = requests.post(url, json=attempt_body, stream=True, timeout=120)
+            response = requests.post(
+                endpoint,
+                json={
+                    "model": candidate,
+                    "messages": prepared_messages,
+                    "stream": False,
+                    "format": "json",
+                },
+                timeout=120,
+            )
         except requests.RequestException as exc:
             g.chat_error_class = exc.__class__.__name__
             g.chat_error_message = str(exc)
-            logger.exception("ollama chat request failed")
             log_event(
                 "ERROR",
                 "chat.error",
@@ -175,25 +237,12 @@ def chat_stream() -> Response:
                 error=g.chat_error_class,
                 msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
             )
-            return (
-                jsonify(
-                    {
-                        "error": "upstream_unavailable",
-                        "message": str(exc),
-                        "trace_id": trace_id,
-                    }
-                ),
-                502,
-            )
+            return jsonify({"error": "upstream_unavailable", "message": str(exc), "trace_id": trace_id}), 502
 
         if response.status_code == 404:
             content_raw = response.text.strip() or "model not found"
             reason = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-            logger.error(
-                "ollama chat responded with HTTP 404 for model %s: %s",
-                candidate,
-                reason,
-            )
+            missing_reasons.append(reason)
             log_event(
                 "ERROR",
                 "chat.error",
@@ -202,20 +251,12 @@ def chat_stream() -> Response:
                 code=404,
                 msg=reason,
             )
-            missing_errors.append(reason)
-            response.close()
             continue
 
         if response.status_code >= 400:
             content_raw = response.text.strip() or f"HTTP {response.status_code}"
             g.chat_error_class = "HTTPError"
             g.chat_error_message = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-            logger.error(
-                "ollama chat responded with HTTP %s for model %s: %s",
-                response.status_code,
-                candidate,
-                g.chat_error_message,
-            )
             log_event(
                 "ERROR",
                 "chat.error",
@@ -224,7 +265,6 @@ def chat_stream() -> Response:
                 code=response.status_code,
                 msg=g.chat_error_message,
             )
-            response.close()
             return (
                 jsonify(
                     {
@@ -237,55 +277,93 @@ def chat_stream() -> Response:
                 response.status_code,
             )
 
-        selected_model = candidate
-        fallback_used = index > 0
-        break
+        try:
+            payload_json = response.json()
+        except ValueError:
+            g.chat_error_class = "InvalidJSON"
+            g.chat_error_message = "Ollama returned invalid JSON"
+            log_event(
+                "ERROR",
+                "chat.error",
+                trace=trace_id,
+                model=candidate,
+                msg=g.chat_error_message,
+            )
+            return jsonify({"error": "invalid_response", "message": g.chat_error_message, "trace_id": trace_id}), 502
 
-    if selected_model is None:
-        tried = [name for name in attempted if name]
-        hint = "ollama pull " + " or ".join(tried or [primary_model])
-        g.chat_error_class = "ModelNotFound"
-        combined = missing_errors[0] if missing_errors else hint
-        g.chat_error_message = combined
+        try:
+            content = _extract_model_content(payload_json)
+            structured = _coerce_schema(content)
+        except ValueError as exc:
+            g.chat_error_class = "SchemaValidationError"
+            g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
+            log_event(
+                "ERROR",
+                "chat.error",
+                trace=trace_id,
+                model=candidate,
+                msg=g.chat_error_message,
+            )
+            return jsonify({"error": "invalid_schema", "message": str(exc), "trace_id": trace_id}), 502
+
+        g.chat_model = candidate
+        g.chat_fallback_used = attempt_index > 1
+        g.chat_error_class = None
+        g.chat_error_message = None
+
+        if image_context and not image_used:
+            log_event(
+                "WARNING",
+                "chat.vision_ignored",
+                trace=trace_id,
+                model=candidate,
+            )
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
         log_event(
-            "ERROR",
-            "chat.error",
+            "INFO",
+            "chat.ready",
             trace=trace_id,
-            model=primary_model,
-            code=404,
-            msg=combined,
-        )
-        return (
-            jsonify(
-                {
-                    "error": "model_not_found",
-                    "tried": tried,
-                    "hint": hint,
-                    "trace_id": trace_id,
-                }
-            ),
-            503,
+            model=candidate,
+            fallback_used=g.chat_fallback_used,
+            duration_ms=duration_ms,
         )
 
-    g.chat_model = selected_model
-    g.chat_fallback_used = fallback_used
-    g.chat_error_class = None
-    g.chat_error_message = None
+        response_payload = {
+            "reasoning": structured["reasoning"],
+            "answer": structured["answer"],
+            "citations": structured["citations"],
+            "model": candidate,
+            "trace_id": trace_id,
+        }
+        flask_response = jsonify(response_payload)
+        flask_response.headers["X-LLM-Model"] = candidate
+        return flask_response
 
-    def generate() -> Iterator[str]:
-        yield from _iter_chat_chunks(response, model=selected_model)
-
+    tried = [name for name in attempted if name]
+    hint = "ollama pull " + " or ".join(tried or [primary_model])
+    combined = missing_reasons[0] if missing_reasons else hint
+    g.chat_error_class = "ModelNotFound"
+    g.chat_error_message = combined
     log_event(
-        "INFO",
-        "chat.ready",
+        "ERROR",
+        "chat.error",
         trace=trace_id,
-        model=selected_model,
-        fallback_used=fallback_used,
+        model=primary_model,
+        code=404,
+        msg=combined,
+    )
+    return (
+        jsonify(
+            {
+                "error": "model_not_found",
+                "tried": tried,
+                "hint": hint,
+                "trace_id": trace_id,
+            }
+        ),
+        503,
     )
 
-    stream = Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-    )
-    stream.headers["X-LLM-Model"] = selected_model
-    return stream
+
+__all__ = ["bp"]

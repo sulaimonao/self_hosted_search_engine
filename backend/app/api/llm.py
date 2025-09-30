@@ -8,9 +8,10 @@ from collections.abc import Iterable, Mapping
 from typing import Any, TYPE_CHECKING
 
 import requests
-from flask import Blueprint, current_app, g, jsonify
+from flask import Blueprint, current_app, g, jsonify, request
 
 from .. import EMBEDDING_MODEL_PATTERNS
+from ..services import ollama_client
 from server.json_logger import log_event
 
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
@@ -118,23 +119,12 @@ def llm_models() -> Any:
 
     probe = _probe_ollama(engine_config.ollama.base_url, manager)
     available = probe["models"]
+    chat_models = [model for model in available if not _is_embedding_model(model)]
     configured = {
         "primary": _coerce_name(engine_config.models.llm_primary),
         "fallback": _coerce_name(engine_config.models.llm_fallback),
-        "embedder": _coerce_name(engine_config.models.embed),
     }
-
-    detailed_models = [
-        {
-            "name": model,
-            "kind": "embedding" if _is_embedding_model(model) else "chat",
-            "installed": model in available,
-        }
-        for model in _unique(
-            [value for value in configured.values() if value]
-            + available
-        )
-    ]
+    embedder = _coerce_name(engine_config.models.embed)
 
     trace_id = getattr(g, "trace_id", None)
     log_event(
@@ -142,20 +132,100 @@ def llm_models() -> Any:
         "llm.models",
         trace=trace_id,
         available=len(available),
+        chat=len(chat_models),
         configured_primary=configured["primary"],
         configured_fallback=configured["fallback"],
-        configured_embedder=configured["embedder"],
+        configured_embedder=embedder,
     )
 
     payload = {
+        "chat_models": chat_models,
         "available": available,
         "configured": configured,
+        "embedder": embedder,
         "ollama_host": engine_config.ollama.base_url,
-        "models": detailed_models,
+        "reachable": bool(probe["reachable"]),
     }
     if probe.get("error"):
         payload["error"] = probe["error"]
     return jsonify(payload)
+
+
+@bp.post("/autopull")
+def llm_autopull() -> Any:
+    config = _get_app_config()
+    trace_id = getattr(g, "trace_id", None)
+
+    if not getattr(config, "dev_allow_autopull", False):
+        log_event(
+            "WARNING",
+            "llm.autopull.disabled",
+            trace=trace_id,
+        )
+        return jsonify({"error": "autopull_disabled"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    candidates_raw = payload.get("candidates")
+    candidates: list[str] = []
+    if isinstance(candidates_raw, Iterable):
+        for entry in candidates_raw:
+            name = _coerce_name(entry)
+            if name and name not in candidates:
+                candidates.append(name)
+
+    if not candidates:
+        return jsonify({"error": "candidates_required"}), 400
+
+    engine_config = _get_engine_config()
+    base_url = engine_config.ollama.base_url
+    already_installed = set(ollama_client.list_models(base_url=base_url, chat_only=False))
+
+    target: str | None = None
+    for candidate in candidates:
+        if candidate not in already_installed:
+            target = candidate
+            break
+
+    if target is None:
+        log_event(
+            "INFO",
+            "llm.autopull.skip",
+            trace=trace_id,
+            reason="installed",
+            first=candidates[0],
+        )
+        return jsonify({"started": False, "model": candidates[0], "reason": "already_installed"})
+
+    if shutil.which("ollama") is None:
+        log_event(
+            "ERROR",
+            "llm.autopull.missing_cli",
+            trace=trace_id,
+        )
+        return jsonify({"error": "ollama_cli_missing"}), 503
+
+    try:
+        process = ollama_client.pull_model(target, base_url=base_url)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log_event(
+            "ERROR",
+            "llm.autopull.error",
+            trace=trace_id,
+            model=target,
+            error=exc.__class__.__name__,
+            msg=str(exc),
+        )
+        return jsonify({"error": "autopull_failed", "message": str(exc)}), 500
+
+    log_event(
+        "INFO",
+        "llm.autopull.start",
+        trace=trace_id,
+        model=target,
+        pid=process.pid,
+    )
+
+    return jsonify({"started": True, "model": target, "pid": process.pid})
 
 
 @bp.get("/health")

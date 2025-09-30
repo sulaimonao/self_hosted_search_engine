@@ -73,6 +73,7 @@ class AppConfig:
     crawl_use_playwright: str
     use_llm_rerank: bool
     chat_log_level: int
+    dev_allow_autopull: bool
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -138,6 +139,12 @@ class AppConfig:
         use_llm_rerank = os.getenv("USE_LLM_RERANK", "false").lower() in {"1", "true", "yes", "on"}
         chat_log_level_name = os.getenv("CHAT_LOG_LEVEL", "INFO").upper()
         chat_log_level = getattr(logging, chat_log_level_name, logging.INFO)
+        dev_allow_autopull = os.getenv("DEV_ALLOW_AUTOPULL", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         return cls(
             index_dir=index_dir,
@@ -169,6 +176,7 @@ class AppConfig:
             crawl_use_playwright=crawl_use_playwright,
             use_llm_rerank=use_llm_rerank,
             chat_log_level=chat_log_level,
+            dev_allow_autopull=dev_allow_autopull,
         )
 
     def ensure_dirs(self) -> None:
@@ -214,6 +222,7 @@ class AppConfig:
             "agent_max_fetch_per_turn": self.agent_max_fetch_per_turn,
             "agent_coverage_threshold": self.agent_coverage_threshold,
             "chat_log_level": logging.getLevelName(self.chat_log_level),
+            "dev_allow_autopull": self.dev_allow_autopull,
         }
         LOGGER.info("runtime configuration: %s", json.dumps(payload, sort_keys=True))
 

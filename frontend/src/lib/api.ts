@@ -7,7 +7,7 @@ function api(path: string) {
 
 import type {
   ChatMessage,
-  ChatStreamChunk,
+  ChatResponsePayload,
   CrawlScope,
   SeedRegistryResponse,
   JobStatusSummary,
@@ -19,6 +19,7 @@ import type {
   LlmModelsResponse,
   ConfiguredModels,
   LlmHealth,
+  PageExtractResponse,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -217,36 +218,42 @@ export class ChatRequestError extends Error {
   }
 }
 
-export interface ChatStreamResult {
+export interface ChatSendOptions {
+  model?: string | null;
+  url?: string | null;
+  textContext?: string | null;
+  imageContext?: string | null;
+  signal?: AbortSignal;
+}
+
+export interface ChatSendResult {
+  payload: ChatResponsePayload;
   traceId: string | null;
   model: string | null;
 }
 
-export async function streamChat(
+export async function sendChat(
   history: ChatMessage[],
   input: string,
-  options: {
-    model?: string | null;
-    signal?: AbortSignal;
-    onEvent: (chunk: ChatStreamChunk) => void;
-  },
-): Promise<ChatStreamResult> {
-  const { signal, onEvent, model } = options;
+  options: ChatSendOptions = {},
+): Promise<ChatSendResult> {
   const response = await fetch(api("/api/chat"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       messages: serializeMessages(history, input),
-      model: model ?? undefined,
-      stream: true,
+      model: options.model ?? undefined,
+      url: options.url ?? undefined,
+      text_context: options.textContext ?? undefined,
+      image_context: options.imageContext ?? undefined,
     }),
-    signal,
+    signal: options.signal,
   });
 
   const traceId = response.headers.get("X-Request-Id");
   const servedModel = response.headers.get("X-LLM-Model");
 
-  if (!response.ok || !response.body) {
+  if (!response.ok) {
     let payload: Record<string, unknown> | null = null;
     try {
       payload = (await response.clone().json()) as Record<string, unknown>;
@@ -292,31 +299,22 @@ export async function streamChat(
     });
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const data = (await response.json()) as Record<string, unknown>;
+  const payload: ChatResponsePayload = {
+    reasoning: typeof data.reasoning === "string" ? data.reasoning : "",
+    answer: typeof data.answer === "string" ? data.answer : "",
+    citations: Array.isArray(data.citations)
+      ? data.citations.filter((item): item is string => typeof item === "string")
+      : [],
+    model: typeof data.model === "string" ? data.model : options.model ?? null,
+    trace_id: typeof data.trace_id === "string" ? data.trace_id : traceId ?? null,
+  };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const segments = buffer.split("\n\n");
-    buffer = segments.pop() ?? "";
-    for (const segment of segments) {
-      const line = segment.trim();
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      try {
-        const parsed = JSON.parse(payload) as ChatStreamChunk;
-        onEvent(parsed);
-      } catch (error) {
-        console.warn("Failed to parse chat chunk", error, payload);
-      }
-    }
-  }
-
-  return { traceId, model: servedModel ?? model ?? null };
+  return {
+    payload,
+    traceId: payload.trace_id ?? traceId,
+    model: payload.model ?? servedModel ?? options.model ?? null,
+  };
 }
 
 export interface CrawlJobRequest {
@@ -452,9 +450,11 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
 export interface ModelInventory {
   status: OllamaStatus;
   models: ModelStatus[];
-  available: string[];
+  chatModels: string[];
   configured: ConfiguredModels;
+  embedder: string | null;
   health: LlmHealth;
+  reachable: boolean;
 }
 
 function normalizeModelName(value: unknown): string | null {
@@ -479,21 +479,27 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
   const modelsPayload = (await modelsResponse.json()) as LlmModelsResponse;
   const healthPayload = (await healthResponse.json()) as LlmHealth;
 
-  const available = Array.isArray(modelsPayload.available)
-    ? modelsPayload.available
+  const chatModels = Array.isArray(modelsPayload.chat_models)
+    ? modelsPayload.chat_models
         .map((entry) => normalizeModelName(entry))
         .filter((entry): entry is string => typeof entry === "string")
     : [];
+
+  const available = Array.isArray((modelsPayload as Record<string, unknown>).available)
+    ? ((modelsPayload as Record<string, unknown>).available as unknown[])
+        .map((entry) => normalizeModelName(entry))
+        .filter((entry): entry is string => typeof entry === "string")
+    : [...chatModels];
 
   const configuredRaw = modelsPayload.configured ?? ({} as ConfiguredModels);
   const configured: ConfiguredModels = {
     primary: normalizeModelName(configuredRaw.primary) ?? null,
     fallback: normalizeModelName(configuredRaw.fallback) ?? null,
-    embedder: normalizeModelName(configuredRaw.embedder) ?? null,
+    embedder: normalizeModelName(modelsPayload.embedder) ?? null,
   };
 
   const status: OllamaStatus = {
-    installed: available.length > 0,
+    installed: chatModels.length > 0,
     running: !!healthPayload.reachable,
     host: normalizeModelName(modelsPayload.ollama_host) ?? "",
   };
@@ -504,6 +510,12 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
   if (configured.embedder) candidates.add(configured.embedder);
   for (const name of available) {
     candidates.add(name);
+  }
+  for (const name of chatModels) {
+    candidates.add(name);
+  }
+  if (configured.embedder) {
+    candidates.add(configured.embedder);
   }
 
   const asArray = Array.from(candidates);
@@ -530,8 +542,8 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
         : configured.embedder === name
         ? "embedding"
         : "extra";
-      const installed = available.includes(name);
-      const isEmbedding = role === "embedding";
+      const installed = available.includes(name) || chatModels.includes(name);
+      const isEmbedding = role === "embedding" || name === configured.embedder;
       return {
         model: name,
         kind: isEmbedding ? "embedding" : "chat",
@@ -550,10 +562,65 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
   return {
     status,
     models,
-    available,
+    chatModels,
     configured,
+    embedder: configured.embedder,
     health: healthPayload,
+    reachable: Boolean(modelsPayload.reachable ?? healthPayload.reachable),
   };
+}
+
+export interface AutopullResponse {
+  started: boolean;
+  model?: string | null;
+  reason?: string | null;
+  pid?: number;
+}
+
+export async function autopullModels(candidates: string[]): Promise<AutopullResponse> {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error("At least one candidate model is required");
+  }
+  const response = await fetch(api("/api/llm/autopull"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ candidates }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Autopull failed (${response.status})`);
+  }
+  return response.json();
+}
+
+export interface ExtractOptions {
+  vision?: boolean;
+  signal?: AbortSignal;
+}
+
+export async function extractPage(
+  url: string,
+  options: ExtractOptions = {},
+): Promise<PageExtractResponse> {
+  if (!url || !url.trim()) {
+    throw new Error("URL is required for extraction");
+  }
+  const params = new URLSearchParams();
+  if (options.vision) {
+    params.set("vision", "1");
+  }
+  const query = params.toString();
+  const response = await fetch(api(`/api/extract${query ? `?${query}` : ""}`), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ url }),
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Extraction failed (${response.status})`);
+  }
+  return (await response.json()) as PageExtractResponse;
 }
 
 export interface SaveSeedRequest {

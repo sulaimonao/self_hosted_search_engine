@@ -11,11 +11,7 @@ lsof -iTCP:3100 -sTCP:LISTEN || true
 lsof -iTCP:5050 -sTCP:LISTEN || true
 
 echo
-printf '== Ollama tags ==\n'
-curl -s http://127.0.0.1:11434/api/tags | jq '.models[].name' | grep -E 'gpt-oss|gemma3|embeddinggemma'
-
-echo
-printf '== Backend LLM models ==\n'
+printf '== Backend model inventory ==\n'
 curl -sS http://127.0.0.1:5050/api/llm/models | jq .
 
 echo
@@ -23,25 +19,17 @@ printf '== Backend LLM health ==\n'
 curl -sS http://127.0.0.1:5050/api/llm/health | jq .
 
 echo
-printf '== Backend LLM status (legacy) ==\n'
-curl -sS http://127.0.0.1:5050/api/llm/status | jq .
+printf '[verify] models\n'
+curl -s http://127.0.0.1:5050/api/llm/models | jq '.chat_models'
 
 echo
-printf '== Chat endpoint (fallback demo) ==\n'
-curl -sS -X POST http://127.0.0.1:5050/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"gpt-oss","messages":[{"role":"user","content":"say hi"}]}' | jq .
+printf '[verify] extract\n'
+curl -s -X POST "http://127.0.0.1:5050/api/extract?vision=0" \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://www.wikidata.org/wiki/Wikidata:Main_Page"}' | jq '.title, (.text|length)'
 
 echo
-printf '== Embedder status ==\n'
-curl -sS http://127.0.0.1:5050/api/embedder/status | jq .
-
-echo
-printf '== CORS preflight (Origin: http://127.0.0.1:3100) ==\n'
-curl -i -H "Origin: http://127.0.0.1:3100" http://127.0.0.1:5050/api/llm/status
-
-echo
-printf '== Crawl endpoint (colon in path) ==\n'
-curl -sS -X POST http://127.0.0.1:5050/api/crawl \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://www.wikidata.org/wiki/Wikidata:Main_Page","depth":1}'
+printf '[verify] chat\n'
+curl -s -X POST http://127.0.0.1:5050/api/chat \
+  -H 'content-type: application/json' \
+  -d '{"model":"gemma3","messages":[{"role":"user","content":"Say hi."}]}' | jq .

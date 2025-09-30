@@ -43,6 +43,7 @@ def create_app() -> Flask:
 
     from .api import agent_tools as agent_tools_api
     from .api import chat as chat_api
+    from .api import extract as extract_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
     from .api import jobs as jobs_api
@@ -58,6 +59,7 @@ def create_app() -> Flask:
     from .search.service import SearchService
     from server.refresh_worker import RefreshWorker
     from server.learned_web_db import get_db
+    from .middleware import request_id as request_id_middleware
     from server import middleware_logging
 
     metrics = metrics_module
@@ -71,6 +73,8 @@ def create_app() -> Flask:
         template_folder=str(template_folder),
     )
 
+    app.before_request(request_id_middleware.before_request)
+    app.after_request(request_id_middleware.after_request)
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
 
@@ -192,6 +196,7 @@ def create_app() -> Flask:
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(agent_tools_api.bp)
     app.register_blueprint(seeds_api.bp)
+    app.register_blueprint(extract_api.bp)
 
     @app.get("/healthz")
     def healthz():

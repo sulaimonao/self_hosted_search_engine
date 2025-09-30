@@ -30,6 +30,8 @@ import { JobStatus } from "@/components/job-status";
 import { CrawlManager } from "@/components/crawl-manager";
 import { ActionEditor } from "@/components/action-editor";
 import { ToastContainer, ToastMessage } from "@/components/toast-container";
+import { CopilotHeader } from "@/components/copilot-header";
+import { ContextPanel } from "@/components/context-panel";
 import {
   extractSelection,
   fetchModelInventory,
@@ -38,15 +40,15 @@ import {
   reindexUrl,
   saveSeed,
   startCrawlJob,
-  streamChat,
+  sendChat,
+  autopullModels,
+  extractPage,
   subscribeJob,
   summarizeSelection,
   ChatRequestError,
-  ChatStreamResult,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import type {
-  ActionKind,
   AgentLogEntry,
   ChatMessage,
   CrawlQueueItem,
@@ -59,6 +61,7 @@ import type {
   SelectionActionPayload,
   SeedRecord,
   SearchHit,
+  PageExtractResponse,
 } from "@/lib/types";
 import { devlog } from "@/lib/devlog";
 
@@ -77,6 +80,12 @@ function looksLikeUrl(value: string) {
   if (!trimmed) return false;
   if (/^https?:\/\//i.test(trimmed)) return true;
   return /^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed);
+}
+
+function modelSupportsVision(model: string | null | undefined) {
+  if (!model) return false;
+  const lowered = model.toLowerCase();
+  return lowered.includes("vision") || lowered.includes("multimodal") || lowered.includes("vl");
 }
 
 const DEFAULT_AGENT_LOG: AgentLogEntry[] = [
@@ -152,7 +161,7 @@ export function AppShell() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(DEFAULT_CHAT_MESSAGES);
   const [chatInput, setChatInput] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const [agentLog, setAgentLog] = useState<AgentLogEntry[]>(DEFAULT_AGENT_LOG);
   const [jobSummaries, setJobSummaries] = useState<JobStatusSummary[]>(DEFAULT_JOB_STATUS);
   const [crawlQueue, setCrawlQueue] = useState<CrawlQueueItem[]>([]);
@@ -168,15 +177,20 @@ export function AppShell() {
   const [chatModel, setChatModel] = useState<string | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState<string | null>(null);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [chatModels, setChatModels] = useState<string[]>([]);
   const [modelWarning, setModelWarning] = useState<string | null>(null);
+  const [isAutopulling, setIsAutopulling] = useState(false);
+  const [autopullMessage, setAutopullMessage] = useState<string | null>(null);
+  const [pageContext, setPageContext] = useState<PageExtractResponse | null>(null);
+  const [includeContext, setIncludeContext] = useState(false);
+  const [isExtractingContext, setIsExtractingContext] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
-  const streamingController = useRef<AbortController | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const jobSubscriptions = useRef(new Map<string, () => void>());
   const chatHistoryRef = useRef<ChatMessage[]>(chatMessages);
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
@@ -201,15 +215,17 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    devlog("mount");
+    devlog({ evt: "ui.mount" });
   }, []);
 
   const navigateTo = useCallback(
     (inputValue: string) => {
       const value = inputValue.trim();
       if (!value) return;
-      devlog("navigate", { url: value });
+      devlog({ evt: "ui.navigate", url: value });
       setIsPreviewLoading(true);
+      setPageContext(null);
+      setIncludeContext(false);
       setPreviewState((state) => {
         const nextHistory = state.history.slice(0, state.index + 1);
         nextHistory.push(value);
@@ -224,6 +240,8 @@ export function AppShell() {
 
   const replaceUrl = useCallback((target: string) => {
     setIsPreviewLoading(true);
+    setPageContext(null);
+    setIncludeContext(false);
     setPreviewState((state) => {
       const nextHistory = [...state.history];
       nextHistory[state.index] = target;
@@ -388,6 +406,122 @@ export function AppShell() {
     [refreshSeeds]
   );
 
+  const refreshModels = useCallback(async () => {
+    try {
+      const inventory = await fetchModelInventory();
+      setModelStatus(inventory.models);
+      setOllamaStatus(inventory.status);
+      setChatModels(inventory.chatModels);
+      setEmbeddingModel(inventory.configured.embedder);
+      setModelWarning(
+        inventory.chatModels.length === 0
+          ? "No chat models detected. Click install to pull Gemma3 automatically."
+          : null,
+      );
+      if (inventory.chatModels.length > 0) {
+        setAutopullMessage(null);
+      }
+      const stored =
+        typeof window !== "undefined" ? window.localStorage.getItem(MODEL_STORAGE_KEY) : null;
+      const nextModel = resolveChatModelSelection({
+        available: inventory.chatModels,
+        configured: inventory.configured,
+        stored: stored && stored.trim() ? stored.trim() : null,
+        previous: lastSuccessfulModelRef.current,
+      });
+      setChatModel(nextModel);
+      lastSuccessfulModelRef.current = nextModel;
+      devlog({ evt: "ui.models.loaded", available: inventory.chatModels.length, model: nextModel });
+      return inventory;
+    } catch (error) {
+      console.warn("Unable to load model inventory", error);
+      devlog({ evt: "ui.models.error", message: error instanceof Error ? error.message : String(error) });
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }, []);
+
+  const handleAutopull = useCallback(async () => {
+    if (isAutopulling) return;
+    setIsAutopulling(true);
+    setAutopullMessage("Starting Gemma3 install…");
+    devlog({ evt: "ui.models.autopull.start" });
+    try {
+      const result = await autopullModels(["gemma3", "gpt-oss"]);
+      if (result.reason === "already_installed") {
+        setAutopullMessage("Models already installed. Refreshing…");
+        await refreshModels();
+        devlog({ evt: "ui.models.autopull.skip", reason: result.reason });
+        return;
+      }
+      setAutopullMessage("Downloading Gemma3… this may take a few minutes.");
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        try {
+          const inventory = await refreshModels();
+          if (inventory && inventory.chatModels.length > 0) {
+            setAutopullMessage("Gemma3 ready.");
+            devlog({ evt: "ui.models.autopull.complete" });
+            return;
+          }
+        } catch (refreshError) {
+          console.warn("Autopull poll failed", refreshError);
+        }
+      }
+      setAutopullMessage("Install still running. Check Ollama CLI for progress.");
+      devlog({ evt: "ui.models.autopull.pending" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Autopull failed");
+      setAutopullMessage(`Install failed: ${message}`);
+      devlog({ evt: "ui.models.autopull.error", message });
+      pushToast(message, { variant: "destructive" });
+    } finally {
+      setIsAutopulling(false);
+    }
+  }, [isAutopulling, refreshModels, pushToast]);
+
+  const handleExtractContext = useCallback(async () => {
+    const targetUrl = currentUrl?.trim();
+    if (!targetUrl) return;
+    setIsExtractingContext(true);
+    devlog({ evt: "ui.extract.start", url: targetUrl, vision: modelSupportsVision(chatModel) });
+    try {
+      const result = await extractPage(targetUrl, { vision: modelSupportsVision(chatModel) });
+      setPageContext(result);
+      setIncludeContext(true);
+      devlog({ evt: "ui.extract.done", url: result.url, hasImg: Boolean(result.screenshot_b64) });
+      pushToast("Captured page context");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Extraction failed");
+      devlog({ evt: "ui.extract.fail", url: targetUrl, message });
+      pushToast(message, { variant: "destructive" });
+    } finally {
+      setIsExtractingContext(false);
+    }
+  }, [chatModel, currentUrl, pushToast]);
+
+  const handleManualContext = useCallback(
+    (text: string, title?: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const manual: PageExtractResponse = {
+        url: currentUrl,
+        text: trimmed,
+        title: title && title.trim() ? title.trim() : "Manual context",
+      };
+      setPageContext(manual);
+      setIncludeContext(true);
+      devlog({ evt: "ui.context.manual", chars: trimmed.length });
+      pushToast("Manual context saved");
+    },
+    [currentUrl, pushToast]
+  );
+
+  const handleClearContext = useCallback(() => {
+    setPageContext(null);
+    setIncludeContext(false);
+    devlog({ evt: "ui.context.clear" });
+  }, []);
+
   const handleQueueAdd = useCallback(
     async (url: string, scope: CrawlScope, notes?: string) => {
       try {
@@ -399,7 +533,7 @@ export function AppShell() {
         });
         applySeedRegistry(payload);
         setSeedError(null);
-        devlog("crawl.queue", { url, scope });
+        devlog({ evt: "ui.crawl.queue", url, scope });
         appendLog({
           id: uid(),
           label: "Queued crawl",
@@ -503,7 +637,7 @@ export function AppShell() {
       const controller = new AbortController();
       searchAbortRef.current = controller;
       const timestamp = new Date().toISOString();
-      devlog("search", { query });
+      devlog({ evt: "ui.search", query });
 
       setSearchState((state) => ({
         ...state,
@@ -584,65 +718,33 @@ export function AppShell() {
     }
   }, [handleSearch, searchState.query]);
 
-  const createActionFromSelection = useCallback(
-    (kind: ActionKind, payload: SelectionActionPayload) => {
-      const action: ProposedAction = {
-        id: uid(),
-        kind,
-        title:
-          kind === "extract"
-            ? "Extract content"
-            : kind === "summarize"
-            ? "Summarize selection"
-            : "Queue highlighted content",
-        description: payload.selection.slice(0, 80) + (payload.selection.length > 80 ? "…" : ""),
-        payload: { ...payload },
-        status: "proposed",
-        metadata: { preview: payload.selection, url: payload.url },
-      };
-      const message: ChatMessage = {
-        id: uid(),
-        role: "agent",
-        content: "I captured a highlight from the page.",
-        createdAt: new Date().toISOString(),
-        proposedActions: [action],
-      };
-      appendMessage(message);
-      appendLog({
-        id: uid(),
-        label: "Highlight captured",
-        detail: `Captured ${payload.selection.length} characters for ${kind}.`,
-        status: "info",
-        timestamp: new Date().toISOString(),
-      });
-    },
-    [appendLog, appendMessage]
-  );
-
   const handleSendChat = useCallback(
     async (content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+
       const historySnapshot = chatHistoryRef.current;
       const now = new Date().toISOString();
       const userMessage: ChatMessage = {
         id: uid(),
         role: "user",
-        content,
+        content: trimmed,
         createdAt: now,
       };
       appendMessage(userMessage);
       appendLog({
         id: uid(),
         label: "User message",
-        detail: content,
+        detail: trimmed,
         status: "info",
         timestamp: now,
       });
       setChatInput("");
 
-      streamingController.current?.abort();
+      chatAbortRef.current?.abort();
       const controller = new AbortController();
-      streamingController.current = controller;
-      setIsStreaming(true);
+      chatAbortRef.current = controller;
+      setIsChatLoading(true);
 
       const assistantId = uid();
       const assistantMessage: ChatMessage = {
@@ -657,156 +759,158 @@ export function AppShell() {
 
       const updateAssistant = (updater: (message: ChatMessage) => ChatMessage) => {
         setChatMessages((messages) =>
-          messages.map((message) =>
-            message.id === assistantId ? updater(message) : message
-          )
+          messages.map((message) => (message.id === assistantId ? updater(message) : message))
         );
       };
 
-      devlog("chat.send", { model: chatModel ?? "auto" });
+      const visionEnabled = modelSupportsVision(chatModel);
+      const shouldAttachContext = includeContext && !!pageContext?.text;
+      const contextUrl = shouldAttachContext ? pageContext?.url ?? currentUrl : currentUrl;
+      const textContext = shouldAttachContext ? pageContext?.text ?? null : null;
+      const imageContext = shouldAttachContext && visionEnabled ? pageContext?.screenshot_b64 ?? null : null;
+
+      devlog({
+        evt: "ui.chat.send",
+        model: chatModel ?? "auto",
+        hasText: Boolean(textContext),
+        hasImg: Boolean(imageContext),
+      });
 
       try {
-        const result: ChatStreamResult = await streamChat(historySnapshot, content, {
+        const result = await sendChat(historySnapshot, trimmed, {
           model: chatModel,
           signal: controller.signal,
-          onEvent: (chunk) => {
-            if (chunk.type === "token" && chunk.content) {
-              updateAssistant((message) => ({
-                ...message,
-                content: `${message.content ?? ""}${chunk.content}`,
-              }));
-            } else if (chunk.type === "action" && chunk.action) {
-              const actionWithDefaults: ProposedAction = {
-                ...chunk.action,
-                status: chunk.action.status ?? "proposed",
-              };
-              updateAssistant((message) => ({
-                ...message,
-                proposedActions: [...(message.proposedActions ?? []), actionWithDefaults],
-              }));
-              appendLog({
-                id: uid(),
-                label: "Proposed action",
-                detail: `${actionWithDefaults.kind}: ${actionWithDefaults.title}`,
-                status: "info",
-                timestamp: new Date().toISOString(),
-              });
-            } else if (chunk.type === "error" && chunk.content) {
-              updateAssistant((message) => ({
-                ...message,
-                streaming: false,
-                content: `${message.content}\n\nError: ${chunk.content}`.trim(),
-              }));
-              appendLog({
-                id: uid(),
-                label: "Chat error",
-                detail: chunk.content,
-                status: "error",
-                timestamp: new Date().toISOString(),
-              });
-            } else if (chunk.type === "done") {
-              updateAssistant((message) => ({
-                ...message,
-                streaming: false,
-              }));
-              appendLog({
-                id: uid(),
-                label: "Response complete",
-                detail: `Finished streaming in ${currentUrl}`,
-                status: "success",
-                timestamp: new Date().toISOString(),
-              });
-            }
-          },
+          url: contextUrl || undefined,
+          textContext: textContext ?? undefined,
+          imageContext: imageContext ?? undefined,
         });
-        devlog("chat.ok", { trace: result.traceId, model: result.model ?? chatModel ?? "unknown" });
+
+        lastSuccessfulModelRef.current = result.model ?? chatModel;
+
+        updateAssistant((message) => ({
+          ...message,
+          streaming: false,
+          content: result.payload.answer || result.payload.reasoning || "",
+          answer: result.payload.answer,
+          reasoning: result.payload.reasoning,
+          citations: result.payload.citations,
+          traceId: result.traceId ?? result.payload.trace_id ?? null,
+          model: result.model ?? chatModel ?? null,
+        }));
+
+        devlog({
+          evt: "ui.chat.ok",
+          trace: result.traceId,
+          model: result.model ?? chatModel ?? "unknown",
+        });
+
+        appendLog({
+          id: uid(),
+          label: "Response ready",
+          detail: shouldAttachContext ? "Answer generated with page context." : "Answer generated.",
+          status: "success",
+          timestamp: new Date().toISOString(),
+        });
+
         if (result.model && result.model !== chatModel) {
           setChatModel(result.model);
         }
-        lastSuccessfulModelRef.current = result.model ?? chatModel;
       } catch (error) {
-        const abort = controller.signal.aborted;
-        if (!abort) {
-          if (error instanceof ChatRequestError) {
-            const message = error.hint ?? error.message;
-            devlog("chat.fail", { trace: error.traceId, code: error.code });
-            updateAssistant((assistant) => ({
-              ...assistant,
-              streaming: false,
-              content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
-            }));
-            appendLog({
-              id: uid(),
-              label: "Chat failure",
-              detail: error.traceId ? `${message} (trace ${error.traceId})` : message,
-              status: "error",
-              timestamp: new Date().toISOString(),
-            });
-            pushToast(message, { variant: "destructive", traceId: error.traceId });
-            if (error.code === "model_not_found" && lastSuccessfulModelRef.current) {
-              setChatModel(lastSuccessfulModelRef.current);
-            }
-          } else {
-            const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
-            devlog("chat.fail", { trace: null, code: "unexpected" });
-            updateAssistant((assistant) => ({
-              ...assistant,
-              streaming: false,
-              content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
-            }));
-            appendLog({
-              id: uid(),
-              label: "Chat failure",
-              detail: message,
-              status: "error",
-              timestamp: new Date().toISOString(),
-            });
-            pushToast(message, { variant: "destructive" });
+        if (controller.signal.aborted) {
+          updateAssistant((message) => ({
+            ...message,
+            streaming: false,
+            content: message.content || "(cancelled)",
+          }));
+          appendLog({
+            id: uid(),
+            label: "Chat cancelled",
+            detail: "Request aborted by user",
+            status: "warning",
+            timestamp: new Date().toISOString(),
+          });
+        } else if (error instanceof ChatRequestError) {
+          const message = error.hint ?? error.message;
+          devlog({ evt: "ui.chat.fail", trace: error.traceId, code: error.code });
+          updateAssistant((assistant) => ({
+            ...assistant,
+            streaming: false,
+            content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
+          }));
+          appendLog({
+            id: uid(),
+            label: "Chat failure",
+            detail: error.traceId ? `${message} (trace ${error.traceId})` : message,
+            status: "error",
+            timestamp: new Date().toISOString(),
+          });
+          pushToast(message, { variant: "destructive", traceId: error.traceId });
+          if (error.code === "model_not_found" && lastSuccessfulModelRef.current) {
+            setChatModel(lastSuccessfulModelRef.current);
           }
+        } else {
+          const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+          devlog({ evt: "ui.chat.fail", trace: null, code: "unexpected" });
+          updateAssistant((assistant) => ({
+            ...assistant,
+            streaming: false,
+            content: assistant.content ? `${assistant.content}\n\n${message}` : `Error: ${message}`,
+          }));
+          appendLog({
+            id: uid(),
+            label: "Chat failure",
+            detail: message,
+            status: "error",
+            timestamp: new Date().toISOString(),
+          });
+          pushToast(message, { variant: "destructive" });
         }
       } finally {
-        if (streamingController.current === controller) {
-          streamingController.current = null;
+        if (chatAbortRef.current === controller) {
+          chatAbortRef.current = null;
         }
-        setIsStreaming(false);
+        setIsChatLoading(false);
         updateAssistant((message) => ({ ...message, streaming: false }));
       }
     },
-    [appendLog, appendMessage, chatModel, currentUrl, pushToast]
+    [appendLog, appendMessage, chatModel, currentUrl, includeContext, pageContext, pushToast]
   );
 
-  const handleStopStreaming = useCallback(() => {
-    if (streamingController.current) {
-      streamingController.current.abort();
-      streamingController.current = null;
+
+  const handleCancelChat = useCallback(() => {
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
     }
-    setIsStreaming(false);
-    devlog("chat.stop");
+    if (isChatLoading) {
+      setIsChatLoading(false);
+    }
+    devlog({ evt: "ui.chat.cancel" });
     appendLog({
       id: uid(),
-      label: "Streaming stopped",
+      label: "Chat cancelled",
       detail: "User interrupted generation",
       status: "warning",
       timestamp: new Date().toISOString(),
     });
-  }, [appendLog]);
+  }, [appendLog, isChatLoading]);
 
   const handleModelSelect = useCallback((value: string) => {
     setChatModel(value);
-    devlog("modelChanged", { model: value });
+    devlog({ evt: "ui.model.change", model: value });
   }, []);
 
   const handleAskAgent = useCallback(
     (question: string) => {
       const prompt = question.trim();
       if (!prompt) return;
-      if (isStreaming) {
-        handleStopStreaming();
+      if (isChatLoading) {
+        handleCancelChat();
       }
       setActiveTab("chat");
       void handleSendChat(prompt);
     },
-    [handleSendChat, handleStopStreaming, isStreaming]
+    [handleSendChat, handleCancelChat, isChatLoading]
   );
 
   const handleOmniSubmit = useCallback(
@@ -816,13 +920,13 @@ export function AppShell() {
       if (looksLikeUrl(input)) {
         handleNavigate(input);
       } else {
-        if (isStreaming) {
-          handleStopStreaming();
+        if (isChatLoading) {
+          handleCancelChat();
         }
         void handleSearch(input);
       }
     },
-    [handleNavigate, handleSearch, handleStopStreaming, isStreaming]
+    [handleNavigate, handleSearch, handleCancelChat, isChatLoading]
   );
 
   const handleApproveAction = useCallback(
@@ -835,7 +939,7 @@ export function AppShell() {
         status: "success",
         timestamp: new Date().toISOString(),
       });
-      devlog("action.approve", { kind: action.kind, id: action.id });
+      devlog({ evt: "ui.action.approve", kind: action.kind, id: action.id });
 
       try {
         if (action.kind === "crawl" || action.kind === "queue") {
@@ -844,7 +948,7 @@ export function AppShell() {
           const maxPages = Number(action.payload.maxPages ?? 25);
           const maxDepth = Number(action.payload.maxDepth ?? 2);
           const description = `Crawl ${new URL(url).hostname}`;
-          devlog("crawl.start", { url, scope, maxPages, maxDepth });
+          devlog({ evt: "ui.crawl.start", url, scope, maxPages, maxDepth });
 
           const response = await startCrawlJob({ url, scope, maxPages, maxDepth });
           const jobId = (response as { job_id?: string; jobId?: string }).jobId ??
@@ -1038,7 +1142,7 @@ export function AppShell() {
         const payload = await saveSeed({ action: "delete", revision, seed: { id } });
         applySeedRegistry(payload);
         setSeedError(null);
-        devlog("crawl.remove", { id, url: target?.url });
+        devlog({ evt: "ui.crawl.remove", id, url: target?.url });
         appendLog({
           id: uid(),
           label: "Seed removed",
@@ -1073,7 +1177,7 @@ export function AppShell() {
         });
         applySeedRegistry(payload);
         setSeedError(null);
-        devlog("crawl.scope", { id, scope, url: target?.url });
+        devlog({ evt: "ui.crawl.scope", id, scope, url: target?.url });
         appendLog({
           id: uid(),
           label: "Seed updated",
@@ -1141,36 +1245,8 @@ export function AppShell() {
   }, [chatModel]);
 
   useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const inventory = await fetchModelInventory();
-        setModelStatus(inventory.models);
-        setOllamaStatus(inventory.status);
-        setAvailableModels(inventory.available);
-        setEmbeddingModel(inventory.configured.embedder);
-        setModelWarning(
-          inventory.available.length === 0
-            ? "No local models detected. Run: `ollama pull gpt-oss` (or your choice) then refresh."
-            : null,
-        );
-        const stored =
-          typeof window !== "undefined" ? window.localStorage.getItem(MODEL_STORAGE_KEY) : null;
-        const nextModel = resolveChatModelSelection({
-          available: inventory.available,
-          configured: inventory.configured,
-          stored: stored && stored.trim() ? stored.trim() : null,
-          previous: lastSuccessfulModelRef.current,
-        });
-        setChatModel(nextModel);
-        lastSuccessfulModelRef.current = nextModel;
-        devlog("models.loaded", { available: inventory.available.length, model: nextModel });
-      } catch (error) {
-        console.warn("Unable to load model inventory", error);
-        devlog("models.error", { message: error instanceof Error ? error.message : String(error) });
-      }
-    };
-    loadModels();
-  }, []);
+    void refreshModels();
+  }, [refreshModels]);
 
   useEffect(() => {
     const subscriptions = jobSubscriptions.current;
@@ -1214,13 +1290,15 @@ export function AppShell() {
 
   const chatModelOptions = useMemo(() => {
     if (!chatModel) {
-      return availableModels;
+      return chatModels;
     }
-    if (availableModels.includes(chatModel)) {
-      return availableModels;
+    if (chatModels.includes(chatModel)) {
+      return chatModels;
     }
-    return [chatModel, ...availableModels.filter((model) => model !== chatModel)];
-  }, [availableModels, chatModel]);
+    return [chatModel, ...chatModels.filter((model) => model !== chatModel)];
+  }, [chatModels, chatModel]);
+
+  const supportsVision = useMemo(() => modelSupportsVision(chatModel), [chatModel]);
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -1267,7 +1345,6 @@ export function AppShell() {
             onHistoryForward={handleForward}
             onReload={handleReload}
             onOpenInNewTab={(url) => window.open(url, "_blank", "noopener")}
-            onSelectionAction={createActionFromSelection}
           />
         </section>
         <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
@@ -1278,26 +1355,46 @@ export function AppShell() {
             </TabsList>
             <TabsContent value="chat" className="flex-1 flex flex-col">
               <div className="flex flex-1 flex-col gap-3 p-3">
+                <ContextPanel
+                  url={currentUrl}
+                  context={pageContext}
+                  includeContext={includeContext}
+                  onIncludeChange={setIncludeContext}
+                  onExtract={handleExtractContext}
+                  extracting={isExtractingContext}
+                  supportsVision={supportsVision}
+                  onManualSubmit={handleManualContext}
+                  onClear={handleClearContext}
+                />
                 <ChatPanel
+                  header={
+                    <CopilotHeader
+                      chatModels={chatModelOptions}
+                      selectedModel={chatModel}
+                      onModelChange={handleModelSelect}
+                      installing={isAutopulling}
+                      onInstallModel={handleAutopull}
+                      installMessage={autopullMessage}
+                      reachable={Boolean(ollamaStatus?.running)}
+                      statusLabel={isChatLoading ? "Generating response" : undefined}
+                    />
+                  }
                   messages={chatMessages}
                   input={chatInput}
                   onInputChange={setChatInput}
                   onSend={handleSendChat}
-                  onStopStreaming={handleStopStreaming}
-                  isStreaming={isStreaming}
+                  isBusy={isChatLoading}
+                  onCancel={isChatLoading ? handleCancelChat : undefined}
                   onApproveAction={handleApproveAction}
                   onEditAction={handleEditAction}
                   onDismissAction={handleDismissAction}
-                  modelOptions={chatModelOptions}
-                  selectedModel={chatModel}
-                  onModelChange={handleModelSelect}
-                  noModelsWarning={modelWarning}
+                  disableInput={chatModels.length === 0 || isAutopulling}
                 />
               </div>
             </TabsContent>
             <TabsContent value="agent" className="flex-1">
               <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-2">
-                <AgentLog entries={agentLog} isStreaming={isStreaming} />
+                <AgentLog entries={agentLog} isStreaming={isChatLoading} />
                 <div className="flex flex-col gap-3">
                   <JobStatus jobs={jobSummaries} />
                   <CrawlManager

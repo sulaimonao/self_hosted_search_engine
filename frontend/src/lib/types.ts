@@ -7,6 +7,11 @@ export interface ChatMessage {
   createdAt: string;
   streaming?: boolean;
   proposedActions?: ProposedAction[];
+  reasoning?: string | null;
+  answer?: string | null;
+  citations?: string[];
+  traceId?: string | null;
+  model?: string | null;
 }
 
 export type ActionStatus = "proposed" | "approved" | "dismissed" | "executing" | "done" | "error";
@@ -102,9 +107,15 @@ export interface ConfiguredModels {
 }
 
 export interface LlmModelsResponse {
-  available: string[];
-  configured: ConfiguredModels;
+  chat_models: string[];
+  configured: {
+    primary: string | null;
+    fallback: string | null;
+  };
+  embedder: string | null;
   ollama_host: string;
+  reachable?: boolean;
+  error?: string;
 }
 
 export interface LlmHealth {
@@ -120,12 +131,21 @@ export interface OllamaStatus {
   host: string;
 }
 
-export interface ChatStreamChunk {
-  type: "token" | "done" | "error" | "action";
-  content?: string;
-  action?: ProposedAction;
-  total_duration?: number;
-  load_duration?: number;
+export interface ChatResponsePayload {
+  reasoning: string;
+  answer: string;
+  citations: string[];
+  model?: string | null;
+  trace_id?: string | null;
+}
+
+export interface PageExtractResponse {
+  url: string;
+  title?: string | null;
+  text: string;
+  lang?: string | null;
+  screenshot_b64?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 export type SearchResponseStatus = "ok" | "focused_crawl_running" | "warming" | string;
