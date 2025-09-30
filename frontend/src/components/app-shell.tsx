@@ -184,6 +184,7 @@ export function AppShell() {
   const [pageContext, setPageContext] = useState<PageExtractResponse | null>(null);
   const [includeContext, setIncludeContext] = useState(false);
   const [isExtractingContext, setIsExtractingContext] = useState(false);
+  const [manualContextTrigger, setManualContextTrigger] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -196,6 +197,7 @@ export function AppShell() {
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
   const searchAbortRef = useRef<AbortController | null>(null);
   const lastSuccessfulModelRef = useRef<string | null>(null);
+  const autopullAttemptedRef = useRef(false);
 
   const currentUrl = previewState.history[previewState.index];
 
@@ -478,6 +480,20 @@ export function AppShell() {
       setIsAutopulling(false);
     }
   }, [isAutopulling, refreshModels, pushToast]);
+
+  useEffect(() => {
+    if (chatModels.length > 0) {
+      autopullAttemptedRef.current = false;
+      return;
+    }
+    if (isAutopulling || autopullAttemptedRef.current) {
+      return;
+    }
+    autopullAttemptedRef.current = true;
+    setAutopullMessage((current) => current ?? "No chat models detected. Installing Gemma3…");
+    devlog({ evt: "ui.models.autopull.auto" });
+    void handleAutopull();
+  }, [chatModels, handleAutopull, isAutopulling]);
 
   const handleExtractContext = useCallback(async () => {
     const targetUrl = currentUrl?.trim();
@@ -1057,6 +1073,10 @@ export function AppShell() {
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+            if (message.toLowerCase().includes("selection access blocked")) {
+              setManualContextTrigger((value) => value + 1);
+              pushToast("Site blocks automated selection. Paste the text manually.", { variant: "warning" });
+            }
             const failureMetadata: Record<string, unknown> = {
               ...(action.metadata ?? {}),
               error: message,
@@ -1112,6 +1132,8 @@ export function AppShell() {
       updateAction,
       updateLogEntry,
       updateMessageForAction,
+      pushToast,
+      setManualContextTrigger,
     ]
   );
 
@@ -1255,7 +1277,7 @@ export function AppShell() {
         cancel();
       }
       subscriptions.clear();
-      streamingController.current?.abort();
+      chatAbortRef.current?.abort();
     };
   }, []);
 
@@ -1365,6 +1387,7 @@ export function AppShell() {
                   supportsVision={supportsVision}
                   onManualSubmit={handleManualContext}
                   onClear={handleClearContext}
+                  manualOpenTrigger={manualContextTrigger}
                 />
                 <ChatPanel
                   header={

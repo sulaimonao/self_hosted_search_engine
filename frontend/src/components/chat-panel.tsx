@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, Loader2, StopCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { ChevronDown, Loader2, StopCircle } from "lucide-react";
 
 import { ActionCard } from "@/components/action-card";
 import { Button } from "@/components/ui/button";
@@ -49,8 +49,6 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const formRef = useRef<HTMLFormElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
-
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isBusy]);
@@ -63,10 +61,6 @@ export function ChatPanel({
     },
     [input, onSend],
   );
-
-  const toggleReasoning = useCallback((id: string) => {
-    setExpandedReasoning((prev) => ({ ...prev, [id]: !prev[id] }));
-  }, []);
 
   return (
     <Card className="flex h-full flex-col">
@@ -92,10 +86,11 @@ export function ChatPanel({
             ) : null}
             {messages.map((message) => {
               const isAssistant = message.role === "assistant";
-              const reasoningId = `${message.id}:reasoning`;
-              const reasoningOpen = Boolean(expandedReasoning[reasoningId]);
               const reasoningText = (message.reasoning ?? "").trim();
-              const answerText = (message.answer ?? message.content ?? "").trim();
+              const answerText = (message.answer ?? "").trim();
+              const fallbackContent = (message.content ?? "").trim();
+              const displayAnswer = answerText || fallbackContent;
+              const hasReasoning = Boolean(reasoningText);
 
               return (
                 <div key={message.id} className="space-y-2">
@@ -113,28 +108,14 @@ export function ChatPanel({
                     <div className="space-y-3">
                       {isAssistant ? (
                         <div className="space-y-3">
-                          <div className="leading-relaxed whitespace-pre-wrap">{answerText || message.content}</div>
-                          {reasoningText ? (
-                            <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
-                              <button
-                                type="button"
-                                className="flex w-full items-center justify-between text-left font-medium text-foreground"
-                                onClick={() => toggleReasoning(reasoningId)}
-                              >
-                                <span>Show reasoning (dev)</span>
-                                {reasoningOpen ? (
-                                  <ChevronUp className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ChevronDown className="h-3.5 w-3.5" />
-                                )}
-                              </button>
-                              {reasoningOpen ? (
-                                <p className="mt-2 whitespace-pre-wrap text-foreground/90">
-                                  {reasoningText}
-                                </p>
-                              ) : null}
+                          <section className="space-y-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Answer
+                            </p>
+                            <div className="whitespace-pre-wrap leading-relaxed text-foreground">
+                              {displayAnswer}
                             </div>
-                          ) : null}
+                          </section>
                           {message.citations && message.citations.length > 0 ? (
                             <div className="space-y-1 text-xs text-muted-foreground">
                               <p className="font-medium text-foreground">Citations</p>
@@ -160,6 +141,17 @@ export function ChatPanel({
                                 })}
                               </ul>
                             </div>
+                          ) : null}
+                          {hasReasoning ? (
+                            <details className="group rounded-md border bg-muted/40 px-3 py-2 text-xs text-foreground/90">
+                              <summary className="flex cursor-pointer items-center justify-between font-medium text-foreground">
+                                <span>Show reasoning</span>
+                                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                              </summary>
+                              <div className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/90">
+                                {reasoningText}
+                              </div>
+                            </details>
                           ) : null}
                         </div>
                       ) : (

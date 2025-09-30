@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { Loader2, RefreshCw, Scissors, Trash2 } from "lucide-react";
 
@@ -21,6 +21,7 @@ interface ContextPanelProps {
   supportsVision: boolean;
   onManualSubmit: (text: string, title?: string) => void;
   onClear: () => void;
+  manualOpenTrigger?: number;
 }
 
 export function ContextPanel({
@@ -33,10 +34,17 @@ export function ContextPanel({
   supportsVision,
   onManualSubmit,
   onClear,
+  manualOpenTrigger = 0,
 }: ContextPanelProps) {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
   const [manualText, setManualText] = useState("");
+
+  useEffect(() => {
+    if (manualOpenTrigger > 0) {
+      setManualOpen(true);
+    }
+  }, [manualOpenTrigger]);
 
   const charCount = context?.text?.length ?? 0;
   const previewText = useMemo(() => {
