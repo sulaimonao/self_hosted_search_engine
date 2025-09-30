@@ -6,182 +6,190 @@ crawl_defaults:
   trust: medium
 directories:
   news:
-    description: >-
-      High-quality global and national newsroom feeds for timely reporting
+    description: High-quality global and national newsroom feeds for timely reporting
       across politics, science, and world events.
     defaults:
       kind: editorial
       strategy: feed
       trust: high
       tags:
-        - news
-        - rss
+      - news
+      - rss
     sources:
-      - id: news_ap_top
-        title: Associated Press – Top News
-        entrypoints:
-          - https://apnews.com/hub/ap-top-news?format=atom
-          - https://feeds.apnews.com/apf-topnews
-        cadence: hourly
-      - id: news_reuters_world
-        title: Reuters – World News
-        entrypoints:
-          - https://feeds.reuters.com/reuters/worldNews
-        cadence: hourly
-      - id: news_npr_top
-        title: NPR – Top Stories
-        entrypoints:
-          - https://feeds.npr.org/1001/rss.xml
-        cadence: hourly
-      - id: news_bbc_world
-        title: BBC – World News
-        entrypoints:
-          - https://feeds.bbci.co.uk/news/world/rss.xml
-        cadence: hourly
+    - id: news_ap_top
+      title: Associated Press – Top News
+      entrypoints:
+      - https://apnews.com/hub/ap-top-news?format=atom
+      - https://feeds.apnews.com/apf-topnews
+      cadence: hourly
+    - id: news_reuters_world
+      title: Reuters – World News
+      entrypoints:
+      - https://feeds.reuters.com/reuters/worldNews
+      cadence: hourly
+    - id: news_npr_top
+      title: NPR – Top Stories
+      entrypoints:
+      - https://feeds.npr.org/1001/rss.xml
+      cadence: hourly
+    - id: news_bbc_world
+      title: BBC – World News
+      entrypoints:
+      - https://feeds.bbci.co.uk/news/world/rss.xml
+      cadence: hourly
   wikipedia_portals:
-    description: >-
-      Wikipedia portals that summarize curated knowledge domains for
-      broad topical coverage and contextual timelines.
+    description: Wikipedia portals that summarize curated knowledge domains for broad
+      topical coverage and contextual timelines.
     defaults:
       kind: knowledge-base
       strategy: portal
       trust: high
       tags:
-        - wikipedia
-        - reference
+      - wikipedia
+      - reference
     sources:
-      - id: wikipedia_current_events
-        title: Wikipedia – Current Events Portal
-        entrypoints:
-          - https://en.wikipedia.org/wiki/Portal:Current_events
-        cadence: daily
-      - id: wikipedia_science
-        title: Wikipedia – Science Portal
-        entrypoints:
-          - https://en.wikipedia.org/wiki/Portal:Science
-        cadence: weekly
-      - id: wikipedia_technology
-        title: Wikipedia – Technology Portal
-        entrypoints:
-          - https://en.wikipedia.org/wiki/Portal:Technology
-        cadence: weekly
-      - id: wikipedia_society
-        title: Wikipedia – Society Portal
-        entrypoints:
-          - https://en.wikipedia.org/wiki/Portal:Society
-        trust: medium
-        cadence: weekly
+    - id: wikipedia_current_events
+      title: Wikipedia – Current Events Portal
+      entrypoints:
+      - https://en.wikipedia.org/wiki/Portal:Current_events
+      cadence: daily
+    - id: wikipedia_science
+      title: Wikipedia – Science Portal
+      entrypoints:
+      - https://en.wikipedia.org/wiki/Portal:Science
+      cadence: weekly
+    - id: wikipedia_technology
+      title: Wikipedia – Technology Portal
+      entrypoints:
+      - https://en.wikipedia.org/wiki/Portal:Technology
+      cadence: weekly
+    - id: wikipedia_society
+      title: Wikipedia – Society Portal
+      entrypoints:
+      - https://en.wikipedia.org/wiki/Portal:Society
+      trust: medium
+      cadence: weekly
   github_topics:
-    description: >-
-      GitHub topic hubs that aggregate active repositories, tutorials, and
-      learning materials for developers.
+    description: GitHub topic hubs that aggregate active repositories, tutorials,
+      and learning materials for developers.
     defaults:
       kind: developer
       strategy: curated
       trust: medium
       tags:
-        - github
-        - topics
+      - github
+      - topics
     sources:
-      - id: github_topic_machine_learning
-        title: GitHub Topic – Machine Learning
-        entrypoints:
-          - https://github.com/topics/machine-learning
-        cadence: weekly
-      - id: github_topic_cybersecurity
-        title: GitHub Topic – Cybersecurity
-        entrypoints:
-          - https://github.com/topics/cybersecurity
-        cadence: weekly
-      - id: github_topic_web_development
-        title: GitHub Topic – Web Development
-        entrypoints:
-          - https://github.com/topics/web-development
-        cadence: weekly
-      - id: github_topic_ai_safety
-        title: GitHub Topic – AI Safety
-        entrypoints:
-          - https://github.com/topics/ai-safety
-        cadence: weekly
+    - id: github_topic_machine_learning
+      title: GitHub Topic – Machine Learning
+      entrypoints:
+      - https://github.com/topics/machine-learning
+      cadence: weekly
+    - id: github_topic_cybersecurity
+      title: GitHub Topic – Cybersecurity
+      entrypoints:
+      - https://github.com/topics/cybersecurity
+      cadence: weekly
+    - id: github_topic_web_development
+      title: GitHub Topic – Web Development
+      entrypoints:
+      - https://github.com/topics/web-development
+      cadence: weekly
+    - id: github_topic_ai_safety
+      title: GitHub Topic – AI Safety
+      entrypoints:
+      - https://github.com/topics/ai-safety
+      cadence: weekly
   awesome_lists:
-    description: >-
-      Maintained Awesome lists that curate high-signal resources for
-      practitioners across ecosystems.
+    description: Maintained Awesome lists that curate high-signal resources for practitioners
+      across ecosystems.
     defaults:
       kind: curated
       strategy: list
       trust: high
       tags:
-        - awesome
-        - github
+      - awesome
+      - github
     sources:
-      - id: awesome_master
-        title: Awesome – Master Index
-        entrypoints:
-          - https://github.com/sindresorhus/awesome
-        cadence: weekly
-      - id: awesome_python
-        title: Awesome – Python
-        entrypoints:
-          - https://github.com/vinta/awesome-python
-        cadence: weekly
-      - id: awesome_machine_learning
-        title: Awesome – Machine Learning
-        entrypoints:
-          - https://github.com/josephmisiti/awesome-machine-learning
-        cadence: weekly
-      - id: awesome_security
-        title: Awesome – Security
-        entrypoints:
-          - https://github.com/sbilly/awesome-security
-        cadence: weekly
+    - id: awesome_master
+      title: Awesome – Master Index
+      entrypoints:
+      - https://github.com/sindresorhus/awesome
+      cadence: weekly
+    - id: awesome_python
+      title: Awesome – Python
+      entrypoints:
+      - https://github.com/vinta/awesome-python
+      cadence: weekly
+    - id: awesome_machine_learning
+      title: Awesome – Machine Learning
+      entrypoints:
+      - https://github.com/josephmisiti/awesome-machine-learning
+      cadence: weekly
+    - id: awesome_security
+      title: Awesome – Security
+      entrypoints:
+      - https://github.com/sbilly/awesome-security
+      cadence: weekly
   language_docs:
-    description: >-
-      Official documentation portals for widely used programming
-      languages and runtimes. These canonical sources provide
-      authoritative API references and tutorials for developers.
+    description: Official documentation portals for widely used programming languages
+      and runtimes. These canonical sources provide authoritative API references and
+      tutorials for developers.
     defaults:
       kind: documentation
       strategy: docs
       trust: high
       tags:
-        - docs
-        - developer
+      - docs
+      - developer
     sources:
-      - id: docs_python
-        title: Python Documentation
-        entrypoints:
-          - https://docs.python.org/3/
-        cadence: monthly
+    - id: docs_python
+      title: Python Documentation
+      entrypoints:
+      - https://docs.python.org/3/
+      cadence: monthly
   sitemap_discovery:
-    description: >-
-      Robots.txt entrypoints for broad sitemap discovery across trusted
+    description: Robots.txt entrypoints for broad sitemap discovery across trusted
       institutional domains.
     defaults:
       kind: crawler
       strategy: sitemap
       trust: medium
       tags:
-        - discovery
-        - sitemap
+      - discovery
+      - sitemap
     sources:
-      - id: sitemap_nasa
-        title: NASA Robots.txt
-        entrypoints:
-          - https://www.nasa.gov/robots.txt
-        follow_sitemaps: true
-      - id: sitemap_white_house
-        title: The White House Robots.txt
-        entrypoints:
-          - https://www.whitehouse.gov/robots.txt
-        follow_sitemaps: true
-      - id: sitemap_european_union
-        title: European Union Robots.txt
-        entrypoints:
-          - https://europa.eu/robots.txt
-        follow_sitemaps: true
-      - id: sitemap_united_nations
-        title: United Nations Robots.txt
-        entrypoints:
-          - https://www.un.org/robots.txt
-        follow_sitemaps: true
+    - id: sitemap_nasa
+      title: NASA Robots.txt
+      entrypoints:
+      - https://www.nasa.gov/robots.txt
+      follow_sitemaps: true
+    - id: sitemap_white_house
+      title: The White House Robots.txt
+      entrypoints:
+      - https://www.whitehouse.gov/robots.txt
+      follow_sitemaps: true
+    - id: sitemap_european_union
+      title: European Union Robots.txt
+      entrypoints:
+      - https://europa.eu/robots.txt
+      follow_sitemaps: true
+    - id: sitemap_united_nations
+      title: United Nations Robots.txt
+      entrypoints:
+      - https://www.un.org/robots.txt
+      follow_sitemaps: true
+  workspace:
+    description: Workspace-managed seeds queued through the web UI.
+    defaults:
+      kind: custom
+      strategy: crawl
+      trust: medium
+    sources:
+    - id: workspace-en-wikipedia-org
+      entrypoints:
+      - https://en.wikipedia.org/wiki/Main_Page
+      scope: page
+      notes: null
+      created_at: '2025-09-29T04:23:25.634592+00:00'
+      updated_at: '2025-09-29T04:23:25.634592+00:00'
