@@ -106,18 +106,19 @@ make dev
 
 - Loads `.env` (if present) to populate environment variables.
 - Exports crawl/index directories so both processes share the same data roots.
-- Starts the Flask API only (default `http://127.0.0.1:5050`; override with
+- Starts the Flask API only (binds to `0.0.0.0` and is reachable at
+  `http://localhost:5050` from the host; override with
   `BACKEND_PORT`). Auto-reload stays off so a `git pull` or file sync won't
   restart your dev server; opt back in with `BACKEND_RELOAD=1 make dev`.
-- Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
-  `FRONTEND_PORT`).
+- Boots the Next.js dev server (binds to `0.0.0.0` and is reachable at
+  `http://localhost:3100`; override with `FRONTEND_PORT`).
 - Tears both processes down when either exits or you press
   <kbd>Ctrl</kbd> + <kbd>C</kbd>.
 
 Run `make stop` to terminate lingering dev servers from another terminal
 without hunting for process IDs.
 
-Open the browser at `http://127.0.0.1:3100` to use the UI. If `127.0.0.1:5050`
+Open the browser at `http://localhost:3100` to use the UI. If `localhost:5050`
 is busy (macOS ships AirPlay on that port), run `BACKEND_PORT=5051 make dev`
 instead. The Flask API root now returns a JSON 404 to indicate that the UI lives
 entirely in Next.js.
