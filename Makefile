@@ -41,6 +41,9 @@ dev:
 	  FRONTEND_HOST="$${FRONTEND_HOST:-127.0.0.1}"; \
 	  BACKEND_PORT="$${BACKEND_PORT:-5050}"; \
 	  BACKEND_HOST="$${BACKEND_HOST:-127.0.0.1}"; \
+	  BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; \
+	  FLASK_RELOAD_FLAG="--no-reload"; \
+	  if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; \
 	  DATA_ROOT="$(DATA_DIR)"; \
 	  INDEX_DIR="$${INDEX_DIR:-$$DATA_ROOT/whoosh}"; \
 	  CRAWL_STORE="$${CRAWL_STORE:-$$DATA_ROOT/crawl}"; \
@@ -51,7 +54,7 @@ dev:
 	  PYTHON_BIN="$(PY)"; \
 	  if [ ! -x "$$PYTHON_BIN" ]; then PYTHON_BIN="$(PYTHON)"; fi; \
 	  trap 'kill 0' EXIT INT TERM; \
-	  "$$PYTHON_BIN" -m flask --app app --debug run --host "$$BACKEND_HOST" --port "$$BACKEND_PORT" & \
+	  "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT" & \
 	  BACK_PID=$$!; \
 	  (cd frontend && npm install >/dev/null && npm run dev -- --hostname "$$FRONTEND_HOST" --port "$$FRONTEND_PORT") & \
 	  FRONT_PID=$$!; \
@@ -68,7 +71,7 @@ agent-dev:
 	@$(MAKE) dev
 
 run:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m flask --app app --debug run'
+	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; FLASK_RELOAD_FLAG="--no-reload"; if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; exec $(PY) -m flask --app app --debug run $$FLASK_RELOAD_FLAG'
 
 index:
 	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; exec $(PY) bin/bootstrap_index.py'

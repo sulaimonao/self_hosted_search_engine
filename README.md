@@ -107,7 +107,8 @@ make dev
 - Loads `.env` (if present) to populate environment variables.
 - Exports crawl/index directories so both processes share the same data roots.
 - Starts the Flask API only (default `http://127.0.0.1:5050`; override with
-  `BACKEND_PORT`).
+  `BACKEND_PORT`). Auto-reload stays off so a `git pull` or file sync won't
+  restart your dev server; opt back in with `BACKEND_RELOAD=1 make dev`.
 - Boots the Next.js dev server (default `http://127.0.0.1:3100`; override with
   `FRONTEND_PORT`).
 - Tears both processes down when either exits or you press
@@ -132,10 +133,17 @@ the `/api/*` rewrite succeeds.
 
 ### Backend or frontend individually
 
-Run just the Flask backend (using the existing `.venv`) with hot reload:
+Run just the Flask backend (using the existing `.venv`) without auto reload:
 
 ```bash
 make run
+```
+
+Need live reload? Prefix the command with `BACKEND_RELOAD=1` to restore the
+watchdog behaviour:
+
+```bash
+BACKEND_RELOAD=1 make run
 ```
 
 Launch the frontend in a separate terminal (remember to export
