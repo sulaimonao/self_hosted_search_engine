@@ -189,7 +189,8 @@ export function WebPreview({
           className="w-full h-full border-0"
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
           onLoad={() => {
-            setSelectionError(null);
+            // Previously attempted to clear a selection error state here, but no state setter exists.
+            // Keeping the handler in case future logic needs to respond to iframe load events.
           }}
         />
         {isLoading && (
