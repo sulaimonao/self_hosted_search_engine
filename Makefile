@@ -54,7 +54,11 @@ dev:
   PYTHON_BIN="$(PY)"; \
   if [ ! -x "$$PYTHON_BIN" ]; then PYTHON_BIN="$(PYTHON)"; fi; \
   trap "kill 0" EXIT INT TERM; \
-  stdbuf -oL -eL "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT" & \
+  if command -v stdbuf >/dev/null 2>&1; then \
+    stdbuf -oL -eL "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT"; \
+  else \
+    PYTHONUNBUFFERED=1 "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT"; \
+  fi & \
   BACK_PID=$$!; \
   HEALTH_URL="http://127.0.0.1:$$BACKEND_PORT/api/llm/health"; \
   echo "Waiting for backend at $$HEALTH_URL..."; \
