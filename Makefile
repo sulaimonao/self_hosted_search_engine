@@ -3,6 +3,7 @@
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
 API_URL := http://127.0.0.1:$(BACKEND_PORT)/api/llm/health
+VENV_PY := .venv/bin/python
 
 bootstrap:
 	@bash scripts/bootstrap.sh
@@ -10,7 +11,7 @@ bootstrap:
 dev:
 	@echo "▶ Starting API (Flask)…"
 	@if ! lsof -iTCP:$(BACKEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
-	  (cd backend && BACKEND_PORT=$(BACKEND_PORT) ../../.venv/bin/python -m app &) ; \
+	  (cd backend && BACKEND_PORT=$(BACKEND_PORT) ../../$(VENV_PY) -m app &) ; \
 	fi
 	@echo "⏳ Waiting for API…"
 	@bash -c 'for i in $$(seq 1 60); do curl -fsS "$(API_URL)" >/dev/null && exit 0; sleep 0.5; done; echo "API not ready" >&2; exit 1'

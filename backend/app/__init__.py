@@ -13,7 +13,7 @@ from typing import Optional
 import yaml
 
 import requests
-from flask import Flask, Response, current_app, jsonify, render_template, request
+from flask import Flask, Response, current_app, jsonify, request
 from flask_cors import CORS
 
 
@@ -79,6 +79,16 @@ def create_app() -> Flask:
         supports_credentials=True,
         expose_headers=["X-Request-Id"],
     )
+
+    @app.before_request
+    def _api_only_gate():
+        path = request.path or ""
+        if path == "/" or path.startswith("/api/"):
+            return None
+        return (
+            jsonify({"error": "Not Found", "hint": "UI served from frontend at :3100"}),
+            404,
+        )
 
     @app.post("/api/dev/log")
     def dev_log() -> Response:
@@ -174,12 +184,18 @@ def create_app() -> Flask:
         return {"status": "ok"}, 200
 
     @app.get("/")
-    def index() -> Response | str:
-        return render_template("index.html")
+    def root() -> Response:
+        return jsonify(
+            {
+                "ok": True,
+                "service": "backend-api",
+                "ui": "frontend-only",
+            }
+        )
 
-    @app.route("/<path:path>")
-    def not_found(path: str) -> tuple[dict[str, str], int]:
-        return {"error": "ui_moved_to_frontend"}, 404
+    @app.errorhandler(404)
+    def _not_found(_):
+        return jsonify({"error": "Not Found"}), 404
 
     def _ollama_host() -> str:
         return config.ollama_url
