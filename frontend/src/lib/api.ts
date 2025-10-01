@@ -20,6 +20,7 @@ import type {
   ConfiguredModels,
   LlmHealth,
   PageExtractResponse,
+  ShadowStatus,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -53,6 +54,80 @@ function coerceBoolean(input: unknown): boolean {
     return normalized === "1" || normalized === "true" || normalized === "yes";
   }
   return false;
+}
+
+const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
+
+function normalizeShadowStatus(
+  payload: Record<string, unknown>,
+  fallbackUrl: string,
+): ShadowStatus {
+  const url = typeof payload.url === "string" && payload.url.trim().length > 0 ? payload.url.trim() : fallbackUrl;
+  const rawState = typeof payload.state === "string" ? payload.state.trim().toLowerCase() : "idle";
+  const state = SHADOW_STATES.has(rawState) ? (rawState as ShadowStatus["state"]) : "idle";
+  const jobIdRaw =
+    typeof payload.job_id === "string"
+      ? payload.job_id.trim()
+      : typeof payload.jobId === "string"
+      ? payload.jobId.trim()
+      : "";
+  const jobId = jobIdRaw.length > 0 ? jobIdRaw : undefined;
+  const title = typeof payload.title === "string" ? payload.title : null;
+  const chunks = coerceNumber(payload.chunks);
+  const error = typeof payload.error === "string" ? payload.error : null;
+  const errorKind = typeof payload.error_kind === "string" ? payload.error_kind : null;
+  const updatedAt = coerceNumber(payload.updated_at ?? payload.updatedAt) ?? undefined;
+
+  return {
+    url,
+    state,
+    jobId,
+    job_id: jobId,
+    title,
+    chunks: typeof chunks === "number" ? chunks : null,
+    error,
+    error_kind: errorKind,
+    updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+export async function queueShadowIndex(url: string): Promise<ShadowStatus> {
+  const normalized = url.trim();
+  if (!normalized) {
+    throw new Error("URL is required");
+  }
+
+  const response = await fetch(api("/api/shadow/queue"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ url: normalized }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Shadow queue failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  return normalizeShadowStatus(payload, normalized);
+}
+
+export async function fetchShadowStatus(url: string): Promise<ShadowStatus> {
+  const normalized = url.trim();
+  if (!normalized) {
+    throw new Error("URL is required");
+  }
+
+  const params = new URLSearchParams({ url: normalized });
+  const response = await fetch(api(`/api/shadow/status?${params.toString()}`));
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Shadow status failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  return normalizeShadowStatus(payload, normalized);
 }
 
 export async function searchIndex(

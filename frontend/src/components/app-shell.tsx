@@ -46,6 +46,8 @@ import {
   subscribeJob,
   summarizeSelection,
   ChatRequestError,
+  queueShadowIndex,
+  fetchShadowStatus,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import type {
@@ -67,6 +69,10 @@ import { devlog } from "@/lib/devlog";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
+const FEATURE_SHADOW_MODE = String(process.env.NEXT_PUBLIC_FEATURE_SHADOW_MODE ?? "");
+const SHADOW_MODE_ENABLED = ["1", "true", "yes", "on"].includes(
+  FEATURE_SHADOW_MODE.trim().toLowerCase(),
+);
 
 function uid() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -198,8 +204,11 @@ export function AppShell() {
   const searchAbortRef = useRef<AbortController | null>(null);
   const lastSuccessfulModelRef = useRef<string | null>(null);
   const autopullAttemptedRef = useRef(false);
+  const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
+  const shadowNotifiedRef = useRef(new Set<string>());
 
   const currentUrl = previewState.history[previewState.index];
+  const shadowModeEnabled = SHADOW_MODE_ENABLED;
 
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
@@ -1248,6 +1257,91 @@ export function AppShell() {
     setOmniboxValue(currentUrl);
     setIsPreviewLoading(false);
   }, [currentUrl]);
+
+  useEffect(() => {
+    if (!shadowModeEnabled) {
+      shadowWatcherRef.current?.cancel?.();
+      shadowWatcherRef.current = null;
+      return;
+    }
+
+    const targetUrl = (currentUrl ?? "").trim();
+    if (!targetUrl) return;
+
+    shadowWatcherRef.current?.cancel?.();
+    shadowNotifiedRef.current.delete(targetUrl);
+    shadowNotifiedRef.current.delete(`${targetUrl}:error`);
+
+    let cancelled = false;
+    shadowWatcherRef.current = {
+      cancel: () => {
+        cancelled = true;
+      },
+    };
+
+    const run = async () => {
+      try {
+        await queueShadowIndex(targetUrl);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "Failed to queue shadow index job");
+        devlog({ evt: "ui.shadow.queue_error", url: targetUrl, message });
+        return;
+      }
+
+      while (!cancelled) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (cancelled) return;
+
+        const status = await fetchShadowStatus(targetUrl).catch((error) => {
+          const message =
+            error instanceof Error ? error.message : String(error ?? "Failed to fetch shadow status");
+          devlog({ evt: "ui.shadow.status_error", url: targetUrl, message });
+          return null;
+        });
+
+        if (!status) {
+          return;
+        }
+
+        if (status.state === "done") {
+          if (!shadowNotifiedRef.current.has(targetUrl)) {
+            const title = status.title && status.title.trim().length > 0 ? status.title.trim() : targetUrl;
+            pushToast(`Indexed: ${title}`);
+            shadowNotifiedRef.current.add(targetUrl);
+            devlog({
+              evt: "ui.shadow.indexed",
+              url: targetUrl,
+              title,
+              chunks: typeof status.chunks === "number" ? status.chunks : null,
+            });
+          }
+          return;
+        }
+
+        if (status.state === "error") {
+          const key = `${targetUrl}:error`;
+          if (!shadowNotifiedRef.current.has(key)) {
+            shadowNotifiedRef.current.add(key);
+            devlog({
+              evt: "ui.shadow.error",
+              url: targetUrl,
+              error: status.error ?? null,
+              error_kind: status.error_kind ?? null,
+            });
+          }
+          return;
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+      shadowWatcherRef.current = null;
+    };
+  }, [currentUrl, pushToast, shadowModeEnabled]);
 
   useEffect(() => {
     chatHistoryRef.current = chatMessages;

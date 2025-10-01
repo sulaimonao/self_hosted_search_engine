@@ -51,12 +51,14 @@ def create_app() -> Flask:
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import refresh as refresh_api
+    from .api import shadow as shadow_api
     from .api import research as research_api
     from .api import seeds as seeds_api
     from .api import search as search_api
     from .config import AppConfig
     from .jobs.focused_crawl import FocusedCrawlManager
     from .jobs.runner import JobRunner
+    from .shadow import ShadowIndexer
     from .metrics import metrics as metrics_module
     from .search.service import SearchService
     from server.refresh_worker import RefreshWorker
@@ -159,6 +161,8 @@ def create_app() -> Flask:
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
     )
+    shadow_manager = ShadowIndexer(app=app, runner=runner, vector_index=vector_index_service)
+    app.config.setdefault("SHADOW_INDEX_MANAGER", shadow_manager)
     app.config.setdefault(
         "SEED_REGISTRY_PATH",
         Path(__file__).resolve().parents[2] / "seeds" / "registry.yaml",
@@ -177,6 +181,7 @@ def create_app() -> Flask:
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
     app.register_blueprint(index_api.bp)
+    app.register_blueprint(shadow_api.bp)
 
     @app.get("/api/healthz")
     def healthz() -> tuple[dict[str, str], int]:
