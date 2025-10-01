@@ -27,3 +27,4 @@ _MAIN_0.toc
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
 !backend/app/services/__init__.py
+!backend/app/__main__.py
