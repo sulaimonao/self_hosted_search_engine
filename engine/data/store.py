@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 import hashlib
 import json
 import os
@@ -255,6 +255,9 @@ class VectorStore:
         content_hash: str,
         chunks: Sequence[Chunk],
         embeddings: Sequence[Sequence[float]],
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        doc_id: str | None = None,
     ) -> None:
         if len(chunks) != len(embeddings):
             raise ValueError("chunks and embeddings must have the same length")
@@ -267,6 +270,9 @@ class VectorStore:
                 """,
                 (url, title, etag, content_hash),
             )
+
+        sanitized_metadata = self._sanitize_metadata(dict(metadata or {}))
+        document_id = doc_id or url
 
         with self._collection_lock:
             self._collection.delete(where={"url": url})
@@ -283,9 +289,13 @@ class VectorStore:
                     "token_count": chunk.token_count,
                     "etag": etag,
                     "content_hash": content_hash,
+                    "doc_id": document_id,
                 }
                 for idx, chunk in enumerate(chunks)
             ]
+            if sanitized_metadata:
+                for entry in metadatas:
+                    entry.update(sanitized_metadata)
             ids = [self._chunk_id(url, idx) for idx in range(len(chunks))]
             embedding_list = [self._ensure_embedding(embedding) for embedding in embeddings]
             sanitized_metadatas = [
@@ -297,6 +307,28 @@ class VectorStore:
                 metadatas=sanitized_metadatas,
                 embeddings=embedding_list,
             )
+
+    def document_count(self) -> int:
+        with duckdb.connect(str(self._db_path)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def embedding_dimensions(self) -> int:
+        with self._collection_lock:
+            try:
+                sample = self._collection.get(limit=1, include=["embeddings"])
+            except Exception:  # pragma: no cover - defensive guard against chroma internals
+                return 0
+        embeddings = sample.get("embeddings") if isinstance(sample, dict) else None
+        if not embeddings:
+            return 0
+        first = embeddings[0] if isinstance(embeddings, list) else None
+        if not first:
+            return 0
+        vector = first[0] if isinstance(first, list) else first
+        if not isinstance(vector, Sequence):
+            return 0
+        return len(vector)
 
     def query(
         self, vector: Sequence[float], k: int, similarity_threshold: float

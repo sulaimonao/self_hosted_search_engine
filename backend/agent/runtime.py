@@ -5,14 +5,16 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from backend.telemetry import event as telemetry_event
 
 from .document_store import DocumentStore, StoredDocument
 from .frontier_store import FrontierStore
-from ..embed.adapter import embed_texts
-from ..retrieval.vector_store import LocalVectorStore, VectorDocument
+from backend.app.services.vector_index import (
+    EmbedderUnavailableError,
+    VectorIndexService,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class AgentRuntime:
     search_service: SearchServiceProtocol | None
     frontier: FrontierStore
     document_store: DocumentStore
-    vector_store: LocalVectorStore
+    vector_index: VectorIndexService
     fetcher: FetcherProtocol
     max_fetch_per_turn: int = 3
     coverage_threshold: float = 0.6
@@ -66,20 +68,26 @@ class AgentRuntime:
             return []
         combined: dict[str, dict[str, object]] = {}
         if use_embeddings:
-            vectors = embed_texts([clean_query])
-            if vectors:
-                vector_hits = self.vector_store.query(vectors[0], k)
-                for rank, hit in enumerate(vector_hits, start=1):
-                    combined.setdefault(hit.url, {
-                        "url": hit.url,
-                        "title": hit.title,
-                        "snippet": hit.snippet,
-                        "score": hit.score,
+            try:
+                vector_hits = self.vector_index.search(clean_query, k=k)
+            except EmbedderUnavailableError:
+                LOGGER.debug("Embedding unavailable; falling back to BM25 only", exc_info=True)
+                vector_hits = []
+            for rank, hit in enumerate(vector_hits, start=1):
+                url = str(hit.get("url", ""))
+                if not url:
+                    continue
+                combined.setdefault(
+                    url,
+                    {
+                        "url": url,
+                        "title": hit.get("title"),
+                        "snippet": hit.get("chunk"),
+                        "score": float(hit.get("score", 0.0)),
                         "source": "vector",
                         "rank": rank,
-                    })
-            elif vectors is None:
-                LOGGER.debug("Embedding unavailable; falling back to BM25 only")
+                    },
+                )
         if self.search_service:
             results, _job, _context = self.search_service.run_query(
                 clean_query, limit=max(5, k), use_llm=False, model=None
@@ -145,28 +153,34 @@ class AgentRuntime:
         documents = list(self.document_store.iter_documents(urls))
         if not documents:
             return {"changed": 0, "skipped": 0}
-        vectors = embed_texts([doc.text for doc in documents])
-        if vectors is None or len(vectors) != len(documents):
-            LOGGER.warning("Embeddings unavailable for reindex; skipping")
-            return {"changed": 0, "skipped": len(documents)}
-        vector_docs = [
-            VectorDocument(
-                doc_id=doc.sha256,
-                url=doc.url,
-                title=doc.title,
-                text=doc.text,
-                embedding=vectors[idx],
-            )
-            for idx, doc in enumerate(documents)
-        ]
-        changed, skipped = self.vector_store.upsert_many(vector_docs)
+        changed = 0
+        skipped = 0
+        for doc in documents:
+            try:
+                result = self.vector_index.upsert_document(
+                    text=doc.text,
+                    url=doc.url,
+                    title=doc.title,
+                    metadata={"sha256": doc.sha256},
+                )
+            except EmbedderUnavailableError:
+                LOGGER.warning(
+                    "Embeddings unavailable for reindex; skipping remaining docs",
+                    exc_info=True,
+                )
+                remaining = len(documents) - (changed + skipped)
+                return {"changed": changed, "skipped": skipped + remaining}
+            if result.chunks > 0:
+                changed += 1
+            else:
+                skipped += 1
         telemetry_event("agent.reindex", {"changed": changed, "skipped": skipped})
         return {"changed": changed, "skipped": skipped}
 
     def status(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "frontier": self.frontier.to_dict(),
-            "vector_store": dict(self.vector_store.to_metadata()),
+            "vector_store": self.vector_index.metadata(),
         }
         return payload
 

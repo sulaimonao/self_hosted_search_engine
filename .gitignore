@@ -23,8 +23,11 @@ _MAIN_0.toc
 !server/json_logger.py
 !backend/app/api/llm.py
 !backend/app/api/extract.py
+!backend/app/api/index.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
+!backend/app/services/vector_index.py
 !backend/app/services/__init__.py
 !backend/app/__main__.py
+!tests/api/test_index_api.py

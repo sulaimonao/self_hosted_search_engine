@@ -37,7 +37,7 @@ def create_app() -> Flask:
     from backend.agent.document_store import DocumentStore
     from backend.agent.frontier_store import FrontierStore
     from backend.agent.runtime import AgentRuntime, CrawlFetcher
-    from backend.retrieval.vector_store import LocalVectorStore
+    from backend.app.services.vector_index import VectorIndexService
     from engine.indexing.crawl import CrawlClient
 
     from engine.config import EngineConfig
@@ -47,6 +47,7 @@ def create_app() -> Flask:
     from .api import extract as extract_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
+    from .api import index as index_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import refresh as refresh_api
@@ -117,10 +118,12 @@ def create_app() -> Flask:
     refresh_worker = RefreshWorker(config, search_service=search_service, db=db)
 
     documents_dir = config.agent_data_dir / "documents"
-    vector_dir = config.agent_data_dir / "vector_store"
     frontier_store = FrontierStore(config.frontier_db_path)
     document_store = DocumentStore(documents_dir)
-    vector_store = LocalVectorStore(vector_dir)
+    vector_index_service = VectorIndexService(
+        engine_config=engine_config,
+        app_config=config,
+    )
     crawler_client = CrawlClient(
         user_agent=os.getenv("AGENT_USER_AGENT", "SelfHostedSearchAgent/0.1"),
         request_timeout=float(os.getenv("AGENT_REQUEST_TIMEOUT", "15")),
@@ -140,7 +143,7 @@ def create_app() -> Flask:
         search_service=search_service,
         frontier=frontier_store,
         document_store=document_store,
-        vector_store=vector_store,
+        vector_index=vector_index_service,
         fetcher=fetcher,
         max_fetch_per_turn=agent_max_fetch,
         coverage_threshold=agent_coverage_threshold,
@@ -154,6 +157,7 @@ def create_app() -> Flask:
         REFRESH_WORKER=refresh_worker,
         LEARNED_WEB_DB=db,
         AGENT_RUNTIME=agent_runtime,
+        VECTOR_INDEX_SERVICE=vector_index_service,
     )
     app.config.setdefault(
         "SEED_REGISTRY_PATH",
@@ -172,6 +176,7 @@ def create_app() -> Flask:
     app.register_blueprint(agent_tools_api.bp)
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
+    app.register_blueprint(index_api.bp)
 
     @app.get("/api/healthz")
     def healthz() -> tuple[dict[str, str], int]:
