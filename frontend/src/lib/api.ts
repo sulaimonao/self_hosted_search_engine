@@ -21,6 +21,8 @@ import type {
   LlmHealth,
   PageExtractResponse,
   ShadowStatus,
+  DiscoveryPreview,
+  DiscoveryItem,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -57,6 +59,16 @@ function coerceBoolean(input: unknown): boolean {
 }
 
 const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
+
+export interface DiscoverySubscription {
+  close: () => void;
+}
+
+export interface IndexUpsertOptions {
+  url?: string | null;
+  title?: string | null;
+  meta?: Record<string, unknown>;
+}
 
 function normalizeShadowStatus(
   payload: Record<string, unknown>,
@@ -128,6 +140,105 @@ export async function fetchShadowStatus(url: string): Promise<ShadowStatus> {
 
   const payload = (await response.json()) as Record<string, unknown>;
   return normalizeShadowStatus(payload, normalized);
+}
+
+export function subscribeDiscoveryEvents(
+  onEvent: (event: DiscoveryPreview) => void,
+  onError?: (error: unknown) => void,
+): DiscoverySubscription | null {
+  if (typeof window === "undefined" || typeof EventSource === "undefined") {
+    return null;
+  }
+
+  const source = new EventSource(api("/api/discovery/events"));
+  source.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data) as DiscoveryPreview;
+      if (payload && typeof payload.id === "string") {
+        onEvent(payload);
+      }
+    } catch (error) {
+      if (onError) onError(error);
+    }
+  };
+  if (onError) {
+    source.onerror = (event) => onError(event);
+  }
+
+  return {
+    close: () => {
+      source.close();
+    },
+  };
+}
+
+export async function fetchDiscoveryItem(id: string): Promise<DiscoveryItem> {
+  const trimmed = id.trim();
+  if (!trimmed) {
+    throw new Error("id is required");
+  }
+
+  const response = await fetch(api(`/api/discovery/item/${encodeURIComponent(trimmed)}`));
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Discovery item fetch failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as DiscoveryItem;
+  return payload;
+}
+
+export async function confirmDiscoveryItem(id: string, action: string = "included"): Promise<void> {
+  const trimmed = id.trim();
+  if (!trimmed) {
+    throw new Error("id is required");
+  }
+
+  const response = await fetch(api("/api/discovery/confirm"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ id: trimmed, action }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Discovery confirm failed (${response.status})`);
+  }
+}
+
+export async function upsertIndexDocument(
+  text: string,
+  options: IndexUpsertOptions = {},
+): Promise<Record<string, unknown>> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("text is required");
+  }
+
+  const body: Record<string, unknown> = { text: trimmed };
+  if (options.url) {
+    body.url = options.url;
+  }
+  if (options.title) {
+    body.title = options.title;
+  }
+  if (options.meta) {
+    body.meta = options.meta;
+  }
+
+  const response = await fetch(api("/api/index/upsert"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Index upsert failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  return payload;
 }
 
 export async function searchIndex(

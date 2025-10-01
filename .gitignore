@@ -26,11 +26,13 @@ _MAIN_0.toc
 !backend/app/api/agent_browser.py
 !backend/app/api/index.py
 !backend/app/api/shadow.py
+!backend/app/api/discovery.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
 !backend/app/services/vector_index.py
 !backend/app/services/agent_browser.py
+!backend/app/services/local_discovery.py
 !backend/app/services/__init__.py
 !backend/app/__main__.py
 !backend/app/shadow/__init__.py
@@ -38,3 +40,4 @@ _MAIN_0.toc
 !tests/api/test_index_api.py
 !tests/api/test_shadow_api.py
 !tests/e2e/test_agent_browser.py
+!tests/backend/test_local_discovery.py

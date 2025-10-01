@@ -45,6 +45,7 @@ def create_app() -> Flask:
     from .api import agent_tools as agent_tools_api
     from .api import agent_browser as agent_browser_api
     from .api import chat as chat_api
+    from .api import discovery as discovery_api
     from .api import extract as extract_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
@@ -155,6 +156,54 @@ def create_app() -> Flask:
     feature_agent_mode = os.getenv("FEATURE_AGENT_MODE", "0").lower() in {"1", "true", "yes", "on"}
     app.config.setdefault("FEATURE_AGENT_MODE", feature_agent_mode)
 
+    feature_local_discovery = (
+        os.getenv("FEATURE_LOCAL_DISCOVERY", "0").lower() in {"1", "true", "yes", "on"}
+    )
+    app.config.setdefault("FEATURE_LOCAL_DISCOVERY", feature_local_discovery)
+
+    reload_enabled = os.getenv("BACKEND_RELOAD", "0").lower() in {"1", "true", "yes", "on"}
+
+    if feature_local_discovery:
+        from .services.local_discovery import LocalDiscoveryService
+
+        home_downloads = Path.home() / "Downloads"
+        data_downloads = config.agent_data_dir.parent / "downloads"
+        candidate_dirs = []
+        if home_downloads.exists() and home_downloads.is_dir():
+            candidate_dirs.append(home_downloads)
+        candidate_dirs.append(data_downloads)
+
+        unique_dirs: list[Path] = []
+        seen: set[Path] = set()
+        for directory in candidate_dirs:
+            try:
+                resolved = directory.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            unique_dirs.append(directory)
+
+        service: LocalDiscoveryService | None = None
+        should_start = not reload_enabled or os.getenv("WERKZEUG_RUN_MAIN") == "true"
+        if should_start and unique_dirs:
+            ledger_path = config.agent_data_dir / "local_discovery_confirmations.json"
+            service = LocalDiscoveryService(unique_dirs, ledger_path=ledger_path)
+            try:
+                service.start()
+            except Exception:  # pragma: no cover - defensive logging
+                LOGGER.exception("Local discovery service failed to start")
+                service = None
+            else:
+                import atexit
+
+                atexit.register(service.stop)
+
+        app.config.setdefault("LOCAL_DISCOVERY_SERVICE", service)
+    else:
+        app.config.setdefault("LOCAL_DISCOVERY_SERVICE", None)
+
     browser_manager = None
     if feature_agent_mode:
         try:
@@ -199,6 +248,7 @@ def create_app() -> Flask:
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
     app.register_blueprint(index_api.bp)
+    app.register_blueprint(discovery_api.bp)
     app.register_blueprint(shadow_api.bp)
     if feature_agent_mode and browser_manager is not None:
         app.register_blueprint(agent_browser_api.bp)

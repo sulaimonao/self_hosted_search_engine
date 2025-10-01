@@ -197,3 +197,18 @@ export interface ShadowStatus {
   updatedAt?: number;
   updated_at?: number;
 }
+
+export interface DiscoveryPreview {
+  id: string;
+  path: string;
+  name: string;
+  ext: string;
+  size: number;
+  mtime: number;
+  createdAt: number;
+  preview: string;
+}
+
+export interface DiscoveryItem extends DiscoveryPreview {
+  text: string;
+}
