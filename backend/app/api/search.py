@@ -5,7 +5,7 @@ from __future__ import annotations
 import textwrap
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlunparse
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -483,7 +483,15 @@ def search_endpoint():
         return jsonify(agent_payload)
 
     engine_config: EngineConfig | None = current_app.config.get("RAG_ENGINE_CONFIG")
-    if engine_config is None:
+    store = current_app.config.get("RAG_VECTOR_STORE")
+    embedder = current_app.config.get("RAG_EMBEDDER")
+    coldstart = current_app.config.get("RAG_COLDSTART")
+    rag_agent = current_app.config.get("RAG_AGENT")
+    embed_manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
+
+    rag_components_ready = all(component is not None for component in (store, embedder, coldstart, rag_agent))
+
+    if engine_config is None or not rag_components_ready:
         search_service = current_app.config.get("SEARCH_SERVICE")
         app_config = current_app.config.get("APP_CONFIG")
         if search_service and app_config:
@@ -514,11 +522,10 @@ def search_endpoint():
             return jsonify(payload)
         return jsonify({"error": "Semantic search unavailable"}), 503
 
-    store: VectorStore = current_app.config["RAG_VECTOR_STORE"]
-    embedder: OllamaEmbedder = current_app.config["RAG_EMBEDDER"]
-    coldstart: ColdStartIndexer = current_app.config["RAG_COLDSTART"]
-    rag_agent: RagAgent = current_app.config["RAG_AGENT"]
-    embed_manager: EmbeddingManager | None = current_app.config.get("RAG_EMBED_MANAGER")
+    store = cast(VectorStore, store)
+    embedder = cast(OllamaEmbedder, embedder)
+    coldstart = cast(ColdStartIndexer, coldstart)
+    rag_agent = cast(RagAgent, rag_agent)
 
     embed_model_name = (
         current_app.config.get("RAG_EMBED_MODEL_NAME") or engine_config.models.embed

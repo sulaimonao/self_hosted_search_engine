@@ -13,7 +13,7 @@ from typing import Optional
 import yaml
 
 import requests
-from flask import Flask, Response, current_app, jsonify, request
+from flask import Flask, Response, current_app, jsonify, render_template, request
 from flask_cors import CORS
 
 
@@ -39,6 +39,8 @@ def create_app() -> Flask:
     from backend.agent.runtime import AgentRuntime, CrawlFetcher
     from backend.retrieval.vector_store import LocalVectorStore
     from engine.indexing.crawl import CrawlClient
+
+    from engine.config import EngineConfig
 
     from .api import agent_tools as agent_tools_api
     from .api import chat as chat_api
@@ -95,6 +97,9 @@ def create_app() -> Flask:
     config = AppConfig.from_env()
     config.ensure_dirs()
     config.log_summary()
+
+    engine_config = EngineConfig.from_yaml(CONFIG_PATH)
+    app.config.setdefault("RAG_ENGINE_CONFIG", engine_config)
 
     chat_logger = logging.getLogger("backend.app.api.chat")
     chat_logger.setLevel(config.chat_log_level)
@@ -168,7 +173,10 @@ def create_app() -> Flask:
     def healthz() -> tuple[dict[str, str], int]:
         return {"status": "ok"}, 200
 
-    @app.route("/", defaults={"path": ""})
+    @app.get("/")
+    def index() -> Response | str:
+        return render_template("index.html")
+
     @app.route("/<path:path>")
     def not_found(path: str) -> tuple[dict[str, str], int]:
         return {"error": "ui_moved_to_frontend"}, 404
