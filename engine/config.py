@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
 import yaml
 
 
@@ -81,7 +82,10 @@ class EngineConfig:
 
         primary_value = models.get("llm_primary", "gpt-oss")
         fallback_value = models.get("llm_fallback", "gemma3")
-        embed_value = models.get("embed", "embeddinggemma")
+        embed_override = os.getenv("LLM_EMBEDDER") or os.getenv("EMBED_MODEL")
+        if embed_override is not None and not str(embed_override).strip():
+            embed_override = None
+        embed_value = embed_override or models.get("embed", "embeddinggemma")
         primary_text = str(primary_value).strip() if primary_value else ""
         fallback_text = str(fallback_value).strip() if fallback_value else ""
         embed_text = str(embed_value).strip() if embed_value else ""
