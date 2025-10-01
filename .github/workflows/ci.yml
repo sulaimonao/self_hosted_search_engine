@@ -9,27 +9,78 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_PYTHON_VERSION_WARNING: "1"
+      PYTHONPATH: "${{ github.workspace }}"
+      WANDB_DISABLED: "true"
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install -e .
+          pip install --requirement requirements.txt
+          pip install --requirement requirements-dev.txt
+          pip install --editable .
 
-      - name: Static analysis & tests
-        run: make check
+      - name: Ruff lint
+        id: ruff
+        run: |
+          set -o pipefail
+          ruff check . || { echo '::error title=Ruff lint failed::Run "ruff check ." locally to reproduce.'; exit 1; }
+
+      - name: Black formatting
+        id: black
+        run: |
+          set -o pipefail
+          black --check . || { echo '::error title=Black formatting failed::Run "black ." locally to format code.'; exit 1; }
+
+      - name: Mypy type check
+        id: mypy
+        run: |
+          set -o pipefail
+          mypy backend crawler engine llm rank search server seed_loader || { echo '::error title=Mypy type check failed::Run "mypy backend crawler engine llm rank search server seed_loader" locally to reproduce.'; exit 1; }
+
+      - name: Pytest
+        id: pytest
+        run: |
+          set -o pipefail
+          pytest -q || { echo '::error title=Pytest failed::Run "pytest -q" locally to reproduce.'; exit 1; }
 
       - name: Budget guard
         run: |
           git add -A
           python scripts/change_budget.py
+
+      - name: CI summary
+        if: always()
+        run: |
+          {
+            echo "## Verify job summary"
+            echo "- Python: $(python --version 2>&1)"
+            echo "- Ruff: ${{ steps.ruff.outcome }}"
+            echo "- Black: ${{ steps.black.outcome }}"
+            echo "- Mypy: ${{ steps.mypy.outcome }}"
+            echo "- Pytest: ${{ steps.pytest.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
