@@ -380,6 +380,29 @@ triggers the flow the engine:
 - Persists the discovery metadata (query, URL, source, score) so subsequent
   searches can reuse the same domains without a fresh crawl.
 
+### Local file discovery
+
+Enable the local discovery watcher by setting `FEATURE_LOCAL_DISCOVERY=1` for
+the Flask API and `NEXT_PUBLIC_FEATURE_LOCAL_DISCOVERY=1` for the Next.js app
+(both defaults ship in the `.env.example` files). When active the backend starts
+a `watchdog` observer for two directories:
+
+- `~/Downloads` (if it exists)
+- `data/downloads` (always created so you can drop files from a headless
+  environment)
+
+New `.pdf`, `.html`, `.txt`, or `.md` files are parsed server-side (PDFs via
+`pdfminer`, HTML via BeautifulSoup) and broadcast to the UI using SSE. The UI
+shows a floating banner—"Found file: …"—with **Include** and **Dismiss**
+actions. Choosing **Include** calls `/api/index/upsert` with the extracted text
+and stores a confirmation so the same file will not be re-suggested after a
+restart. Dismissing records the file path and modification time in
+`data/agent/local_discovery_confirmations.json` so subsequent downloads with the
+same timestamp are ignored.
+
+Drop a PDF into either watch directory while the stack is running to see the
+notification and index the document on demand.
+
 ### Manual refresh controls
 
 Trigger a focused crawl on demand by clicking **Refresh now** in the web UI. The

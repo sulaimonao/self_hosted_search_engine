@@ -30,6 +30,7 @@ import { JobStatus } from "@/components/job-status";
 import { CrawlManager } from "@/components/crawl-manager";
 import { ActionEditor } from "@/components/action-editor";
 import { ToastContainer, ToastMessage } from "@/components/toast-container";
+import { LocalDiscoveryPanel } from "@/components/local-discovery-panel";
 import { CopilotHeader } from "@/components/copilot-header";
 import { ContextPanel } from "@/components/context-panel";
 import {
@@ -48,6 +49,10 @@ import {
   ChatRequestError,
   queueShadowIndex,
   fetchShadowStatus,
+  subscribeDiscoveryEvents,
+  fetchDiscoveryItem,
+  confirmDiscoveryItem,
+  upsertIndexDocument,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import type {
@@ -64,6 +69,7 @@ import type {
   SeedRecord,
   SearchHit,
   PageExtractResponse,
+  DiscoveryPreview,
 } from "@/lib/types";
 import { devlog } from "@/lib/devlog";
 
@@ -72,6 +78,10 @@ const MODEL_STORAGE_KEY = "chat:model";
 const FEATURE_SHADOW_MODE = String(process.env.NEXT_PUBLIC_FEATURE_SHADOW_MODE ?? "");
 const SHADOW_MODE_ENABLED = ["1", "true", "yes", "on"].includes(
   FEATURE_SHADOW_MODE.trim().toLowerCase(),
+);
+const FEATURE_LOCAL_DISCOVERY = String(process.env.NEXT_PUBLIC_FEATURE_LOCAL_DISCOVERY ?? "");
+const LOCAL_DISCOVERY_ENABLED = ["1", "true", "yes", "on"].includes(
+  FEATURE_LOCAL_DISCOVERY.trim().toLowerCase(),
 );
 
 function uid() {
@@ -195,6 +205,8 @@ export function AppShell() {
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
+  const [discoveryItems, setDiscoveryItems] = useState<DiscoveryPreview[]>([]);
+  const [discoveryBusyIds, setDiscoveryBusyIds] = useState<Set<string>>(() => new Set());
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -206,6 +218,7 @@ export function AppShell() {
   const autopullAttemptedRef = useRef(false);
   const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
   const shadowNotifiedRef = useRef(new Set<string>());
+  const discoveryErrorNotifiedRef = useRef(false);
 
   const currentUrl = previewState.history[previewState.index];
   const shadowModeEnabled = SHADOW_MODE_ENABLED;
@@ -1231,6 +1244,64 @@ export function AppShell() {
     [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
   );
 
+  const handleIncludeDiscovery = useCallback(
+    async (id: string) => {
+      setDiscoveryBusyIds((current) => {
+        const next = new Set(current);
+        next.add(id);
+        return next;
+      });
+      try {
+        const item = await fetchDiscoveryItem(id);
+        await upsertIndexDocument(item.text, {
+          title: item.name,
+          meta: { path: item.path },
+        });
+        await confirmDiscoveryItem(id, "included");
+        setDiscoveryItems((items) => items.filter((entry) => entry.id !== id));
+        devlog({ evt: "ui.discovery.include", path: item.path, name: item.name });
+        pushToast(`Indexed ${item.name}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Failed to include file");
+        pushToast(message, { variant: "destructive" });
+        devlog({ evt: "ui.discovery.include_error", id, message });
+      } finally {
+        setDiscoveryBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [pushToast],
+  );
+
+  const handleDismissDiscovery = useCallback(
+    async (id: string) => {
+      setDiscoveryBusyIds((current) => {
+        const next = new Set(current);
+        next.add(id);
+        return next;
+      });
+      try {
+        await confirmDiscoveryItem(id, "dismissed");
+        setDiscoveryItems((items) => items.filter((entry) => entry.id !== id));
+        devlog({ evt: "ui.discovery.dismiss", id });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Failed to dismiss file");
+        pushToast(message, { variant: "destructive" });
+        devlog({ evt: "ui.discovery.dismiss_error", id, message });
+      } finally {
+        setDiscoveryBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [pushToast],
+  );
+
   useEffect(() => {
     return () => {
       searchAbortRef.current?.abort();
@@ -1257,6 +1328,45 @@ export function AppShell() {
     setOmniboxValue(currentUrl);
     setIsPreviewLoading(false);
   }, [currentUrl]);
+
+  useEffect(() => {
+    if (!LOCAL_DISCOVERY_ENABLED) {
+      return;
+    }
+
+    const subscription = subscribeDiscoveryEvents(
+      (event) => {
+        setDiscoveryItems((items) => {
+          const index = items.findIndex((existing) => existing.id === event.id);
+          if (index >= 0) {
+            const next = [...items];
+            next[index] = event;
+            return next;
+          }
+          return [...items, event];
+        });
+        discoveryErrorNotifiedRef.current = false;
+      },
+      (error) => {
+        if (discoveryErrorNotifiedRef.current) {
+          return;
+        }
+        discoveryErrorNotifiedRef.current = true;
+        const message =
+          error instanceof Error
+            ? error.message
+            : error && typeof (error as { message?: unknown }).message === "string"
+            ? String((error as { message?: unknown }).message)
+            : "Local discovery stream unavailable";
+        devlog({ evt: "ui.discovery.error", message });
+        pushToast(message, { variant: "destructive" });
+      },
+    );
+
+    return () => {
+      subscription?.close();
+    };
+  }, [pushToast]);
 
   useEffect(() => {
     if (!shadowModeEnabled) {
@@ -1683,6 +1793,14 @@ export function AppShell() {
           </Button>
         </SheetContent>
       </Sheet>
+      {LOCAL_DISCOVERY_ENABLED ? (
+        <LocalDiscoveryPanel
+          items={discoveryItems}
+          busyIds={discoveryBusyIds}
+          onInclude={handleIncludeDiscovery}
+          onDismiss={handleDismissDiscovery}
+        />
+      ) : null}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
