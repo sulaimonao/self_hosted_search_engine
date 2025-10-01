@@ -72,13 +72,7 @@ def create_app() -> Flask:
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
 
-    allowed_origins = ["http://127.0.0.1:3100", "http://localhost:3100"]
-    CORS(
-        app,
-        resources={r"/api/*": {"origins": allowed_origins}},
-        supports_credentials=True,
-        expose_headers=["X-Request-Id"],
-    )
+    CORS(app, resources={r"/api/*": {"origins": ["http://127.0.0.1:3100", "http://localhost:3100"]}})
 
     @app.before_request
     def _api_only_gate():
