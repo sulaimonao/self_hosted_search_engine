@@ -43,6 +43,7 @@ def create_app() -> Flask:
     from engine.config import EngineConfig
 
     from .api import agent_tools as agent_tools_api
+    from .api import agent_browser as agent_browser_api
     from .api import chat as chat_api
     from .api import extract as extract_api
     from .api import llm as llm_api
@@ -151,6 +152,23 @@ def create_app() -> Flask:
         coverage_threshold=agent_coverage_threshold,
     )
 
+    feature_agent_mode = os.getenv("FEATURE_AGENT_MODE", "0").lower() in {"1", "true", "yes", "on"}
+    app.config.setdefault("FEATURE_AGENT_MODE", feature_agent_mode)
+
+    browser_manager = None
+    if feature_agent_mode:
+        try:
+            from .services.agent_browser import AgentBrowserManager
+
+            browser_manager = AgentBrowserManager()
+        except Exception:  # pragma: no cover - defensive logging
+            LOGGER.exception("Agent browser manager unavailable; disabling agent browser endpoints")
+            app.config.setdefault("AGENT_BROWSER_MANAGER", None)
+        else:
+            app.config.setdefault("AGENT_BROWSER_MANAGER", browser_manager)
+    else:
+        app.config.setdefault("AGENT_BROWSER_MANAGER", None)
+
     app.config.update(
         APP_CONFIG=config,
         JOB_RUNNER=runner,
@@ -182,6 +200,8 @@ def create_app() -> Flask:
     app.register_blueprint(extract_api.bp)
     app.register_blueprint(index_api.bp)
     app.register_blueprint(shadow_api.bp)
+    if feature_agent_mode and browser_manager is not None:
+        app.register_blueprint(agent_browser_api.bp)
 
     @app.get("/api/healthz")
     def healthz() -> tuple[dict[str, str], int]:

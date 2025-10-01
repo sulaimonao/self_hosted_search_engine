@@ -24,7 +24,7 @@ from server.discover import DiscoveryEngine
 from server.learned_web_db import get_db
 from server.agent import PlannerAgent
 from server.llm import OllamaJSONClient
-from server.tools import CrawlerAPI, EmbedAPI, IndexAPI, ToolDispatcher
+from server.tools import BrowserAPI, CrawlerAPI, EmbedAPI, IndexAPI, ToolDispatcher
 
 load_dotenv()
 
@@ -174,6 +174,10 @@ app.config.update(
     RAG_PLANNER_TOOLS=tool_dispatcher,
     RAG_PLANNER_AGENT=planner_agent,
 )
+
+browser_manager = app.config.get("AGENT_BROWSER_MANAGER")
+if browser_manager is not None:
+    tool_dispatcher.attach_browser_api(BrowserAPI(browser_manager))
 
 
 def _schedule_bootstrap_index() -> None:
