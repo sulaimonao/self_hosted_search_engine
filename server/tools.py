@@ -7,6 +7,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from backend.app.services.agent_browser import (
+    AgentBrowserManager,
+    BrowserActionError,
+    BrowserSessionError,
+    SessionNotFoundError,
+)
 from engine.data.store import RetrievedChunk, VectorStore
 from engine.discovery.gather import gather_from_registry
 from engine.indexing.chunk import TokenChunker
@@ -175,11 +181,67 @@ class EmbedAPI:
         }
 
 
+@dataclass(slots=True)
+class BrowserAPI:
+    manager: AgentBrowserManager
+
+    def _normalize_sid(self, sid: str) -> str:
+        cleaned = (sid or "").strip()
+        if not cleaned:
+            raise ToolExecutionError("sid must be provided")
+        return cleaned
+
+    def navigate(self, *, sid: str, url: str) -> MutableMapping[str, Any]:
+        clean_sid = self._normalize_sid(sid)
+        clean_url = (url or "").strip()
+        if not clean_url:
+            raise ToolExecutionError("url must be provided")
+        try:
+            result = self.manager.navigate(clean_sid, clean_url)
+        except SessionNotFoundError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        except BrowserActionError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return {"sid": clean_sid, **result}
+
+    def click(self, *, sid: str, selector: str) -> MutableMapping[str, Any]:
+        clean_sid = self._normalize_sid(sid)
+        clean_selector = (selector or "").strip()
+        if not clean_selector:
+            raise ToolExecutionError("selector must be provided")
+        try:
+            result = self.manager.click(clean_sid, clean_selector)
+        except BrowserSessionError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return {"sid": clean_sid, "selector": clean_selector, **result}
+
+    def type(self, *, sid: str, selector: str, text: str) -> MutableMapping[str, Any]:
+        clean_sid = self._normalize_sid(sid)
+        clean_selector = (selector or "").strip()
+        if not clean_selector:
+            raise ToolExecutionError("selector must be provided")
+        payload = text if isinstance(text, str) else str(text)
+        try:
+            result = self.manager.type(clean_sid, clean_selector, payload)
+        except BrowserSessionError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return {"sid": clean_sid, "selector": clean_selector, **result}
+
+    def extract(self, *, sid: str) -> MutableMapping[str, Any]:
+        clean_sid = self._normalize_sid(sid)
+        try:
+            result = self.manager.extract(clean_sid)
+        except BrowserSessionError as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return {"sid": clean_sid, **result}
+
+
 @dataclass
 class ToolDispatcher:
     index_api: IndexAPI
     crawler_api: CrawlerAPI
     embed_api: EmbedAPI
+    browser_api: BrowserAPI | None = None
     _registry: dict[str, Any] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -191,6 +253,23 @@ class ToolDispatcher:
             "embed.query": log_tool("embed.query")(self.embed_api.embed_query),
             "embed.documents": log_tool("embed.documents")(self.embed_api.embed_documents),
         }
+        self.attach_browser_api(self.browser_api)
+
+    def attach_browser_api(self, api: BrowserAPI | None) -> None:
+        self.browser_api = api
+        for key in list(self._registry.keys()):
+            if key.startswith("browser."):
+                self._registry.pop(key, None)
+        if api is None:
+            return
+        self._registry.update(
+            {
+                "browser.navigate": log_tool("browser.navigate")(api.navigate),
+                "browser.click": log_tool("browser.click")(api.click),
+                "browser.type": log_tool("browser.type")(api.type),
+                "browser.extract": log_tool("browser.extract")(api.extract),
+            }
+        )
 
     def execute(self, tool: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
         handler = self._registry.get(tool)
@@ -214,5 +293,6 @@ __all__ = [
     "IndexAPI",
     "CrawlerAPI",
     "EmbedAPI",
+    "BrowserAPI",
     "ToolDispatcher",
 ]
