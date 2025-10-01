@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any, TYPE_CHECKING
 
-import requests
+from .. import requests as shared_requests
 from flask import Blueprint, current_app, g, jsonify, request
 
 from .. import EMBEDDING_MODEL_PATTERNS
@@ -80,13 +80,13 @@ def _probe_ollama(base_url: str, manager: "EmbeddingManager | None") -> dict[str
     error: str | None = None
     http_models: list[str] = []
     try:
-        response = requests.get(f"{base_url}/api/tags", timeout=3)
+        response = shared_requests.get(f"{base_url}/api/tags", timeout=3)
         response.raise_for_status()
         data = response.json()
         if isinstance(data, Mapping):
             http_models = _extract_models(data)
         reachable = True
-    except requests.RequestException as exc:
+    except shared_requests.RequestException as exc:
         error = str(exc)
     except ValueError:
         error = "invalid_json"
