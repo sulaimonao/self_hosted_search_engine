@@ -1,0 +1,117 @@
+"""Agent browser control endpoints (feature gated)."""
+
+from __future__ import annotations
+
+from flask import Blueprint, current_app, jsonify, request
+
+from ..services.agent_browser import (
+    AgentBrowserManager,
+    BrowserActionError,
+    SessionNotFoundError,
+)
+
+bp = Blueprint("agent_browser", __name__, url_prefix="/api/agent")
+
+
+def _manager() -> AgentBrowserManager:
+    manager: AgentBrowserManager | None = current_app.config.get("AGENT_BROWSER_MANAGER")
+    if manager is None:
+        raise RuntimeError("Agent browser manager unavailable")
+    return manager
+
+
+def _handle_action(func):
+    try:
+        result = func()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except SessionNotFoundError as exc:
+        return jsonify({"error": "unknown_session", "message": str(exc)}), 404
+    except BrowserActionError as exc:
+        return jsonify({"error": "browser_action_failed", "message": str(exc)}), 502
+    return jsonify(result), 200
+
+
+@bp.post("/session/start")
+def start_session() -> tuple[str, int]:
+    manager = _manager()
+    sid = manager.start_session()
+    return jsonify({"sid": sid}), 200
+
+
+@bp.post("/navigate")
+def navigate() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+    url = (payload.get("url") or "").strip()
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        if not url:
+            raise ValueError("url is required")
+        result = manager.navigate(sid, url)
+        result["sid"] = sid
+        return result
+
+    return _handle_action(_action)
+
+
+@bp.post("/click")
+def click() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+    selector = (payload.get("selector") or "").strip()
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        if not selector:
+            raise ValueError("selector is required")
+        result = manager.click(sid, selector)
+        result["sid"] = sid
+        result["selector"] = selector
+        return result
+
+    return _handle_action(_action)
+
+
+@bp.post("/type")
+def type_into() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+    selector = (payload.get("selector") or "").strip()
+    text = payload.get("text", "")
+    if not isinstance(text, str):
+        text = str(text)
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        if not selector:
+            raise ValueError("selector is required")
+        result = manager.type(sid, selector, text)
+        result["sid"] = sid
+        result["selector"] = selector
+        return result
+
+    return _handle_action(_action)
+
+
+@bp.post("/extract")
+def extract() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        result = manager.extract(sid)
+        result["sid"] = sid
+        return result
+
+    return _handle_action(_action)
