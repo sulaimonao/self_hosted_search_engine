@@ -1,181 +1,33 @@
-.PHONY: setup dev stop agent-dev crawl reindex search focused normalize reindex-incremental tail llm-status llm-models research clean seeds index-inc seed postchat check budget perf
-.PHONY: run index clean-index paths
+.PHONY: bootstrap dev stop logs verify
 
-PYTHON ?= python3
-# Prefer 3.11 if available
-ifeq ($(shell command -v python3.11 >/dev/null 2>&1 && echo yes),yes)
-  PYTHON := python3.11
-endif
+FRONTEND_PORT ?= 3100
+BACKEND_PORT  ?= 5050
+API_URL := http://127.0.0.1:$(BACKEND_PORT)/api/llm/health
 
-VENV?=.venv
-PY:=$(VENV)/bin/python
-PIP:=$(VENV)/bin/pip
-PLAYWRIGHT:=$(VENV)/bin/playwright
-
-REPO_ROOT := $(shell pwd)
-export PYTHONPATH := $(REPO_ROOT)$(if $(PYTHONPATH),:$(PYTHONPATH))
-
-DATA_DIR := $(REPO_ROOT)/data
-WHOOSH_DIR := $(DATA_DIR)/whoosh
-CHROMA_DIR := $(DATA_DIR)/chroma
-DUCKDB_PATH := $(DATA_DIR)/index.duckdb
-paths:
-	@echo "DATA_DIR=$(DATA_DIR)"
-	@echo "WHOOSH_DIR=$(WHOOSH_DIR)"
-	@echo "CHROMA_DIR=$(CHROMA_DIR)"
-	@echo "DUCKDB_PATH=$(DUCKDB_PATH)"
-	@echo "NORMALIZED_PATH=${NORMALIZED_PATH:-./data/normalized/normalized.jsonl}"
-
-setup:
-	./scripts/ensure_py311.sh $(PYTHON)
-	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
-	. $(VENV)/bin/activate && pip install -U pip setuptools wheel && pip install -r requirements.txt && pip install -e .
-	$(PLAYWRIGHT) install chromium
-	$(PY) -c "import backend; print('backend package import ok')"
+bootstrap:
+	@bash scripts/bootstrap.sh
 
 dev:
-	@bash -c 'set -euo pipefail; \
-  echo "Starting API-only backend and Next.js UI..."; \
-  set -a; [ -f .env ] && source .env; set +a; \
-  FRONTEND_PORT="$${FRONTEND_PORT:-3100}"; \
-  FRONTEND_HOST="$${FRONTEND_HOST:-0.0.0.0}"; \
-  BACKEND_PORT="$${BACKEND_PORT:-5050}"; \
-  BACKEND_HOST="$${BACKEND_HOST:-0.0.0.0}"; \
-  BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; \
-  FLASK_RELOAD_FLAG="--no-reload"; \
-  if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; \
-  DATA_ROOT="$(DATA_DIR)"; \
-  INDEX_DIR="$${INDEX_DIR:-$$DATA_ROOT/whoosh}"; \
-  CRAWL_STORE="$${CRAWL_STORE:-$$DATA_ROOT/crawl}"; \
-  NORMALIZED_PATH="$${NORMALIZED_PATH:-$$DATA_ROOT/normalized/normalized.jsonl}"; \
-  CHROMA_PERSIST_DIR="$${CHROMA_PERSIST_DIR:-$$DATA_ROOT/chroma}"; \
-  CHROMADB_DISABLE_TELEMETRY="$${CHROMADB_DISABLE_TELEMETRY:-1}"; \
-  export INDEX_DIR CRAWL_STORE NORMALIZED_PATH CHROMA_PERSIST_DIR CHROMADB_DISABLE_TELEMETRY; \
-  PYTHON_BIN="$(PY)"; \
-  if [ ! -x "$$PYTHON_BIN" ]; then PYTHON_BIN="$(PYTHON)"; fi; \
-  trap "kill 0" EXIT INT TERM; \
-  if command -v stdbuf >/dev/null 2>&1; then \
-    stdbuf -oL -eL "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT"; \
-  else \
-    PYTHONUNBUFFERED=1 "$$PYTHON_BIN" -m flask --app app --debug run $$FLASK_RELOAD_FLAG --host "$$BACKEND_HOST" --port "$$BACKEND_PORT"; \
-  fi & \
-  BACK_PID=$$!; \
-  HEALTH_URL="http://127.0.0.1:$$BACKEND_PORT/api/llm/health"; \
-  echo "Waiting for backend at $$HEALTH_URL..."; \
-  READY=0; \
-  for attempt in $$(seq 1 60); do \
-    if curl -fsS "$$HEALTH_URL" >/dev/null 2>&1; then READY=1; break; fi; \
-    if ! kill -0 $$BACK_PID >/dev/null 2>&1; then echo "Backend process exited early" >&2; wait $$BACK_PID; exit 1; fi; \
-    sleep 0.5; \
-  done; \
-  if [ "$$READY" -ne 1 ]; then echo "Backend did not become ready in time" >&2; kill $$BACK_PID; wait $$BACK_PID || true; exit 1; fi; \
-  if [ ! -d frontend/node_modules ]; then \
-    echo "Installing frontend dependencies..."; \
-    (cd frontend && npm install); \
-  fi; \
-  echo "Starting Next.js dev server..."; \
-  (cd frontend && FRONTEND_PORT="$$FRONTEND_PORT" npm run dev -- --hostname "$$FRONTEND_HOST" --port "$$FRONTEND_PORT") & \
-  FRONT_PID=$$!; \
-  DISPLAY_FRONT_HOST="$$FRONTEND_HOST"; \
-  if [ "$$DISPLAY_FRONT_HOST" = "0.0.0.0" ]; then DISPLAY_FRONT_HOST="localhost"; fi; \
-  DISPLAY_BACK_HOST="$$BACKEND_HOST"; \
-  if [ "$$DISPLAY_BACK_HOST" = "0.0.0.0" ]; then DISPLAY_BACK_HOST="localhost"; fi; \
-  echo "UI: http://$$DISPLAY_FRONT_HOST:$$FRONTEND_PORT (bound to $$FRONTEND_HOST) | API: http://$$DISPLAY_BACK_HOST:$$BACKEND_PORT (bound to $$BACKEND_HOST)"; \
-  wait $$BACK_PID $$FRONT_PID'
+	@echo "▶ Starting API (Flask)…"
+	@if ! lsof -iTCP:$(BACKEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  (cd backend && BACKEND_PORT=$(BACKEND_PORT) python app.py &) ; \
+	fi
+	@echo "⏳ Waiting for API…"
+	@bash -c 'for i in $$(seq 1 60); do curl -fsS "$(API_URL)" >/dev/null && exit 0; sleep 0.5; done; echo "API not ready" >&2; exit 1'
+	@echo "▶ Starting Frontend (Next.js)…"
+	@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  (cd frontend && npm run dev -- --hostname 0.0.0.0 --port $(FRONTEND_PORT) &) ; \
+	fi
+	@echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API http://127.0.0.1:$(BACKEND_PORT)"
 
 stop:
-	@bash -c 'set -euo pipefail; \
-	  pkill -f "flask --app app" >/dev/null 2>&1 || true; \
-	  pkill -f "next dev" >/dev/null 2>&1 || true; \
-	  pkill -f "npm run dev" >/dev/null 2>&1 || true'
+	@echo "🛑 Stopping dev processes…"
+	-@pkill -f "python app.py" || true
+	-@pkill -f "next dev" || true
 
-agent-dev:
-	@$(MAKE) dev
+logs:
+	@echo "— Flask —"; pgrep -fl "python app.py" || true
+	@echo "— Next —";  pgrep -fl "next dev" || true
 
-run:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BACKEND_RELOAD="$${BACKEND_RELOAD:-0}"; FLASK_RELOAD_FLAG="--no-reload"; if [ "$$BACKEND_RELOAD" = "1" ]; then FLASK_RELOAD_FLAG="--reload"; fi; exec $(PY) -m flask --app app --debug run $$FLASK_RELOAD_FLAG'
-
-index:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; . $(VENV)/bin/activate; exec $(PY) bin/bootstrap_index.py'
-
-clean-index:
-	@mkdir -p "$(WHOOSH_DIR)"
-	@if [ "$$(realpath $(WHOOSH_DIR))" = "$$(realpath $(REPO_ROOT))" ]; then \
-	  echo "Refusing to clean: WHOOSH_DIR resolves to repository root" >&2; exit 2; \
-	fi
-	@find "$(WHOOSH_DIR)" -maxdepth 1 -type f -name 'MAIN_*' -delete
-	@find "$(WHOOSH_DIR)" -maxdepth 1 -type f \( -name '*.seg' -o -name '*_WRITELOCK' \) -delete
-	@if [ -d "$(CHROMA_DIR)" ]; then \
-	  if [ "$$(realpath $(CHROMA_DIR))" = "$$(realpath $(REPO_ROOT))" ]; then \
-	    echo "Refusing to clean: CHROMA_DIR resolves to repository root" >&2; exit 2; \
-	  fi; \
-	  rm -rf "$(CHROMA_DIR)"; \
-	fi
-	@rm -f "$(DUCKDB_PATH)"
-
-crawl:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; CRAWL_STORE="${CRAWL_STORE:-./data/crawl}"; export INDEX_DIR CRAWL_STORE URL SEEDS_FILE MAX_PAGES; exec $(PY) bin/crawl.py'
-
-reindex:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m bin.reindex_incremental'
-
-search:
-	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; INDEX_DIR="${INDEX_DIR:-./data/whoosh}"; export INDEX_DIR; exec $(PY) bin/search_cli.py --q "$$Q" --limit "$${LIMIT:-10}"'
-
-focused:
-	@if [ -z "$$Q" ]; then echo "Set Q=\"your query\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; BUDGET_VALUE=$${BUDGET:-$${FOCUSED_CRAWL_BUDGET:-10}}; STORE="$${CRAWL_STORE:-./data/crawl}"; OUT_DIR="$${STORE%/}/raw"; CMD="$(PY) -m crawler.run --query=\"$$Q\" --budget=$$BUDGET_VALUE --out=$$OUT_DIR"; [ "$$USE_LLM" = "1" ] && CMD="$$CMD --use-llm"; [ -n "$$MODEL" ] && CMD="$$CMD --model=\"$$MODEL\""; eval $$CMD'
-
-normalize:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/normalize.py'
-
-reindex-incremental:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) -m bin.reindex_incremental'
-
-seeds:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/seeds_prepare.py'
-
-seed: seeds
-
-postchat:
-	@echo "Review pending plans in data/agent/plans/ and enqueue with /api/tools/enqueue_crawl as needed."
-
-index-inc:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; exec $(PY) bin/index_inc.py --once'
-
-tail:
-	@if [ -z "$$JOB" ]; then echo "Set JOB=<identifier> to tail" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; LOG_DIR="${LOGS_DIR:-./data/logs}"; LOG_PATH="$$LOG_DIR/$$JOB.log"; touch "$$LOG_PATH"; tail -n 50 -f "$$LOG_PATH"'
-
-llm-status:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${BACKEND_PORT:-${UI_PORT:-${FLASK_RUN_PORT:-5050}}}"; curl -s "http://$$HOST:$$PORT/api/llm/status" | python -m json.tool'
-
-llm-models:
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${BACKEND_PORT:-${UI_PORT:-${FLASK_RUN_PORT:-5050}}}"; curl -s "http://$$HOST:$$PORT/api/llm/models" | python -m json.tool'
-
-research:
-	@if [ -z "$$Q" ]; then echo "Set Q=\"question\"" >&2; exit 1; fi
-	@bash -c 'set -euo pipefail; set -a; [ -f .env ] && source .env; set +a; HOST="${FLASK_RUN_HOST:-127.0.0.1}"; PORT="${BACKEND_PORT:-${UI_PORT:-${FLASK_RUN_PORT:-5050}}}"; curl -s -H "Content-Type: application/json" -X POST "http://$$HOST:$$PORT/api/research" -d "{\"query\": \"$$Q\", \"budget\": $${BUDGET:-20}}" | python -m json.tool'
-
-clean:
-	rm -rf $(VENV)
-	@if [ -d "$(WHOOSH_DIR)" ]; then rm -rf "$(WHOOSH_DIR)"; fi
-	@if [ -d "$(CHROMA_DIR)" ]; then rm -rf "$(CHROMA_DIR)"; fi
-	@if [ -d "$(DATA_DIR)/crawl" ]; then rm -rf "$(DATA_DIR)/crawl"; fi
-	@rm -f "$(DUCKDB_PATH)"
-
-check:
-	pytest -q
-	ruff check server scripts policy
-	black --check server/agent_tools_repo.py server/agent_policy.py scripts/change_budget.py scripts/perf_smoke.py tests/e2e/test_agent_patch_flow.py
-	mypy --ignore-missing-imports server/agent_tools_repo.py server/agent_policy.py scripts/change_budget.py scripts/perf_smoke.py
-	pip-audit -r requirements.txt || true
-	bandit -q server/agent_tools_repo.py scripts/change_budget.py scripts/perf_smoke.py
-	python scripts/perf_smoke.py
-
-budget:
-	python scripts/change_budget.py
-
-perf:
-	python scripts/perf_smoke.py
+verify:
+	@bash scripts/preflight.sh

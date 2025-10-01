@@ -1,0 +1,13 @@
+name: dev-smoke
+on: [push, pull_request]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: python -m venv .venv && . .venv/bin/activate && pip install -U pip setuptools wheel && pip install -r requirements.txt && pip install -e .
+      - run: npm -v && node -v
+      - run: cd frontend && npm ci
+      - run: echo "lint stubs here"; exit 0

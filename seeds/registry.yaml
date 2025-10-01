@@ -186,10 +186,17 @@ directories:
       strategy: crawl
       trust: medium
     sources:
+    - id: workspace-www-wikidata-org
+      entrypoints:
+      - https://www.wikidata.org/wiki/Wikidata:Main_Page
+      scope: domain
+      notes: null
+      created_at: '2025-10-01T02:18:40.415778+00:00'
+      updated_at: '2025-10-01T02:18:40.415778+00:00'
     - id: workspace-en-wikipedia-org
       entrypoints:
       - https://en.wikipedia.org/wiki/Main_Page
-      scope: page
+      scope: allowed-list
       notes: null
       created_at: '2025-09-29T04:23:25.634592+00:00'
-      updated_at: '2025-09-29T04:23:25.634592+00:00'
+      updated_at: '2025-10-01T02:18:21.820512+00:00'
