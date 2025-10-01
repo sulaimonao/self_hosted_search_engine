@@ -184,3 +184,16 @@ export interface JobLogEvent {
   progress?: number;
   timestamp: string;
 }
+
+export interface ShadowStatus {
+  url: string;
+  state: "idle" | "queued" | "running" | "done" | "error";
+  jobId?: string;
+  job_id?: string;
+  title?: string | null;
+  chunks?: number | null;
+  error?: string | null;
+  error_kind?: string | null;
+  updatedAt?: number;
+  updated_at?: number;
+}
