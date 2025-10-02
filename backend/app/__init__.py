@@ -55,6 +55,7 @@ def create_app() -> Flask:
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import refresh as refresh_api
+    from .api import plan as plan_api
     from .api import shadow as shadow_api
     from .api import research as research_api
     from .api import seeds as seeds_api
@@ -267,6 +268,7 @@ def create_app() -> Flask:
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(refresh_api.bp)
+    app.register_blueprint(plan_api.bp)
     app.register_blueprint(agent_tools_api.bp)
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)

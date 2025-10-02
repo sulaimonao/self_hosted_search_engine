@@ -287,6 +287,12 @@ class ToolDispatcher:
             return {"ok": False, "tool": tool, "error": str(exc)}
         return {"ok": True, "tool": tool, "result": result}
 
+    def has_tool(self, name: str) -> bool:
+        return name in self._registry
+
+    def list_tools(self) -> Sequence[str]:
+        return tuple(sorted(self._registry.keys()))
+
 
 __all__ = [
     "ToolExecutionError",

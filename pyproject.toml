@@ -9,8 +9,10 @@ description = "Self-hosted deep research agent"
 authors = [{name = "Akeem"}]
 requires-python = ">=3.11"
 dependencies = [
-    "langsmith==0.4.31",
+    "langsmith==0.1.147",
     "opentelemetry-sdk==1.37.0",
+    "langchain-core==0.2.11",
+    "langgraph==0.0.58",
 ]
 
 [tool.setuptools]
