@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
+from urllib.parse import quote_plus, urlparse
 
 from backend.telemetry import event as telemetry_event
 
@@ -17,6 +21,8 @@ from backend.app.services.vector_index import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+_ALLOWED_SCHEMES = {"http", "https"}
 
 
 @dataclass(slots=True)
@@ -222,21 +228,156 @@ class AgentRuntime:
         }
 
     def _candidate_urls(self, query: str, hits: Sequence[Mapping[str, object]]) -> list[str]:
-        seeds: list[str] = []
-        for hit in hits:
-            url = str(hit.get("url", ""))
-            if url:
-                seeds.append(url)
-        if not seeds:
-            digest = hashlib.sha1(query.encode("utf-8")).hexdigest()[:16]
-            seeds.append(f"https://example.com/research/{digest}")
+        """Return crawl targets ranked by existing evidence and fallbacks."""
+
+        candidates: list[str] = []
         seen: set[str] = set()
-        unique: list[str] = []
-        for url in seeds:
-            if url not in seen:
-                seen.add(url)
-                unique.append(url)
-        return unique
+
+        def _record(url: str) -> None:
+            normalized = self._normalize_candidate_url(url)
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        for hit in hits:
+            raw_url = hit.get("url")
+            if raw_url:
+                _record(str(raw_url))
+
+        if candidates:
+            return candidates
+
+        for url in self._recent_discovery_urls(limit=5):
+            _record(url)
+
+        for url in self._registry_suggestions(query, limit=10):
+            _record(url)
+
+        for url in self._heuristic_candidates(query):
+            _record(url)
+
+        return candidates
+
+    def _normalize_candidate_url(self, url: str) -> str | None:
+        candidate = (url or "").strip()
+        if not candidate:
+            return None
+
+        parsed = urlparse(candidate)
+        if not parsed.scheme:
+            parsed = urlparse(f"https://{candidate.lstrip('/')}")
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+        if scheme not in _ALLOWED_SCHEMES or not netloc:
+            return None
+
+        sanitized_path = parsed.path or "/"
+        sanitized = f"{scheme}://{netloc}{sanitized_path}"
+        if parsed.query:
+            sanitized = f"{sanitized}?{parsed.query}"
+        return sanitized.rstrip("/")
+
+    def _recent_discovery_urls(self, *, limit: int) -> list[str]:
+        root = getattr(self.document_store, "root", None)
+        if not isinstance(root, Path):
+            return []
+        try:
+            paths = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+        except OSError:
+            return []
+
+        urls: list[str] = []
+        for path in paths[:limit]:
+            try:
+                payload = json.loads(path.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            url = payload.get("url")
+            if isinstance(url, str) and url:
+                urls.append(url)
+        return urls
+
+    def _registry_suggestions(self, query: str, *, limit: int) -> list[str]:
+        try:
+            from server.seeds_loader import load_seed_registry
+        except Exception:  # pragma: no cover - import error path is rare
+            LOGGER.debug("failed to load seed registry", exc_info=True)
+            return []
+
+        entries = load_seed_registry()
+        if not entries:
+            return []
+
+        tokens = self._tokenize(query)
+        token_set = set(tokens)
+        scored: list[tuple[float, str]] = []
+        for entry in entries:
+            extras = entry.extras
+            tags = {str(tag).lower() for tag in extras.get("tags", []) if isinstance(tag, str)}
+            descriptor_parts = [
+                entry.id,
+                entry.kind,
+                entry.strategy,
+                *(extras.get(key, "") for key in ("title", "collection", "notes")),
+                " ".join(sorted(tags)),
+            ]
+            descriptor = " ".join(part.lower() for part in descriptor_parts if part)
+            match_count = sum(1 for token in token_set if token in descriptor or token in tags)
+            trust_score = self._trust_score(entry.trust)
+            strategy_bonus = 0.2 if entry.strategy in {"feed", "portal", "docs"} else 0.0
+            wikipedia_bonus = 0.3 if "wikipedia" in entry.id else 0.0
+            score = 1.0 + trust_score + strategy_bonus + wikipedia_bonus + match_count * 0.75
+            for url in entry.entrypoints:
+                scored.append((score, url))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [url for _, url in scored[:limit]]
+
+    def _heuristic_candidates(self, query: str) -> list[str]:
+        tokens = self._tokenize(query)
+        if not tokens:
+            return []
+
+        slug = "_".join(token.capitalize() for token in tokens)
+        encoded = quote_plus(query.strip())
+        heuristics = [
+            f"https://en.wikipedia.org/wiki/{slug}",
+            f"https://news.google.com/search?q={encoded}",
+            f"https://www.britannica.com/search?query={encoded}",
+        ]
+        return heuristics
+
+    @staticmethod
+    def _tokenize(text: str) -> tuple[str, ...]:
+        if not text:
+            return tuple()
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            if token in seen:
+                continue
+            ordered.append(token)
+            seen.add(token)
+        return tuple(ordered)
+
+    @staticmethod
+    def _trust_score(value: object) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "high":
+                return 1.0
+            if lowered == "medium":
+                return 0.5
+            if lowered == "low":
+                return 0.1
+            try:
+                return float(lowered)
+            except ValueError:
+                return 0.0
+        return 0.0
 
 
 class CrawlFetcher(FetcherProtocol):
