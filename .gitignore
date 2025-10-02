@@ -2,7 +2,6 @@ __pycache__/
 *.py[cod]
 *.sqlite
 *.log
-.venv/
 .env
 pytest.ini
 .pytest_cache/
