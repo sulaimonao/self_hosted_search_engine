@@ -10,6 +10,7 @@ from typing import Optional, Sequence, Tuple
 
 from search import query as query_module
 from rank import blend_results, maybe_rerank
+from observability import start_span
 from ..config import AppConfig
 from ..indexer.incremental import ensure_index
 from ..jobs.focused_crawl import FocusedCrawlManager
@@ -95,73 +96,96 @@ class SearchService:
         model: Optional[str],
     ) -> Tuple[list[dict], Optional[str], dict]:
         start = time.perf_counter()
-        ix = self._get_index()
-        results = query_module.search(
-            ix,
-            query,
-            limit=limit,
-            max_limit=self.config.search_max_limit,
-            max_query_length=self.config.max_query_length,
-        )
-        duration_ms = (time.perf_counter() - start) * 1000
-        metrics.record_search_latency(duration_ms)
-
-        q = (query or "").strip()
-        blended = blend_results(results)
-        llm_enabled = self.config.use_llm_rerank if use_llm is None else bool(use_llm)
-        if llm_enabled:
-            reranked = maybe_rerank(q, blended, enabled=True, model=model)
-            if reranked is not blended:
-                metrics.record_llm_usage_event()
-            blended = reranked
-
-        job_id: Optional[str] = None
-        triggered = False
-        confidence_threshold = getattr(self.config, "smart_confidence_threshold", 0.25)
-        min_similarity = getattr(self.config, "smart_seed_min_similarity", 0.35)
-        seed_limit = getattr(self.config, "smart_seed_limit", 8)
-        confidence = self._estimate_confidence(blended)
-        trigger_reason: Optional[str] = None
-        frontier_seeds: Sequence[str] | None = None
-        if q:
-            effective_use_llm = llm_enabled
-            should_trigger = len(blended) == 0 or confidence < confidence_threshold
-            query_embedding: Optional[Sequence[float]] = None
-            if should_trigger:
-                trigger_reason = "no_results" if not blended else "low_confidence"
-                query_embedding = embed_query(q)
-                try:
-                    if getattr(self.manager, "db", None) is not None:
-                        seeds = self.manager.db.similar_discovery_seeds(
-                            query_embedding,
-                            limit=int(seed_limit),
-                            min_similarity=float(min_similarity),
-                        )
-                        frontier_seeds = seeds
-                except Exception:  # pragma: no cover - defensive logging only
-                    LOGGER.debug("failed to query learned seeds for '%s'", q, exc_info=True)
-            if should_trigger:
-                job_id = self.manager.schedule(
-                    q,
-                    effective_use_llm,
-                    model,
-                    frontier_seeds=frontier_seeds,
-                    query_embedding=query_embedding,
+        with start_span(
+            "search.run_query",
+            attributes={"search.limit": limit, "search.use_llm": bool(use_llm)},
+            inputs={"query": query, "model": model},
+        ) as span:
+            ix = self._get_index()
+            with start_span(
+                "search.retrieve.whoosh",
+                attributes={"search.limit": limit},
+                inputs={"query": query},
+            ) as retrieve_span:
+                results = query_module.search(
+                    ix,
+                    query,
+                    limit=limit,
+                    max_limit=self.config.search_max_limit,
+                    max_query_length=self.config.max_query_length,
                 )
-                triggered = bool(job_id)
-                if triggered:
-                    metrics.record_focused_enqueue()
-                else:
-                    trigger_reason = None
-        metrics.record_query_event(len(blended), triggered, duration_ms)
-        seed_count = len(frontier_seeds) if triggered and frontier_seeds else 0
-        context = {
-            "confidence": confidence,
-            "triggered": triggered,
-            "trigger_reason": trigger_reason,
-            "seed_count": seed_count,
-        }
-        return blended, job_id, context
+                if retrieve_span is not None:
+                    retrieve_span.set_attribute("search.results", len(results))
+            duration_ms = (time.perf_counter() - start) * 1000
+            metrics.record_search_latency(duration_ms)
+
+            q = (query or "").strip()
+            blended = blend_results(results)
+            llm_enabled = self.config.use_llm_rerank if use_llm is None else bool(use_llm)
+            if llm_enabled:
+                with start_span(
+                    "search.rerank",
+                    attributes={"llm.model": model or "", "llm.enabled": True},
+                    inputs={"query": q, "candidates": len(blended)},
+                ) as rerank_span:
+                    reranked = maybe_rerank(q, blended, enabled=True, model=model)
+                    if rerank_span is not None:
+                        rerank_span.set_attribute("search.rerank.changed", reranked is not blended)
+                    if reranked is not blended:
+                        metrics.record_llm_usage_event()
+                    blended = reranked
+
+            job_id: Optional[str] = None
+            triggered = False
+            confidence_threshold = getattr(self.config, "smart_confidence_threshold", 0.25)
+            min_similarity = getattr(self.config, "smart_seed_min_similarity", 0.35)
+            seed_limit = getattr(self.config, "smart_seed_limit", 8)
+            confidence = self._estimate_confidence(blended)
+            trigger_reason: Optional[str] = None
+            frontier_seeds: Sequence[str] | None = None
+            if q:
+                effective_use_llm = llm_enabled
+                should_trigger = len(blended) == 0 or confidence < confidence_threshold
+                query_embedding: Optional[Sequence[float]] = None
+                if should_trigger:
+                    trigger_reason = "no_results" if not blended else "low_confidence"
+                    query_embedding = embed_query(q)
+                    try:
+                        if getattr(self.manager, "db", None) is not None:
+                            seeds = self.manager.db.similar_discovery_seeds(
+                                query_embedding,
+                                limit=int(seed_limit),
+                                min_similarity=float(min_similarity),
+                            )
+                            frontier_seeds = seeds
+                    except Exception:  # pragma: no cover - defensive logging only
+                        LOGGER.debug("failed to query learned seeds for '%s'", q, exc_info=True)
+                if should_trigger:
+                    job_id = self.manager.schedule(
+                        q,
+                        effective_use_llm,
+                        model,
+                        frontier_seeds=frontier_seeds,
+                        query_embedding=query_embedding,
+                    )
+                    triggered = bool(job_id)
+                    if triggered:
+                        metrics.record_focused_enqueue()
+                    else:
+                        trigger_reason = None
+            metrics.record_query_event(len(blended), triggered, duration_ms)
+            seed_count = len(frontier_seeds) if triggered and frontier_seeds else 0
+            context = {
+                "confidence": confidence,
+                "triggered": triggered,
+                "trigger_reason": trigger_reason,
+                "seed_count": seed_count,
+            }
+            if span is not None:
+                span.set_attribute("search.results", len(blended))
+                span.set_attribute("search.triggered", triggered)
+                span.set_attribute("search.duration_ms", int(duration_ms))
+            return blended, job_id, context
 
     def last_index_time(self) -> int:
         return self.manager.last_index_time()

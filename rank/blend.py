@@ -11,6 +11,7 @@ from typing import Iterable, List
 import requests
 
 from .authority import AuthorityIndex
+from observability import start_span
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,8 +69,15 @@ def maybe_rerank(
     payload = {"model": model or os.getenv("OLLAMA_MODEL", "llama3.1:8b-instruct"), "prompt": prompt, "stream": False}
     start = time.perf_counter()
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, timeout=timeout)
-        response.raise_for_status()
+        with start_span(
+            "rerank.llm",
+            attributes={"llm.model": payload["model"], "rerank.top_n": len(docs)},
+            inputs={"query": query},
+        ) as span:
+            response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, timeout=timeout)
+            response.raise_for_status()
+            if span is not None:
+                span.set_attribute("http.status_code", response.status_code)
     except requests.RequestException as exc:
         LOGGER.debug("LLM rerank skipped: %s", exc)
         return results

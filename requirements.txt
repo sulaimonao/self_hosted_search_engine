@@ -3,6 +3,8 @@ flask-cors==4.0.0
 PyYAML==6.0.2
 python-dotenv==1.0.1
 requests==2.32.3
+langsmith==0.4.31
+opentelemetry-sdk==1.37.0
 chromadb==0.5.3
 duckdb==1.0.0
 scrapy==2.11.2

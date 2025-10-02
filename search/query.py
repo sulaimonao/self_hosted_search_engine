@@ -8,6 +8,8 @@ from typing import List
 from whoosh.highlight import ContextFragmenter, HtmlFormatter
 from whoosh.qparser import MultifieldParser, PhrasePlugin, QueryParserError
 
+from observability import start_span
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -34,32 +36,39 @@ def search(
 
     limit = max(1, min(int(limit or 1), max_limit))
 
-    with ix.searcher() as searcher:
-        parser = MultifieldParser(["title", "h1h2", "body", "url"], schema=ix.schema)
-        parser.add_plugin(PhrasePlugin())
-        try:
-            parsed = parser.parse(q)
-        except QueryParserError as exc:
-            LOGGER.error("failed to parse query %s: %s", q, exc)
-            return []
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.error("unexpected parse error for %s: %s", q, exc)
-            return []
+    with start_span(
+        "whoosh.search",
+        attributes={"search.limit": limit},
+        inputs={"query": q},
+    ) as span:
+        with ix.searcher() as searcher:
+            parser = MultifieldParser(["title", "h1h2", "body", "url"], schema=ix.schema)
+            parser.add_plugin(PhrasePlugin())
+            try:
+                parsed = parser.parse(q)
+            except QueryParserError as exc:
+                LOGGER.error("failed to parse query %s: %s", q, exc)
+                return []
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.error("unexpected parse error for %s: %s", q, exc)
+                return []
 
-        hits = searcher.search(parsed, limit=limit)
-        hits.fragmenter = ContextFragmenter(maxchars=240, surround=60)
-        hits.formatter = HtmlFormatter(tagname="mark")
+            hits = searcher.search(parsed, limit=limit)
+            hits.fragmenter = ContextFragmenter(maxchars=240, surround=60)
+            hits.formatter = HtmlFormatter(tagname="mark")
 
-        results = []
-        for hit in hits:
-            snippet = hit.highlights("body") or (hit.get("body") or "")[:240]
-            results.append(
-                {
-                    "title": hit.get("title") or hit.get("url") or "Untitled",
-                    "url": hit.get("url"),
-                    "snippet": snippet,
-                    "score": float(hit.score),
-                    "lang": hit.get("lang") or "unknown",
-                }
-            )
-        return results
+            results = []
+            for hit in hits:
+                snippet = hit.highlights("body") or (hit.get("body") or "")[:240]
+                results.append(
+                    {
+                        "title": hit.get("title") or hit.get("url") or "Untitled",
+                        "url": hit.get("url"),
+                        "snippet": snippet,
+                        "score": float(hit.score),
+                        "lang": hit.get("lang") or "unknown",
+                    }
+                )
+            if span is not None:
+                span.set_attribute("search.results", len(results))
+            return results

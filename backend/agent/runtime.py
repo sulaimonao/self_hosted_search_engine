@@ -12,13 +12,16 @@ from typing import Callable, Mapping, Sequence
 from urllib.parse import quote_plus, urlparse
 
 from backend.telemetry import event as telemetry_event
+from backend.app.search.embedding import embed_query as _runtime_embed_query
 
 from .document_store import DocumentStore, StoredDocument
 from .frontier_store import FrontierStore
 from backend.app.services.vector_index import (
     EmbedderUnavailableError,
+    IndexResult,
     VectorIndexService,
 )
+from backend.retrieval.vector_store import LocalVectorStore, VectorDocument
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,6 +58,71 @@ def _default_synthesizer(query: str, hits: Sequence[Mapping[str, object]]) -> tu
     return summary, citations
 
 
+class _VectorStoreAdapter:
+    """Compatibility façade that mimics ``VectorIndexService`` over ``LocalVectorStore``."""
+
+    def __init__(self, store: LocalVectorStore) -> None:
+        self._store = store
+
+    def search(self, query: str, *, k: int = 5, **_kwargs) -> list[dict[str, object]]:
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return []
+        embeddings = embed_texts([cleaned])
+        if not embeddings:
+            return []
+        embedding = embeddings[0]
+        hits = self._store.query(embedding, k)
+        payload: list[dict[str, object]] = []
+        for hit in hits:
+            payload.append(
+                {
+                    "url": hit.url,
+                    "title": hit.title,
+                    "chunk": hit.snippet,
+                    "score": float(hit.score),
+                }
+            )
+        return payload
+
+    def upsert_document(
+        self,
+        *,
+        text: str,
+        url: str | None = None,
+        title: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> IndexResult:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            raise ValueError("text is required")
+        doc_id = (url or "").strip()
+        if not doc_id and metadata:
+            sha = str(metadata.get("sha256", "")).strip()
+            if sha:
+                doc_id = sha
+        if not doc_id:
+            doc_id = hashlib.sha256(cleaned.encode("utf-8"), usedforsecurity=False).hexdigest()
+        embeddings = embed_texts([cleaned])
+        if not embeddings:
+            return IndexResult(doc_id=doc_id, chunks=0, dims=0)
+        embedding = embeddings[0]
+        document = VectorDocument(
+            doc_id=doc_id,
+            url=url or "",
+            title=(title or url or "Untitled").strip() or doc_id,
+            text=cleaned,
+            embedding=embedding,
+        )
+        changed, _skipped = self._store.upsert_many([document])
+        chunks = int(bool(changed))
+        dims = len(embedding)
+        return IndexResult(doc_id=doc_id, chunks=chunks, dims=dims)
+
+    def metadata(self) -> Mapping[str, object]:
+        return self._store.to_metadata()
+
+
 @dataclass
 class AgentRuntime:
     """Coordinate the agent's tool execution."""
@@ -62,11 +130,20 @@ class AgentRuntime:
     search_service: SearchServiceProtocol | None
     frontier: FrontierStore
     document_store: DocumentStore
-    vector_index: VectorIndexService
     fetcher: FetcherProtocol
+    vector_index: VectorIndexService | _VectorStoreAdapter | None = None
+    vector_store: LocalVectorStore | None = None
     max_fetch_per_turn: int = 3
     coverage_threshold: float = 0.6
     synthesizer: Callable[[str, Sequence[Mapping[str, object]]], tuple[str, list[str]]] = _default_synthesizer
+
+    def __post_init__(self) -> None:
+        if self.vector_index is None:
+            if self.vector_store is None:
+                raise ValueError("AgentRuntime requires either vector_index or vector_store")
+            self.vector_index = _VectorStoreAdapter(self.vector_store)
+        elif self.vector_store is None:
+            self.vector_store = getattr(self.vector_index, "vector_store", None)
 
     def search_index(self, query: str, *, k: int = 20, use_embeddings: bool = True) -> list[dict[str, object]]:
         clean_query = (query or "").strip()
@@ -403,3 +480,10 @@ class CrawlFetcher(FetcherProtocol):
 
 
 __all__ = ["AgentRuntime", "CrawlFetcher", "FetchResult"]
+
+
+def embed_texts(texts: Sequence[str]) -> list[list[float]]:
+    """Embed a batch of texts using the deterministic fallback."""
+
+    return [_runtime_embed_query(text) for text in texts]
+
