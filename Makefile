@@ -79,7 +79,12 @@ dev:
 	@echo "▶ Starting Frontend (Next.js)…"
 	@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
 	  mkdir -p logs; \
-	  (cd frontend && nohup npm run dev -- --hostname 0.0.0.0 --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid) ; \
+	  (cd frontend && \
+	    if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
+	      export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:$(BACKEND_PORT); \
+	    fi; \
+	    nohup npm run dev -- --hostname 0.0.0.0 --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
+	  ) ; \
 	fi
 	@echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API http://127.0.0.1:$(BACKEND_PORT)"
 
