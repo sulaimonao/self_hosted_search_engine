@@ -19,6 +19,7 @@ from backend.app.config import AppConfig
 from backend.app.indexer.dedupe import SimHashIndex, simhash64
 from backend.app.search.embedding import embed_query as _fallback_embed
 from backend.app.services import ollama_client as ollama_services
+from observability import start_span
 
 
 LOGGER = logging.getLogger(__name__)
@@ -139,62 +140,70 @@ class VectorIndexService:
         resolved_title = (title or key or "Untitled").strip() or storage_key
         sim_signature = simhash64(cleaned)
 
-        with self._lock:
-            duplicate_key = self._simhash_index.nearest(sim_signature)
-            if duplicate_key and duplicate_key != storage_key:
-                LOGGER.debug(
-                    "dedupe skip for %s (duplicate of %s)", storage_key, duplicate_key
-                )
-                return IndexResult(
-                    doc_id=storage_key,
-                    chunks=0,
-                    dims=self._last_dims,
-                    duplicate_of=duplicate_key,
-                )
-            needs_update = self._vector_store.needs_update(storage_key, None, doc_hash)
-            if not needs_update:
-                self._simhash_index.update(storage_key, sim_signature)
-                self._persist_dedupe()
+        with start_span(
+            "vector_index.upsert",
+            attributes={"doc.length": len(cleaned)},
+            inputs={"url": url, "metadata_keys": sorted(metadata.keys()) if metadata else []},
+        ) as span:
+            with self._lock:
+                duplicate_key = self._simhash_index.nearest(sim_signature)
+                if duplicate_key and duplicate_key != storage_key:
+                    LOGGER.debug(
+                        "dedupe skip for %s (duplicate of %s)", storage_key, duplicate_key
+                    )
+                    return IndexResult(
+                        doc_id=storage_key,
+                        chunks=0,
+                        dims=self._last_dims,
+                        duplicate_of=duplicate_key,
+                    )
+                needs_update = self._vector_store.needs_update(storage_key, None, doc_hash)
+                if not needs_update:
+                    self._simhash_index.update(storage_key, sim_signature)
+                    self._persist_dedupe()
+                    return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
+
+            chunks = self._chunker.chunk_text(cleaned)
+            if not chunks:
+                with self._lock:
+                    self._simhash_index.update(storage_key, sim_signature)
+                    self._persist_dedupe()
                 return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
 
-        chunks = self._chunker.chunk_text(cleaned)
-        if not chunks:
+            vectors = self._embed_documents([chunk.text for chunk in chunks])
+            if len(vectors) != len(chunks):
+                raise EmbedderUnavailableError(
+                    self._embed_model,
+                    detail="embedding count mismatch",
+                )
+            dims = len(vectors[0]) if vectors else 0
+
             with self._lock:
+                self._vector_store.upsert(
+                    storage_key,
+                    resolved_title,
+                    None,
+                    doc_hash,
+                    chunks,
+                    vectors,
+                    metadata=metadata,
+                    doc_id=storage_key,
+                )
                 self._simhash_index.update(storage_key, sim_signature)
                 self._persist_dedupe()
-            return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
-
-        vectors = self._embed_documents([chunk.text for chunk in chunks])
-        if len(vectors) != len(chunks):
-            raise EmbedderUnavailableError(
-                self._embed_model,
-                detail="embedding count mismatch",
-            )
-        dims = len(vectors[0]) if vectors else 0
-
-        with self._lock:
-            self._vector_store.upsert(
+                if dims:
+                    self._last_dims = dims
+            LOGGER.info(
+                "indexed document %s (title=%s, chunks=%s, dims=%s)",
                 storage_key,
                 resolved_title,
-                None,
-                doc_hash,
-                chunks,
-                vectors,
-                metadata=metadata,
-                doc_id=storage_key,
+                len(chunks),
+                dims,
             )
-            self._simhash_index.update(storage_key, sim_signature)
-            self._persist_dedupe()
-            if dims:
-                self._last_dims = dims
-        LOGGER.info(
-            "indexed document %s (title=%s, chunks=%s, dims=%s)",
-            storage_key,
-            resolved_title,
-            len(chunks),
-            dims,
-        )
-        return IndexResult(doc_id=storage_key, chunks=len(chunks), dims=dims)
+            if span is not None:
+                span.set_attribute("vector.chunks", len(chunks))
+                span.set_attribute("vector.dims", dims)
+            return IndexResult(doc_id=storage_key, chunks=len(chunks), dims=dims)
 
     def search(
         self,
@@ -206,35 +215,42 @@ class VectorIndexService:
         cleaned = (query or "").strip()
         if not cleaned:
             return []
-        vector = self._embed_query(cleaned)
-        if not vector:
-            return []
-        sanitized_filters: dict[str, Any] | None = None
-        if filters:
-            sanitized_filters = {
-                str(key): value
-                for key, value in filters.items()
-                if value is not None
-            }
-            if not sanitized_filters:
-                sanitized_filters = None
-        retrieved = self._vector_store.query(
-            vector,
-            max(1, int(k)),
-            self._similarity_threshold,
-            filters=sanitized_filters,
-        )
-        hits: list[SearchHit] = []
-        for item in retrieved:
-            hits.append(
-                SearchHit(
-                    url=item.url,
-                    title=item.title,
-                    chunk=item.text,
-                    score=float(item.similarity),
-                )
+        with start_span(
+            "vector_index.search",
+            attributes={"search.k": k},
+            inputs={"query": cleaned, "filters": filters},
+        ) as span:
+            vector = self._embed_query(cleaned)
+            if not vector:
+                return []
+            sanitized_filters: dict[str, Any] | None = None
+            if filters:
+                sanitized_filters = {
+                    str(key): value
+                    for key, value in filters.items()
+                    if value is not None
+                }
+                if not sanitized_filters:
+                    sanitized_filters = None
+            retrieved = self._vector_store.query(
+                vector,
+                max(1, int(k)),
+                self._similarity_threshold,
+                filters=sanitized_filters,
             )
-        return [hit.to_dict() for hit in hits]
+            hits: list[SearchHit] = []
+            for item in retrieved:
+                hits.append(
+                    SearchHit(
+                        url=item.url,
+                        title=item.title,
+                        chunk=item.text,
+                        score=float(item.similarity),
+                    )
+                )
+            if span is not None:
+                span.set_attribute("vector.results", len(hits))
+            return [hit.to_dict() for hit in hits]
 
     def metadata(self) -> dict[str, Any]:
         dims = self._last_dims
@@ -309,10 +325,14 @@ class VectorIndexService:
             ]
         self._ensure_embedder_ready()
         assert self._embedder is not None  # noqa: S101
-        try:
-            vectors = self._embedder.embed_documents(texts)
-        except EmbeddingError as exc:
-            raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
+        with start_span(
+            "vector_index.embed_documents",
+            attributes={"doc.count": len(texts)},
+        ):
+            try:
+                vectors = self._embedder.embed_documents(texts)
+            except EmbeddingError as exc:
+                raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
         if not vectors:
             raise EmbedderUnavailableError(
                 self._embed_model,
@@ -328,8 +348,14 @@ class VectorIndexService:
     def _embed_query(self, query: str) -> list[float]:
         if self._test_mode:
             return _fallback_embed(query, dimensions=self._TEST_EMBED_DIMS)
-        vectors = self._embed_documents([query])
-        return vectors[0] if vectors else []
+        with start_span(
+            "vector_index.embed_query",
+            inputs={"query": query},
+        ) as span:
+            vectors = self._embed_documents([query])
+            if span is not None and vectors:
+                span.set_attribute("vector.dims", len(vectors[0]))
+            return vectors[0] if vectors else []
 
 
 __all__ = [

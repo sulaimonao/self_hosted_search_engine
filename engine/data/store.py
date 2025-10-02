@@ -104,6 +104,8 @@ _disable_chroma_telemetry()
 
 from chromadb import PersistentClient
 
+from observability import start_span
+
 
 def _ensure_safe_directory(path: Path, *, label: str) -> Path:
     resolved = path.resolve()
@@ -357,40 +359,47 @@ class VectorStore:
                             {key: value} for key, value in sanitized_filters.items()
                         ]
                     }
-        with self._collection_lock:
-            results = self._collection.query(
-                query_embeddings=query_embedding,
-                n_results=k,
-                include=["metadatas", "documents", "distances"],
-                where=where_clause,
-            )
-        ids = results.get("ids") or []
-        if not ids:
-            return []
-        documents = results.get("documents", [[]])[0] or []
-        metadatas = results.get("metadatas", [[]])[0] or []
-        distances = results.get("distances", [[]])[0] or []
-        retrieved: list[RetrievedChunk] = []
-        for document, metadata, distance in zip(documents, metadatas, distances):
-            if document is None or metadata is None:
-                continue
-            similarity = 1.0 - float(distance) if distance is not None else 0.0
-            if similarity < similarity_threshold:
-                continue
-            if sanitized_filters and any(
-                metadata.get(key) != value for key, value in sanitized_filters.items()
-            ):
-                continue
-            retrieved.append(
-                RetrievedChunk(
-                    text=document,
-                    title=metadata.get("title"),
-                    url=metadata.get("url"),
-                    similarity=similarity,
+        with start_span(
+            "vector_store.query",
+            attributes={"vector.k": k, "vector.threshold": similarity_threshold},
+            inputs={"filters": sanitized_filters},
+        ) as span:
+            with self._collection_lock:
+                results = self._collection.query(
+                    query_embeddings=query_embedding,
+                    n_results=k,
+                    include=["metadatas", "documents", "distances"],
+                    where=where_clause,
                 )
-            )
-        retrieved.sort(key=lambda chunk: chunk.similarity, reverse=True)
-        return retrieved[:k]
+            ids = results.get("ids") or []
+            if not ids:
+                return []
+            documents = results.get("documents", [[]])[0] or []
+            metadatas = results.get("metadatas", [[]])[0] or []
+            distances = results.get("distances", [[]])[0] or []
+            retrieved: list[RetrievedChunk] = []
+            for document, metadata, distance in zip(documents, metadatas, distances):
+                if document is None or metadata is None:
+                    continue
+                similarity = 1.0 - float(distance) if distance is not None else 0.0
+                if similarity < similarity_threshold:
+                    continue
+                if sanitized_filters and any(
+                    metadata.get(key) != value for key, value in sanitized_filters.items()
+                ):
+                    continue
+                retrieved.append(
+                    RetrievedChunk(
+                        text=document,
+                        title=metadata.get("title"),
+                        url=metadata.get("url"),
+                        similarity=similarity,
+                    )
+                )
+            retrieved.sort(key=lambda chunk: chunk.similarity, reverse=True)
+            if span is not None:
+                span.set_attribute("vector.results", len(retrieved))
+            return retrieved[:k]
 
 
 __all__ = ["VectorStore", "RetrievedChunk"]

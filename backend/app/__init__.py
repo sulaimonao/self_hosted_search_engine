@@ -16,6 +16,8 @@ import requests
 from flask import Flask, Response, current_app, jsonify, request
 from flask_cors import CORS
 
+from observability import configure_tracing
+
 
 LOGGER = logging.getLogger(__name__)
 EMBEDDING_MODEL_PATTERNS = [
@@ -72,6 +74,27 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
 
+    langsmith_project = (
+        os.getenv("LANGSMITH_PROJECT")
+        or os.getenv("LANGCHAIN_PROJECT")
+        or "self-hosted-search"
+    )
+    langsmith_enabled = os.getenv("LANGSMITH_ENABLED", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    app.config.setdefault("LANGSMITH_PROJECT", langsmith_project)
+    app.config.setdefault("LANGSMITH_ENABLED", langsmith_enabled)
+
+    configure_tracing(
+        app,
+        enabled=langsmith_enabled,
+        project_name=langsmith_project,
+        service_name="self_hosted_search_engine.api",
+    )
+
     app.before_request(request_id_middleware.before_request)
     app.after_request(request_id_middleware.after_request)
     app.before_request(middleware_logging.before_request)
@@ -82,7 +105,7 @@ def create_app() -> Flask:
     @app.before_request
     def _api_only_gate():
         path = request.path or ""
-        if path == "/" or path.startswith("/api/"):
+        if path == "/" or path.startswith("/api/") or request.endpoint:
             return None
         return (
             jsonify({"error": "Not Found", "hint": "UI served from frontend at :3100"}),
@@ -259,13 +282,23 @@ def create_app() -> Flask:
 
     @app.get("/")
     def root() -> Response:
-        return jsonify(
-            {
-                "ok": True,
-                "service": "backend-api",
-                "ui": "frontend-only",
-            }
-        )
+        repo_root = Path(__file__).resolve().parents[2]
+        candidate_paths = [
+            repo_root / "frontend" / "dist" / "index.html",
+            repo_root / "frontend" / "build" / "index.html",
+        ]
+        for path in candidate_paths:
+            if path.exists():
+                try:
+                    html = path.read_text("utf-8")
+                except OSError:
+                    break
+                return current_app.response_class(html, mimetype="text/html")
+        fallback = """<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Self-Hosted Search</title></head>
+<body><main><h1>Self-Hosted Search API</h1><section id=\"diagnostics-panel\"><p>The frontend build is unavailable.</p>
+<button id=\"diagnostics-run\">Run diagnostics</button><a id=\"diagnostics-download\" href=\"/api/diagnostics/report\">Download report</a>
+<a id=\"diagnostics-log-download\" href=\"/api/diagnostics/logs\">Download logs</a></section></main></body></html>"""
+        return current_app.response_class(fallback, mimetype="text/html")
 
     @app.errorhandler(404)
     def _not_found(_):

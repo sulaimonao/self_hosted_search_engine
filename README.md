@@ -235,6 +235,28 @@ invoking the relevant Make target (see `Makefile` for the full list). Fast local
 storage is strongly recommended because the Flask app and background workers
 share the same directories.
 
+## LangSmith tracing
+
+End-to-end traces are emitted via LangSmith + OpenTelemetry when
+`LANGSMITH_ENABLED=true` is present in the environment. The integration uses the
+official LangSmith Python SDK and reports spans for the focused crawl pipeline
+(`crawl → normalize → index → query`), HTTP endpoints (`/api/search`,
+`/api/tools/reindex`, `/api/chat`, `/api/search/crawl`), retrieval calls (Whoosh
+and Chroma), and LLM invocations (Ollama chat, embeddings, rerank).
+
+Set the following variables in your shell or `.env` file to enable tracing:
+
+```bash
+export LANGSMITH_ENABLED=true
+export LANGSMITH_API_KEY=...        # issued from app.langchain.com
+export LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+export LANGSMITH_PROJECT="self-hosted-search"  # optional override
+```
+
+When disabled (the default), tracing imports are no-ops. Errors automatically
+record the exception class and redact sensitive inputs using the existing
+logging sanitiser.
+
 ## Testing & quality gates
 
 The repository ships with an opinionated pre-flight suite. Run it before opening

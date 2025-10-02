@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, request
 
+from observability import start_span
+
 bp = Blueprint("agent_tools", __name__, url_prefix="/api/tools")
 
 
@@ -27,21 +29,31 @@ def search_index() -> tuple[str, int]:
 @bp.post("/enqueue_crawl")
 def enqueue_crawl() -> tuple[str, int]:
     payload = request.get_json(silent=True) or {}
-    url = (payload.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "url is required"}), 400
-    priority = float(payload.get("priority", 0.5))
-    topic = payload.get("topic")
-    reason = payload.get("reason")
-    source_task_id = payload.get("source_task_id")
-    queued = _runtime().enqueue_crawl(
-        url,
-        priority=priority,
-        topic=topic,
-        reason=reason,
-        source_task_id=source_task_id,
-    )
-    return jsonify({"queued": queued}), 200
+    inputs = {
+        "url": payload.get("url"),
+        "priority": payload.get("priority"),
+        "topic": payload.get("topic"),
+    }
+    with start_span(
+        "http.tools.enqueue_crawl",
+        attributes={"http.route": "/api/tools/enqueue_crawl", "http.method": request.method},
+        inputs=inputs,
+    ):
+        url = (payload.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "url is required"}), 400
+        priority = float(payload.get("priority", 0.5))
+        topic = payload.get("topic")
+        reason = payload.get("reason")
+        source_task_id = payload.get("source_task_id")
+        queued = _runtime().enqueue_crawl(
+            url,
+            priority=priority,
+            topic=topic,
+            reason=reason,
+            source_task_id=source_task_id,
+        )
+        return jsonify({"queued": queued}), 200
 
 
 @bp.post("/fetch_page")
@@ -58,9 +70,14 @@ def fetch_page() -> tuple[str, int]:
 def reindex() -> tuple[str, int]:
     payload = request.get_json(silent=True) or {}
     batch = payload.get("batch")
-    urls = [str(item).strip() for item in batch] if isinstance(batch, (list, tuple)) else None
-    result = _runtime().reindex(urls)
-    return jsonify(result), 200
+    with start_span(
+        "http.tools.reindex",
+        attributes={"http.route": "/api/tools/reindex", "http.method": request.method},
+        inputs={"batch_size": len(batch) if isinstance(batch, (list, tuple)) else None},
+    ):
+        urls = [str(item).strip() for item in batch] if isinstance(batch, (list, tuple)) else None
+        result = _runtime().reindex(urls)
+        return jsonify(result), 200
 
 
 @bp.get("/status")

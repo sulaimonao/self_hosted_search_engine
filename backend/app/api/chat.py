@@ -14,6 +14,7 @@ from server.json_logger import log_event
 
 from ..config import AppConfig
 from ..services import ollama_client
+from observability import start_span
 
 bp = Blueprint("chat_api", __name__, url_prefix="/api")
 
@@ -337,212 +338,247 @@ def chat_invoke() -> Response:
     trace_id = getattr(g, "trace_id", None)
     primary_model, fallback_model, _ = _configured_models()
 
-    candidates: list[str] = []
-    if requested_model:
-        candidates.append(requested_model)
-    else:
-        candidates.append(primary_model)
-        if fallback_model and fallback_model != primary_model:
-            candidates.append(fallback_model)
+    trace_inputs = {
+        "message_count": len(sanitized_messages),
+        "requested_model": requested_model,
+        "has_context": bool(text_context or image_context),
+    }
 
-    config: AppConfig = current_app.config["APP_CONFIG"]
-    endpoint = _chat_endpoint(config)
-
-    attempted: list[str] = []
-    missing_reasons: list[str] = []
-
-    for attempt_index, candidate in enumerate(candidates, start=1):
-        attempted.append(candidate)
-        prepared_messages, image_used, system_prompt = _prepare_messages(
-            candidate=candidate,
-            base_messages=sanitized_messages,
-            url=url_value,
-            text_context=text_context,
-            image_context=image_context,
-        )
-
-        log_event(
-            "INFO",
-            "chat.request",
-            trace=trace_id,
-            model=candidate,
-            attempt=attempt_index,
-            url=url_value,
-            has_text=bool(text_context),
-            has_img=bool(image_context),
-        )
-
-        if hasattr(chat_logger, "info"):
-            chat_logger.info("forwarding chat request to ollama (model=%s)", candidate)
-
-        request_payload: dict[str, Any] = {
-            "model": candidate,
-            "messages": prepared_messages,
-            "stream": True,
-            "system": system_prompt,
-        }
-        if _supports_json_format(candidate):
-            request_payload["format"] = "json"
+    with start_span(
+        "http.chat",
+        attributes={"http.route": "/api/chat", "http.method": request.method},
+        inputs=trace_inputs,
+    ) as chat_span:
+        candidates: list[str] = []
+        if requested_model:
+            candidates.append(requested_model)
         else:
+            candidates.append(primary_model)
+            if fallback_model and fallback_model != primary_model:
+                candidates.append(fallback_model)
+
+        if chat_span is not None:
+            chat_span.set_attribute("chat.candidate_count", len(candidates))
+
+        config: AppConfig = current_app.config["APP_CONFIG"]
+        endpoint = _chat_endpoint(config)
+
+        attempted: list[str] = []
+        missing_reasons: list[str] = []
+
+        for attempt_index, candidate in enumerate(candidates, start=1):
+            attempted.append(candidate)
+            prepared_messages, image_used, system_prompt = _prepare_messages(
+                candidate=candidate,
+                base_messages=sanitized_messages,
+                url=url_value,
+                text_context=text_context,
+                image_context=image_context,
+            )
+
             log_event(
                 "INFO",
-                "chat.json_disabled",
+                "chat.request",
                 trace=trace_id,
                 model=candidate,
+                attempt=attempt_index,
+                url=url_value,
+                has_text=bool(text_context),
+                has_img=bool(image_context),
             )
 
-        try:
-            response = requests.post(
-                endpoint,
-                json=request_payload,
-                stream=True,
-                timeout=120,
-            )
-        except requests.RequestException as exc:
-            g.chat_error_class = exc.__class__.__name__
-            g.chat_error_message = str(exc)
-            log_event(
-                "ERROR",
-                "chat.error",
-                trace=trace_id,
-                model=candidate,
-                error=g.chat_error_class,
-                msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
-            )
-            return jsonify({"error": "upstream_unavailable", "message": str(exc), "trace_id": trace_id}), 502
+            if hasattr(chat_logger, "info"):
+                chat_logger.info("forwarding chat request to ollama (model=%s)", candidate)
 
-        try:
-            if response.status_code == 404:
-                content_raw = response.text.strip() or "model not found"
-                reason = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-                missing_reasons.append(reason)
+            request_payload: dict[str, Any] = {
+                "model": candidate,
+                "messages": prepared_messages,
+                "stream": True,
+                "system": system_prompt,
+            }
+            if _supports_json_format(candidate):
+                request_payload["format"] = "json"
+            else:
+                log_event(
+                    "INFO",
+                    "chat.json_disabled",
+                    trace=trace_id,
+                    model=candidate,
+                )
+
+            response = None
+            try:
+                with start_span(
+                    "llm.chat",
+                    attributes={"llm.model": candidate, "llm.attempt": attempt_index},
+                    inputs={
+                        "message_count": len(prepared_messages),
+                        "has_image": bool(image_used),
+                    },
+                ) as llm_span:
+                    response = requests.post(
+                        endpoint,
+                        json=request_payload,
+                        stream=True,
+                        timeout=120,
+                    )
+                    if llm_span is not None:
+                        llm_span.set_attribute("http.status_code", response.status_code)
+                        llm_span.set_attribute("llm.json_format", "format" in request_payload)
+            except requests.RequestException as exc:
+                g.chat_error_class = exc.__class__.__name__
+                g.chat_error_message = str(exc)
                 log_event(
                     "ERROR",
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
-                    code=404,
-                    msg=reason,
+                    error=g.chat_error_class,
+                    msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
                 )
+                return jsonify({"error": "upstream_unavailable", "message": str(exc), "trace_id": trace_id}), 502
+
+            if response is None:  # pragma: no cover - defensive guard
                 continue
 
-            if response.status_code >= 400:
-                content_raw = response.text.strip() or f"HTTP {response.status_code}"
-                g.chat_error_class = "HTTPError"
-                g.chat_error_message = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-                log_event(
-                    "ERROR",
-                    "chat.error",
-                    trace=trace_id,
-                    model=candidate,
-                    code=response.status_code,
-                    msg=g.chat_error_message,
-                )
-                return (
-                    jsonify(
-                        {
-                            "error": "upstream_error",
-                            "status": response.status_code,
-                            "message": g.chat_error_message,
-                            "trace_id": trace_id,
-                        }
-                    ),
-                    response.status_code,
-                )
-
             try:
-                payload_json = _consume_streaming_response(response)
+                if response.status_code == 404:
+                    content_raw = response.text.strip() or "model not found"
+                    reason = _truncate(content_raw, _MAX_ERROR_PREVIEW)
+                    missing_reasons.append(reason)
+                    log_event(
+                        "ERROR",
+                        "chat.error",
+                        trace=trace_id,
+                        model=candidate,
+                        code=404,
+                        msg=reason,
+                    )
+                    continue
+
+                if response.status_code >= 400:
+                    content_raw = response.text.strip() or f"HTTP {response.status_code}"
+                    g.chat_error_class = "HTTPError"
+                    g.chat_error_message = _truncate(content_raw, _MAX_ERROR_PREVIEW)
+                    log_event(
+                        "ERROR",
+                        "chat.error",
+                        trace=trace_id,
+                        model=candidate,
+                        code=response.status_code,
+                        msg=g.chat_error_message,
+                    )
+                    return (
+                        jsonify(
+                            {
+                                "error": "upstream_error",
+                                "status": response.status_code,
+                                "message": g.chat_error_message,
+                                "trace_id": trace_id,
+                            }
+                        ),
+                        response.status_code,
+                    )
+
+                try:
+                    payload_json = _consume_streaming_response(response)
+                except ValueError as exc:
+                    g.chat_error_class = "InvalidStream"
+                    g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
+                    log_event(
+                        "ERROR",
+                        "chat.error",
+                        trace=trace_id,
+                        model=candidate,
+                        msg=g.chat_error_message,
+                    )
+                    return jsonify({"error": "invalid_response", "message": str(exc), "trace_id": trace_id}), 502
+            finally:
+                closer = getattr(response, "close", None)
+                if callable(closer):
+                    closer()
+
+            content = _extract_model_content(payload_json)
+            reasoning_text = _extract_model_reasoning(payload_json).strip()
+            try:
+                structured = _coerce_schema(content)
             except ValueError as exc:
-                g.chat_error_class = "InvalidStream"
-                g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
+                LOGGER.debug("Falling back to raw chat content: %s", exc)
+                structured = {
+                    "reasoning": "",
+                    "answer": content.strip(),
+                    "citations": [],
+                }
+                if reasoning_text:
+                    structured["reasoning"] = reasoning_text
+            else:
+                if reasoning_text and not structured.get("reasoning"):
+                    structured["reasoning"] = reasoning_text
+
+            g.chat_model = candidate
+            g.chat_fallback_used = attempt_index > 1
+            g.chat_error_class = None
+            g.chat_error_message = None
+
+            if image_context and not image_used:
                 log_event(
-                    "ERROR",
-                    "chat.error",
+                    "WARNING",
+                    "chat.vision_ignored",
                     trace=trace_id,
                     model=candidate,
-                    msg=g.chat_error_message,
                 )
-                return jsonify({"error": "invalid_response", "message": str(exc), "trace_id": trace_id}), 502
-        finally:
-            closer = getattr(response, "close", None)
-            if callable(closer):
-                closer()
 
-        content = _extract_model_content(payload_json)
-        reasoning_text = _extract_model_reasoning(payload_json).strip()
-        try:
-            structured = _coerce_schema(content)
-        except ValueError as exc:
-            LOGGER.debug("Falling back to raw chat content: %s", exc)
-            structured = {
-                "reasoning": "",
-                "answer": content.strip(),
-                "citations": [],
-            }
-            if reasoning_text:
-                structured["reasoning"] = reasoning_text
-        else:
-            if reasoning_text and not structured.get("reasoning"):
-                structured["reasoning"] = reasoning_text
-
-        g.chat_model = candidate
-        g.chat_fallback_used = attempt_index > 1
-        g.chat_error_class = None
-        g.chat_error_message = None
-
-        if image_context and not image_used:
+            duration_ms = int((time.perf_counter() - start) * 1000)
             log_event(
-                "WARNING",
-                "chat.vision_ignored",
+                "INFO",
+                "chat.ready",
                 trace=trace_id,
                 model=candidate,
+                fallback_used=g.chat_fallback_used,
+                duration_ms=duration_ms,
             )
+            if chat_span is not None:
+                chat_span.set_attribute("chat.success_model", candidate)
+                chat_span.set_attribute("chat.duration_ms", duration_ms)
+                chat_span.set_attribute("chat.fallback_used", bool(g.chat_fallback_used))
 
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        log_event(
-            "INFO",
-            "chat.ready",
-            trace=trace_id,
-            model=candidate,
-            fallback_used=g.chat_fallback_used,
-            duration_ms=duration_ms,
-        )
-
-        response_payload = {
-            "reasoning": structured["reasoning"],
-            "answer": structured["answer"],
-            "citations": structured["citations"],
-            "model": candidate,
-            "trace_id": trace_id,
-        }
-        flask_response = jsonify(response_payload)
-        flask_response.headers["X-LLM-Model"] = candidate
-        return flask_response
-
-    tried = [name for name in attempted if name]
-    hint = "ollama pull " + " or ".join(tried or [primary_model])
-    combined = missing_reasons[0] if missing_reasons else hint
-    g.chat_error_class = "ModelNotFound"
-    g.chat_error_message = combined
-    log_event(
-        "ERROR",
-        "chat.error",
-        trace=trace_id,
-        model=primary_model,
-        code=404,
-        msg=combined,
-    )
-    return (
-        jsonify(
-            {
-                "error": "model_not_found",
-                "tried": tried,
-                "hint": hint,
+            response_payload = {
+                "reasoning": structured["reasoning"],
+                "answer": structured["answer"],
+                "citations": structured["citations"],
+                "model": candidate,
                 "trace_id": trace_id,
             }
-        ),
-        503,
-    )
+            flask_response = jsonify(response_payload)
+            flask_response.headers["X-LLM-Model"] = candidate
+            return flask_response
+
+        tried = [name for name in attempted if name]
+        hint = "ollama pull " + " or ".join(tried or [primary_model])
+        combined = missing_reasons[0] if missing_reasons else hint
+        g.chat_error_class = "ModelNotFound"
+        g.chat_error_message = combined
+        log_event(
+            "ERROR",
+            "chat.error",
+            trace=trace_id,
+            model=primary_model,
+            code=404,
+            msg=combined,
+        )
+        if chat_span is not None:
+            chat_span.set_attribute("chat.success", False)
+        return (
+            jsonify(
+                {
+                    "error": "model_not_found",
+                    "tried": tried,
+                    "hint": hint,
+                    "trace_id": trace_id,
+                }
+            ),
+            503,
+        )
 
 
 __all__ = ["bp"]

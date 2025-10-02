@@ -18,6 +18,7 @@ from ..pipeline.normalize import normalize
 from .runner import JobRunner
 from server.learned_web_db import LearnedWebDB, get_db
 from backend.app.search.embedding import embed_query
+from observability import start_span
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,120 +72,169 @@ def run_focused_crawl(
         except Exception:  # pragma: no cover - logging only
             LOGGER.debug("failed to persist query embedding for '%s'", q, exc_info=True)
     discovery_mode = "manual" if manual_seeds else "discovery"
-    manual_candidates = _build_manual_candidates(manual_seeds) if manual_seeds else []
-    _emit("frontier_start", query=query, mode=discovery_mode, depth=depth_value, budget=budget)
-    if manual_candidates:
-        seeds = manual_candidates
-    else:
-        seeds = _get_seed_candidates(
-            query,
-            budget,
-            use_llm,
-            model,
-            config,
-            extra_seeds=extra_seeds,
-            depth=depth_value,
-        )
 
-    seed_urls: List[str] = []
-    source_counts: Dict[str, int] = {}
-    for candidate in seeds:
-        seed_urls.append(candidate.url)
-        source = candidate.source or ("manual" if manual_candidates else "frontier")
-        source_counts[source] = source_counts.get(source, 0) + 1
+    pipeline_inputs = {
+        "query": q,
+        "budget": budget,
+        "use_llm": use_llm,
+        "manual_seed_count": len(manual_seeds or []),
+    }
 
-    print(
-        f"[focused] query='{query}' budget={budget} depth={depth_value} mode={discovery_mode} seeds={len(seeds)}"
-    )
-    for candidate in seeds[:10]:
-        print(f"[focused] seed -> {candidate.url} ({candidate.source})")
-
-    crawl_id: Optional[int] = None
-    new_domains = 0
-    if learned_db is not None:
-        try:
-            crawl_id = learned_db.start_crawl(
-                query=q,
-                started_at=start_ts,
-                budget=budget,
-                seed_count=len(seeds),
-                use_llm=use_llm,
-                model=model,
+    with start_span(
+        "focused_crawl.pipeline",
+        attributes={"crawl.model": model or "", "crawl.budget": budget},
+        inputs=pipeline_inputs,
+    ) as pipeline_span:
+        manual_candidates = _build_manual_candidates(manual_seeds) if manual_seeds else []
+        _emit("frontier_start", query=query, mode=discovery_mode, depth=depth_value, budget=budget)
+        if manual_candidates:
+            seeds = manual_candidates
+        else:
+            seeds = _get_seed_candidates(
+                query,
+                budget,
+                use_llm,
+                model,
+                config,
+                extra_seeds=extra_seeds,
+                depth=depth_value,
             )
-            for candidate in seeds:
-                try:
-                    record = learned_db.record_discovery(
-                        q,
-                        candidate.url,
-                        reason="manual" if discovery_mode == "manual" else "frontier",
-                        score=float(candidate.priority),
-                        source=candidate.source,
-                        discovered_at=start_ts,
-                        crawl_id=crawl_id,
-                    )
-                    if record and record[1]:
-                        new_domains += 1
-                except Exception:  # pragma: no cover - logging only
-                    LOGGER.debug("failed to persist frontier discovery for %s", candidate.url, exc_info=True)
-        except Exception:  # pragma: no cover - logging only
-            LOGGER.exception("failed to record crawl bootstrap", exc_info=True)
 
-    _emit(
-        "frontier_complete",
-        seed_count=len(seeds),
-        mode=discovery_mode,
-        seeds=seed_urls,
-        sources=source_counts,
-        new_domains=new_domains,
-        embedded=embedded_count,
-        depth=depth_value,
-        budget=budget,
-    )
+        if pipeline_span is not None:
+            pipeline_span.set_attribute("focused.seed_count", len(seeds))
+            pipeline_span.set_attribute("focused.depth", depth_value)
 
-    _emit("crawl_start", seed_count=len(seeds))
-    raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
-    _emit("crawl_complete", pages_fetched=len(pages), raw_path=str(raw_path) if raw_path else None)
-    print(f"[focused] crawl fetched {len(pages)} page(s)")
-    if raw_path:
-        print(f"[focused] raw capture written to {raw_path}")
+        seed_urls: List[str] = []
+        source_counts: Dict[str, int] = {}
+        for candidate in seeds:
+            seed_urls.append(candidate.url)
+            source = candidate.source or ("manual" if manual_candidates else "frontier")
+            source_counts[source] = source_counts.get(source, 0) + 1
 
-    normalized_docs = []
-    if pages and raw_path:
-        _emit("normalize_start", pages=len(pages))
-        normalized_docs = normalize(
-            config.crawl_raw_dir,
-            config.normalized_path,
-            append=True,
-            sources=[raw_path],
+        print(
+            f"[focused] query='{query}' budget={budget} depth={depth_value} mode={discovery_mode} seeds={len(seeds)}"
         )
-        _emit("normalize_complete", docs=len(normalized_docs))
-        print(f"[focused] normalized {len(normalized_docs)} document(s)")
-        _emit("index_start", docs=len(normalized_docs))
-        added, skipped, deduped = incremental_index(
-            config.index_dir,
-            config.ledger_path,
-            config.simhash_path,
-            config.last_index_time_path,
-            normalized_docs,
-        )
+        for candidate in seeds[:10]:
+            print(f"[focused] seed -> {candidate.url} ({candidate.source})")
+
+        crawl_id: Optional[int] = None
+        new_domains = 0
         if learned_db is not None:
             try:
-                urls_to_mark = [doc.get("url") for doc in normalized_docs if isinstance(doc.get("url"), str)]
-                learned_db.mark_pages_indexed(urls_to_mark, indexed_at=time.time())
+                crawl_id = learned_db.start_crawl(
+                    query=q,
+                    started_at=start_ts,
+                    budget=budget,
+                    seed_count=len(seeds),
+                    use_llm=use_llm,
+                    model=model,
+                )
+                for candidate in seeds:
+                    try:
+                        record = learned_db.record_discovery(
+                            q,
+                            candidate.url,
+                            reason="manual" if discovery_mode == "manual" else "frontier",
+                            score=float(candidate.priority),
+                            source=candidate.source,
+                            discovered_at=start_ts,
+                            crawl_id=crawl_id,
+                        )
+                        if record and record[1]:
+                            new_domains += 1
+                    except Exception:  # pragma: no cover - logging only
+                        LOGGER.debug("failed to persist frontier discovery for %s", candidate.url, exc_info=True)
             except Exception:  # pragma: no cover - logging only
-                LOGGER.debug("failed to mark pages indexed", exc_info=True)
+                LOGGER.exception("failed to record crawl bootstrap", exc_info=True)
+
         _emit(
-            "index_complete",
-            docs_indexed=added,
-            skipped=skipped,
-            deduped=deduped,
+            "frontier_complete",
+            seed_count=len(seeds),
+            mode=discovery_mode,
+            seeds=seed_urls,
+            sources=source_counts,
+            new_domains=new_domains,
+            embedded=embedded_count,
+            depth=depth_value,
+            budget=budget,
         )
-    else:
-        added = skipped = deduped = 0
-        if not seeds:
-            _emit("frontier_empty", mode=discovery_mode)
+
+        _emit("crawl_start", seed_count=len(seeds))
+        with start_span(
+            "focused_crawl.crawl",
+            attributes={"seed.count": len(seeds), "crawl.depth": depth_value},
+            inputs={"budget": budget, "use_llm": use_llm},
+        ) as crawl_span:
+            raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
+            if crawl_span is not None:
+                crawl_span.set_attribute("crawl.pages", len(pages))
+        _emit("crawl_complete", pages_fetched=len(pages), raw_path=str(raw_path) if raw_path else None)
+        print(f"[focused] crawl fetched {len(pages)} page(s)")
+        if raw_path:
+            print(f"[focused] raw capture written to {raw_path}")
+
+        normalized_docs = []
+        if pages and raw_path:
+            _emit("normalize_start", pages=len(pages))
+            with start_span(
+                "focused_crawl.normalize",
+                attributes={"pages": len(pages)},
+                inputs={"raw_path": str(raw_path)},
+            ) as normalize_span:
+                normalized_docs = normalize(
+                    config.crawl_raw_dir,
+                    config.normalized_path,
+                    append=True,
+                    sources=[raw_path],
+                )
+                if normalize_span is not None:
+                    normalize_span.set_attribute("docs", len(normalized_docs))
+            _emit("normalize_complete", docs=len(normalized_docs))
+            print(f"[focused] normalized {len(normalized_docs)} document(s)")
+            _emit("index_start", docs=len(normalized_docs))
+            with start_span(
+                "focused_crawl.index",
+                attributes={"docs": len(normalized_docs)},
+            ) as index_span:
+                added, skipped, deduped = incremental_index(
+                    config.index_dir,
+                    config.ledger_path,
+                    config.simhash_path,
+                    config.last_index_time_path,
+                    normalized_docs,
+                )
+                if index_span is not None:
+                    index_span.set_attribute("index.added", added)
+                    index_span.set_attribute("index.skipped", skipped)
+                    index_span.set_attribute("index.deduped", deduped)
+            if learned_db is not None:
+                try:
+                    urls_to_mark = [
+                        doc.get("url") for doc in normalized_docs if isinstance(doc.get("url"), str)
+                    ]
+                    learned_db.mark_pages_indexed(urls_to_mark, indexed_at=time.time())
+                except Exception:  # pragma: no cover - logging only
+                    LOGGER.debug("failed to mark pages indexed", exc_info=True)
+            _emit(
+                "index_complete",
+                docs_indexed=added,
+                skipped=skipped,
+                deduped=deduped,
+            )
         else:
-            _emit("index_skipped", reason="no_new_documents")
+            added = skipped = deduped = 0
+            if not seeds:
+                _emit("frontier_empty", mode=discovery_mode)
+            else:
+                _emit("index_skipped", reason="no_new_documents")
+
+        if pipeline_span is not None:
+            pipeline_span.set_attribute("focused.pages", len(pages))
+            pipeline_span.set_attribute("focused.docs", len(normalized_docs))
+            pipeline_span.set_attribute("focused.added", added)
+            pipeline_span.set_attribute(
+                "focused.duration_ms", int((time.perf_counter() - start) * 1000)
+            )
 
     if learned_db is not None:
         try:
