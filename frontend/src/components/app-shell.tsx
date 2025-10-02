@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CommandDialog,
   CommandEmpty,
@@ -72,6 +73,7 @@ import type {
   DiscoveryPreview,
 } from "@/lib/types";
 import { devlog } from "@/lib/devlog";
+import { normalizeInput } from "@/lib/normalize-input";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
@@ -89,13 +91,6 @@ function uid() {
     return crypto.randomUUID();
   }
   return Math.random().toString(36).slice(2);
-}
-
-function looksLikeUrl(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  if (/^https?:\/\//i.test(trimmed)) return true;
-  return /^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed);
 }
 
 function modelSupportsVision(model: string | null | undefined) {
@@ -169,6 +164,7 @@ function createInitialSearchState(): SearchState {
 }
 
 export function AppShell() {
+  const router = useRouter();
   const [previewState, setPreviewState] = useState({
     history: [INITIAL_URL],
     index: 0,
@@ -953,18 +949,23 @@ export function AppShell() {
 
   const handleOmniSubmit = useCallback(
     (value: string) => {
-      const input = value.trim();
-      if (!input) return;
-      if (looksLikeUrl(input)) {
-        handleNavigate(input);
-      } else {
-        if (isChatLoading) {
-          handleCancelChat();
-        }
-        void handleSearch(input);
+      const trimmed = value.trim();
+      if (!trimmed) return;
+
+      const normalized = normalizeInput(trimmed);
+      if (normalized.kind === "external") {
+        window.open(normalized.urlOrPath, "_blank", "noopener,noreferrer");
+        handleNavigate(normalized.urlOrPath);
+        return;
       }
+
+      if (isChatLoading) {
+        handleCancelChat();
+      }
+      router.push(normalized.urlOrPath);
+      void handleSearch(trimmed);
     },
-    [handleNavigate, handleSearch, handleCancelChat, isChatLoading]
+    [handleNavigate, handleSearch, handleCancelChat, isChatLoading, router]
   );
 
   const handleApproveAction = useCallback(
@@ -1570,7 +1571,9 @@ export function AppShell() {
             onHistoryBack={handleBack}
             onHistoryForward={handleForward}
             onReload={handleReload}
-            onOpenInNewTab={(url) => window.open(url, "_blank", "noopener")}
+            onOpenInNewTab={(url) =>
+              window.open(url, "_blank", "noopener,noreferrer")
+            }
           />
         </section>
         <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">

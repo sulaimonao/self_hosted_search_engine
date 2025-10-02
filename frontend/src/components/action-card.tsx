@@ -57,7 +57,7 @@ export function ActionCard({ action, onApprove, onEdit, onDismiss }: ActionCardP
               size="icon"
               aria-label="Open resource"
               onClick={() => {
-                window.open(targetUrl, "_blank", "noopener");
+                window.open(targetUrl, "_blank", "noopener,noreferrer");
               }}
             >
               <ExternalLink className="h-4 w-4" />
