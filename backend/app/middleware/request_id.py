@@ -15,7 +15,9 @@ def before_request() -> None:
 
     trace_id = getattr(g, "trace_id", None)
     if not trace_id:
-        header_id = request.headers.get("X-Trace-Id") or request.headers.get("X-Request-Id")
+        header_id = request.headers.get("X-Trace-Id") or request.headers.get(
+            "X-Request-Id"
+        )
         trace_id = header_id or new_request_id()
     g.trace_id = trace_id
     g.request_id = trace_id

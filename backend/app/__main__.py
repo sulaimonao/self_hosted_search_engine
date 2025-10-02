@@ -1,4 +1,5 @@
 """Command line entry-point for running the Flask API."""
+
 from __future__ import annotations
 
 import logging

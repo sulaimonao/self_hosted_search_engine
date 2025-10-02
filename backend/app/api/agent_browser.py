@@ -14,7 +14,9 @@ bp = Blueprint("agent_browser", __name__, url_prefix="/api/agent")
 
 
 def _manager() -> AgentBrowserManager:
-    manager: AgentBrowserManager | None = current_app.config.get("AGENT_BROWSER_MANAGER")
+    manager: AgentBrowserManager | None = current_app.config.get(
+        "AGENT_BROWSER_MANAGER"
+    )
     if manager is None:
         raise RuntimeError("Agent browser manager unavailable")
     return manager

@@ -77,7 +77,9 @@ def search_index() -> tuple[Any, int]:
         k = max(1, int(k_value))
     except (TypeError, ValueError):
         return jsonify({"error": "k must be an integer"}), 400
-    filters = payload.get("filters") if isinstance(payload.get("filters"), Mapping) else None
+    filters = (
+        payload.get("filters") if isinstance(payload.get("filters"), Mapping) else None
+    )
     try:
         results = _service().search(query, k=k, filters=filters)
     except EmbedderUnavailableError as exc:

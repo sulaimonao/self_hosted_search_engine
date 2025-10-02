@@ -132,7 +132,9 @@ class VectorIndexService:
         if not cleaned:
             raise ValueError("text is required")
         key = (url or "").strip()
-        doc_hash = hashlib.sha256(cleaned.encode("utf-8"), usedforsecurity=False).hexdigest()
+        doc_hash = hashlib.sha256(
+            cleaned.encode("utf-8"), usedforsecurity=False
+        ).hexdigest()
         storage_key = key or f"doc:{doc_hash}"
         resolved_title = (title or key or "Untitled").strip() or storage_key
         sim_signature = simhash64(cleaned)
@@ -149,9 +151,7 @@ class VectorIndexService:
                     dims=self._last_dims,
                     duplicate_of=duplicate_key,
                 )
-            needs_update = self._vector_store.needs_update(
-                storage_key, None, doc_hash
-            )
+            needs_update = self._vector_store.needs_update(storage_key, None, doc_hash)
             if not needs_update:
                 self._simhash_index.update(storage_key, sim_signature)
                 self._persist_dedupe()
@@ -210,7 +210,9 @@ class VectorIndexService:
         vector = self._embed_query(cleaned)
         if not vector:
             return []
-        retrieved = self._vector_store.query(vector, max(1, int(k)), self._similarity_threshold)
+        retrieved = self._vector_store.query(
+            vector, max(1, int(k)), self._similarity_threshold
+        )
         hits: list[SearchHit] = []
         for item in retrieved:
             hits.append(
@@ -258,11 +260,15 @@ class VectorIndexService:
         autopull_started = False
         if self._dev_allow_autopull and not self._autopull_started:
             try:
-                ollama_services.pull_model(self._embed_model, base_url=self._client.base_url)
+                ollama_services.pull_model(
+                    self._embed_model, base_url=self._client.base_url
+                )
             except FileNotFoundError as exc:
                 LOGGER.warning("ollama CLI missing for autopull: %s", exc)
             except Exception as exc:  # pragma: no cover - subprocess edge cases
-                LOGGER.warning("failed to start autopull for %s: %s", self._embed_model, exc)
+                LOGGER.warning(
+                    "failed to start autopull for %s: %s", self._embed_model, exc
+                )
             else:
                 self._autopull_started = True
                 autopull_started = True
@@ -286,7 +292,10 @@ class VectorIndexService:
         if not texts:
             return []
         if self._test_mode:
-            return [_fallback_embed(text, dimensions=self._TEST_EMBED_DIMS) for text in texts]
+            return [
+                _fallback_embed(text, dimensions=self._TEST_EMBED_DIMS)
+                for text in texts
+            ]
         self._ensure_embedder_ready()
         assert self._embedder is not None  # noqa: S101
         try:

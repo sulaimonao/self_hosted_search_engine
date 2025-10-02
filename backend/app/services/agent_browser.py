@@ -35,7 +35,9 @@ class _BrowserSession:
     action_timeout_ms: int
     navigation_timeout_ms: int
     max_retries: int
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
     _last_active: float = field(default_factory=time.monotonic, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -202,7 +204,11 @@ class AgentBrowserManager:
         if not self._sessions:
             return
         threshold = time.monotonic() - self._idle_timeout
-        expired = [sid for sid, session in self._sessions.items() if session.last_active < threshold]
+        expired = [
+            sid
+            for sid, session in self._sessions.items()
+            if session.last_active < threshold
+        ]
         for sid in expired:
             session = self._sessions.pop(sid, None)
             if session is not None:

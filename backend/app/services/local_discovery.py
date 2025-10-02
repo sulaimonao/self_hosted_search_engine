@@ -56,17 +56,23 @@ class _DirectoryEventHandler(FileSystemEventHandler):
     def __init__(self, service: "LocalDiscoveryService") -> None:
         self._service = service
 
-    def on_created(self, event: FileSystemEvent) -> None:  # pragma: no cover - watchdog glue
+    def on_created(
+        self, event: FileSystemEvent
+    ) -> None:  # pragma: no cover - watchdog glue
         if event.is_directory:
             return
         self._service.enqueue(Path(event.src_path))
 
-    def on_modified(self, event: FileSystemEvent) -> None:  # pragma: no cover - watchdog glue
+    def on_modified(
+        self, event: FileSystemEvent
+    ) -> None:  # pragma: no cover - watchdog glue
         if event.is_directory:
             return
         self._service.enqueue(Path(event.src_path))
 
-    def on_moved(self, event: FileSystemEvent) -> None:  # pragma: no cover - watchdog glue
+    def on_moved(
+        self, event: FileSystemEvent
+    ) -> None:  # pragma: no cover - watchdog glue
         if event.is_directory:
             return
         self._service.enqueue(Path(event.dest_path))
@@ -79,7 +85,9 @@ class LocalDiscoveryService:
         self._directories = [directory.resolve() for directory in directories]
         self._ledger_path = ledger_path
         self._lock = threading.RLock()
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="local-discovery")
+        self._executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="local-discovery"
+        )
         self._observer: Optional[Observer] = None
         self._pending: Dict[str, DiscoveryRecord] = {}
         self._archive: Dict[str, DiscoveryRecord] = {}
@@ -327,7 +335,9 @@ class LocalDiscoveryService:
         try:
             payload = json.loads(raw)
         except ValueError:  # pragma: no cover - defensive
-            LOGGER.warning("Invalid JSON in local discovery ledger: %s", self._ledger_path)
+            LOGGER.warning(
+                "Invalid JSON in local discovery ledger: %s", self._ledger_path
+            )
             return
 
         if not isinstance(payload, dict):
@@ -353,9 +363,10 @@ class LocalDiscoveryService:
         data = {"paths": self._confirmations}
         self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._ledger_path.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
+        )
         tmp_path.replace(self._ledger_path)
 
 
 __all__ = ["LocalDiscoveryService", "DiscoveryRecord"]
-

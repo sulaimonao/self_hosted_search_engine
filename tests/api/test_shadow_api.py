@@ -38,7 +38,9 @@ def test_shadow_queue_and_status():
     assert data["job_id"] == "job-123"
     assert manager.enqueued == ["https://example.com"]
 
-    status = client.get("/api/shadow/status", query_string={"url": "https://example.com"})
+    status = client.get(
+        "/api/shadow/status", query_string={"url": "https://example.com"}
+    )
     assert status.status_code == 200
     status_data = status.get_json()
     assert status_data["state"] == "done"

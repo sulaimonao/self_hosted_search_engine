@@ -97,7 +97,9 @@ def _probe_ollama(base_url: str, manager: "EmbeddingManager | None") -> dict[str
         try:
             cli_models = list(manager.list_models())
         except Exception:  # pragma: no cover - subprocess/CLI failures are best effort
-            current_app.logger.debug("Embedding manager list_models failed", exc_info=True)
+            current_app.logger.debug(
+                "Embedding manager list_models failed", exc_info=True
+            )
 
     models = http_models or cli_models
     return {
@@ -178,7 +180,9 @@ def llm_autopull() -> Any:
 
     engine_config = _get_engine_config()
     base_url = engine_config.ollama.base_url
-    already_installed = set(ollama_client.list_models(base_url=base_url, chat_only=False))
+    already_installed = set(
+        ollama_client.list_models(base_url=base_url, chat_only=False)
+    )
 
     target: str | None = None
     for candidate in candidates:
@@ -194,7 +198,9 @@ def llm_autopull() -> Any:
             reason="installed",
             first=candidates[0],
         )
-        return jsonify({"started": False, "model": candidates[0], "reason": "already_installed"})
+        return jsonify(
+            {"started": False, "model": candidates[0], "reason": "already_installed"}
+        )
 
     if shutil.which("ollama") is None:
         log_event(

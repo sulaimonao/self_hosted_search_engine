@@ -64,7 +64,9 @@ class ShadowIndexer:
 
         job_id_holder: Dict[str, str] = {}
 
-        def task(job_url: str = normalized, job_ref: Dict[str, str] = job_id_holder) -> None:
+        def task(
+            job_url: str = normalized, job_ref: Dict[str, str] = job_id_holder
+        ) -> None:
             job_id = job_ref.get("id", "")
             self._run_job(job_url, job_id)
 
@@ -193,7 +195,9 @@ class ShadowIndexer:
             title=cleaned_title,
             metadata=metadata,
         )
-        return ShadowJobOutcome(url=url, title=cleaned_title, chunks=index_result.chunks)
+        return ShadowJobOutcome(
+            url=url, title=cleaned_title, chunks=index_result.chunks
+        )
 
     def _fetch_with_playwright(self, url: str) -> tuple[str, str, Dict[str, Any]]:
         with sync_playwright() as playwright:
@@ -220,7 +224,9 @@ class ShadowIndexer:
                 lang_value = page.evaluate("document.documentElement?.lang || null")
                 text, metadata = self._extract_text(html)
                 if not text.strip():
-                    fallback = page.evaluate("document.body ? document.body.innerText : ''")
+                    fallback = page.evaluate(
+                        "document.body ? document.body.innerText : ''"
+                    )
                     if isinstance(fallback, str):
                         text = fallback
             finally:

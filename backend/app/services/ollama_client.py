@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from collections.abc import Iterable, Mapping
-from typing import Any, Sequence
+from typing import Any
 
 import requests
 from flask import current_app
