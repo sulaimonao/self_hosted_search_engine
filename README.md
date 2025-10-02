@@ -123,7 +123,8 @@ make dev
   already exists) and starts the Next.js dev server (binds to `0.0.0.0` and is
   reachable at `http://localhost:3100`; override with `FRONTEND_PORT`). Point
   your browser at `http://localhost:3100`; all `/api/*` calls proxy to the
-  Flask API at `http://127.0.0.1:5050`.
+  Flask API at the URL derived from `NEXT_PUBLIC_API_BASE_URL` (defaults to
+  `http://127.0.0.1:${BACKEND_PORT}` with a fallback of `5050`).
 - Streams frontend dev instrumentation (via `/api/dev/log`) into the backend
   terminal so you can observe chat/search actions alongside Flask logs.
 - Tears both processes down when either exits or you press
@@ -140,8 +141,9 @@ without hunting for process IDs.
 Open the browser at `http://localhost:3100` to use the UI. Make sure `ollama`
 is listening on `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
 `localhost:5050` is busy (macOS ships AirPlay on that port), run
-`BACKEND_PORT=5051 make dev` instead. The Flask API root now returns a JSON ping
-to confirm the service is API-only and that the UI lives entirely in Next.js.
+`BACKEND_PORT=5051 make dev` instead; the proxy will automatically follow the
+updated port. The Flask API root now returns a JSON ping to confirm the service
+is API-only and that the UI lives entirely in Next.js.
 
 Verify the stack after startup with:
 
@@ -168,7 +170,8 @@ BACKEND_RELOAD=1 make run
 ```
 
 Launch the frontend in a separate terminal (remember to export
-`NEXT_PUBLIC_API_BASE_URL` when pointing at a remote API):
+`NEXT_PUBLIC_API_BASE_URL` when pointing at a remote API — omit it to follow
+`BACKEND_PORT` locally):
 
 ```bash
 cd frontend
