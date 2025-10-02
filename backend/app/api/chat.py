@@ -26,6 +26,7 @@ _SCHEMA_PROMPT = (
     "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in answer. "
     "Include citations when you reference external facts; omit when not applicable."
 )
+_JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 
 
 def _truncate(value: str, max_length: int) -> str:
@@ -61,6 +62,27 @@ def _configured_models() -> tuple[str, str | None, str | None]:
     return primary, fallback, embed
 
 
+def _supports_json_format(model: str) -> bool:
+    normalized = (model or "").lower()
+    return any(normalized.startswith(prefix) for prefix in _JSON_FORMAT_ALLOWLIST)
+
+
+def _first_string_value(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, Mapping):
+        for item in value.values():
+            found = _first_string_value(item)
+            if found:
+                return found
+    elif isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+        for item in value:
+            found = _first_string_value(item)
+            if found:
+                return found
+    return ""
+
+
 def _strip_code_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -84,13 +106,40 @@ def _coerce_schema(text: str) -> dict[str, Any]:
         raise ValueError(f"Model response was not valid JSON: {exc}") from exc
 
     reasoning = data.get("reasoning")
-    answer = data.get("answer")
-    citations = data.get("citations")
-
     if not isinstance(reasoning, str):
-        reasoning = json.dumps(reasoning) if reasoning is not None else ""
+        for key in ("thinking", "thoughts", "chain_of_thought"):
+            alt = data.get(key)
+            if isinstance(alt, str):
+                reasoning = alt
+                break
+        else:
+            reasoning = json.dumps(reasoning) if reasoning is not None else ""
+    reasoning = reasoning.strip()
+    if not reasoning:
+        filtered = {k: v for k, v in data.items() if k not in {"citations", "answer", "response", "output", "final_answer", "message"}}
+        reasoning = _first_string_value(filtered)
+
+    answer = data.get("answer")
     if not isinstance(answer, str):
-        answer = json.dumps(answer) if answer is not None else ""
+        for key in ("response", "output", "final_answer", "message"):
+            alt = data.get(key)
+            if isinstance(alt, str):
+                answer = alt
+                break
+        else:
+            if answer is None:
+                answer = _first_string_value(data)
+            else:
+                fallback_answer = _first_string_value(answer)
+                answer = fallback_answer or json.dumps(answer)
+            if not answer:
+                answer = ""
+    answer = answer.strip()
+    if not answer:
+        filtered = {k: v for k, v in data.items() if k not in {"citations", "reasoning", "thinking", "thoughts", "chain_of_thought"}}
+        answer = _first_string_value(filtered)
+
+    citations = data.get("citations")
 
     if isinstance(citations, str):
         citations_list = [citations]
@@ -117,6 +166,19 @@ def _extract_model_content(payload: Mapping[str, Any]) -> str:
     if isinstance(response_field, str) and response_field.strip():
         return response_field
     raise ValueError("Upstream response missing assistant content")
+
+
+def _extract_model_reasoning(payload: Mapping[str, Any]) -> str:
+    message = payload.get("message")
+    if isinstance(message, Mapping):
+        for key in ("reasoning", "thinking"):
+            raw = message.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw
+    reasoning_field = payload.get("reasoning")
+    if isinstance(reasoning_field, str) and reasoning_field.strip():
+        return reasoning_field
+    return ""
 
 
 def _prepare_messages(
@@ -161,10 +223,13 @@ def _chat_endpoint(config: AppConfig) -> str:
 
 
 def _consume_streaming_response(response: requests.Response) -> Mapping[str, Any]:
-    """Return the last non-empty payload from a streaming Ollama response."""
+    """Return the final payload from a streaming Ollama response with merged content."""
 
     last_payload: Mapping[str, Any] | None = None
-    latest_content: str | None = None
+    accumulated_content = ""
+    last_content_chunk = ""
+    accumulated_reasoning = ""
+    last_reasoning_chunk = ""
 
     for raw_line in response.iter_lines():
         if not raw_line:
@@ -183,20 +248,61 @@ def _consume_streaming_response(response: requests.Response) -> Mapping[str, Any
             continue
         last_payload = payload
         message = payload.get("message")
-        if isinstance(message, Mapping):
-            content = message.get("content")
-            if isinstance(content, str) and content.strip():
-                latest_content = content
+        if not isinstance(message, Mapping):
+            continue
+
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            if last_content_chunk and content.startswith(last_content_chunk):
+                delta = content[len(last_content_chunk) :]
+                if delta:
+                    accumulated_content += delta
+            elif accumulated_content and content.startswith(accumulated_content):
+                delta = content[len(accumulated_content) :]
+                if delta:
+                    accumulated_content += delta
+            elif last_content_chunk and last_content_chunk.startswith(content):
+                # The stream repeated an earlier prefix; treat as no-op.
+                pass
+            else:
+                accumulated_content += content
+            last_content_chunk = content
+
+        reasoning_value = None
+        for key in ("reasoning", "thinking"):
+            value = message.get(key)
+            if isinstance(value, str) and value:
+                reasoning_value = value
+                break
+        if reasoning_value:
+            if last_reasoning_chunk and reasoning_value.startswith(last_reasoning_chunk):
+                delta = reasoning_value[len(last_reasoning_chunk) :]
+                if delta:
+                    accumulated_reasoning += delta
+            elif accumulated_reasoning and reasoning_value.startswith(accumulated_reasoning):
+                delta = reasoning_value[len(accumulated_reasoning) :]
+                if delta:
+                    accumulated_reasoning += delta
+            elif last_reasoning_chunk and last_reasoning_chunk.startswith(reasoning_value):
+                pass
+            else:
+                accumulated_reasoning += reasoning_value
+            last_reasoning_chunk = reasoning_value
 
     if last_payload is None:
         raise ValueError("Upstream response stream was empty")
 
-    if latest_content is not None:
-        merged = dict(last_payload)
-        merged["message"] = {"content": latest_content}
-        return merged
-
-    return last_payload
+    merged = dict(last_payload)
+    message = dict(merged.get("message") or {})
+    if accumulated_content:
+        message["content"] = accumulated_content
+    elif isinstance(message.get("content"), str):
+        # Preserve whatever content we last observed, even if empty string.
+        message["content"] = message.get("content")
+    if accumulated_reasoning:
+        message["reasoning"] = accumulated_reasoning
+    merged["message"] = message
+    return merged
 
 
 @bp.post("/chat")
@@ -269,16 +375,26 @@ def chat_invoke() -> Response:
         if hasattr(chat_logger, "info"):
             chat_logger.info("forwarding chat request to ollama (model=%s)", candidate)
 
+        request_payload: dict[str, Any] = {
+            "model": candidate,
+            "messages": prepared_messages,
+            "stream": True,
+            "system": system_prompt,
+        }
+        if _supports_json_format(candidate):
+            request_payload["format"] = "json"
+        else:
+            log_event(
+                "INFO",
+                "chat.json_disabled",
+                trace=trace_id,
+                model=candidate,
+            )
+
         try:
             response = requests.post(
                 endpoint,
-                json={
-                    "model": candidate,
-                    "messages": prepared_messages,
-                    "stream": True,
-                    "format": "json",
-                    "system": system_prompt,
-                },
+                json=request_payload,
                 stream=True,
                 timeout=120,
             )
@@ -353,6 +469,7 @@ def chat_invoke() -> Response:
                 closer()
 
         content = _extract_model_content(payload_json)
+        reasoning_text = _extract_model_reasoning(payload_json).strip()
         try:
             structured = _coerce_schema(content)
         except ValueError as exc:
@@ -362,6 +479,11 @@ def chat_invoke() -> Response:
                 "answer": content.strip(),
                 "citations": [],
             }
+            if reasoning_text:
+                structured["reasoning"] = reasoning_text
+        else:
+            if reasoning_text and not structured.get("reasoning"):
+                structured["reasoning"] = reasoning_text
 
         g.chat_model = candidate
         g.chat_fallback_used = attempt_index > 1
