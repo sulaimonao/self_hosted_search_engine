@@ -27,10 +27,20 @@ interface ChatPanelProps {
 }
 
 function formatTimestamp(value: string) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return "";
+  }
+
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
   try {
-    return new Date(value).toLocaleTimeString();
+    return date.toLocaleTimeString();
   } catch {
-    return value;
+    return "";
   }
 }
 
