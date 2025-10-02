@@ -7,7 +7,7 @@ required.
 
 **Quick facts**
 - Backend is API-only; all UI is delivered by the Next.js app at
-  [http://127.0.0.1:3100](http://127.0.0.1:3100).
+  [http://localhost:3100](http://localhost:3100).
 - The backend root `/` responds with `{"ok":true,"service":"backend-api","ui":"frontend-only"}`;
   every other non-`/api/*` path returns a JSON 404.
 
@@ -122,7 +122,7 @@ make dev
 - Installs frontend dependencies on demand (skips work when `node_modules`
   already exists) and starts the Next.js dev server (binds to `0.0.0.0` and is
   reachable at `http://localhost:3100`; override with `FRONTEND_PORT`). Point
-  your browser at `http://127.0.0.1:3100`; all `/api/*` calls proxy to the
+  your browser at `http://localhost:3100`; all `/api/*` calls proxy to the
   Flask API at `http://127.0.0.1:5050`.
 - Streams frontend dev instrumentation (via `/api/dev/log`) into the backend
   terminal so you can observe chat/search actions alongside Flask logs.
