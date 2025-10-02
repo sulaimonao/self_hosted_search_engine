@@ -117,7 +117,7 @@ const DEFAULT_CHAT_MESSAGES: ChatMessage[] = [
     role: "assistant",
     content:
       "Welcome! Paste a URL or ask me to search. I will only crawl when you approve each step.",
-    createdAt: new Date().toISOString(),
+    createdAt: "",
   },
 ];
 
@@ -236,6 +236,22 @@ export function AppShell() {
 
   useEffect(() => {
     devlog({ evt: "ui.mount" });
+  }, []);
+
+  useEffect(() => {
+    setChatMessages((messages) => {
+      if (messages.length === 0) {
+        return messages;
+      }
+
+      const [first, ...rest] = messages;
+      const timestamp = typeof first.createdAt === "string" ? first.createdAt.trim() : "";
+      if (timestamp && !Number.isNaN(new Date(timestamp).getTime())) {
+        return messages;
+      }
+
+      return [{ ...first, createdAt: new Date().toISOString() }, ...rest];
+    });
   }, []);
 
   const navigateTo = useCallback(
