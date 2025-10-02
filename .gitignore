@@ -26,6 +26,7 @@ _MAIN_0.toc
 !backend/app/api/index.py
 !backend/app/api/shadow.py
 !backend/app/api/discovery.py
+!backend/app/api/plan.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
