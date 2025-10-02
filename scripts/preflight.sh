@@ -18,7 +18,7 @@ echo "[preflight] Ollama"
 if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
   echo "  - reachable"
 else
-  echo "  - NOT reachable (start with 'ollama serve' in another terminal)"; exit 1
+  echo "  - NOT reachable (start with 'ollama serve' for LLM features; continuing)"
 fi
 
 echo "[preflight] Backend health (if running)"

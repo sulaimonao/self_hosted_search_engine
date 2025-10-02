@@ -18,10 +18,32 @@ BACKEND_CMD_PATTERN := [p]ython -m backend.app
 FRONTEND_CMD_PATTERN := [n]ext dev
 
 setup:
-	@test -d "$(VENV_DIR)" || $(PY) -m venv "$(VENV_DIR)"
-	@$(PIP) -q install -U pip wheel
-	@if [ -f requirements.txt ]; then $(PIP) -q install -r requirements.txt; fi
-	@if [ -f requirements-dev.txt ]; then $(PIP) -q install -r requirements-dev.txt; fi
+	@py_cmd="$${PY:-python3.11}"; \
+	if ! command -v "$$py_cmd" >/dev/null 2>&1; then \
+	  for candidate in python3 python; do \
+	    if command -v "$$candidate" >/dev/null 2>&1; then \
+	      py_cmd="$$candidate"; \
+	      break; \
+	    fi; \
+	  done; \
+	fi; \
+	if ! command -v "$$py_cmd" >/dev/null 2>&1; then \
+	  echo "✖ No suitable Python interpreter found (tried $$py_cmd, python3, python)."; \
+	  echo "  Set PY=/path/to/python if installed elsewhere."; \
+	  exit 1; \
+	fi; \
+	if [ ! -d "$(VENV_DIR)" ]; then \
+	  echo "Creating virtualenv at $(VENV_DIR) with $$py_cmd"; \
+	  "$$py_cmd" -m venv "$(VENV_DIR)"; \
+	fi; \
+	echo "Installing Python dependencies..."; \
+	"$(VENV_PY)" -m pip install -U pip wheel >/dev/null; \
+	if [ -f requirements.txt ]; then \
+	  "$(VENV_PY)" -m pip install -r requirements.txt; \
+	fi; \
+	if [ -f requirements-dev.txt ]; then \
+	  "$(VENV_PY)" -m pip install -r requirements-dev.txt; \
+	fi
 
 bootstrap:
 	@bash scripts/bootstrap.sh
@@ -43,8 +65,8 @@ dev:
 	  missing=1; \
 	fi; \
 	if [ $$missing -eq 1 ]; then \
-	  echo "▶ Running make bootstrap (first-run setup)…"; \
-	  $(MAKE) bootstrap; \
+	  echo "▶ Running make first-run (initial setup)…"; \
+	  $(MAKE) first-run; \
 	fi
 	@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
 	@echo "▶ Starting API (Flask)…"
