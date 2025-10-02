@@ -331,18 +331,38 @@ class VectorStore:
         return len(vector)
 
     def query(
-        self, vector: Sequence[float], k: int, similarity_threshold: float
+        self,
+        vector: Sequence[float],
+        k: int,
+        similarity_threshold: float,
+        *,
+        filters: Mapping[str, Any] | None = None,
     ) -> list[RetrievedChunk]:
         if k <= 0:
             return []
         if not vector:
             return []
         query_embedding = [self._ensure_embedding(vector)]
+        sanitized_filters: dict[str, str | int | float | bool] = {}
+        where_clause: dict[str, Any] | None = None
+        if filters:
+            sanitized_filters = self._sanitize_metadata(dict(filters))
+            if sanitized_filters:
+                if len(sanitized_filters) == 1:
+                    key, value = next(iter(sanitized_filters.items()))
+                    where_clause = {key: value}
+                else:
+                    where_clause = {
+                        "$and": [
+                            {key: value} for key, value in sanitized_filters.items()
+                        ]
+                    }
         with self._collection_lock:
             results = self._collection.query(
                 query_embeddings=query_embedding,
                 n_results=k,
                 include=["metadatas", "documents", "distances"],
+                where=where_clause,
             )
         ids = results.get("ids") or []
         if not ids:
@@ -356,6 +376,10 @@ class VectorStore:
                 continue
             similarity = 1.0 - float(distance) if distance is not None else 0.0
             if similarity < similarity_threshold:
+                continue
+            if sanitized_filters and any(
+                metadata.get(key) != value for key, value in sanitized_filters.items()
+            ):
                 continue
             retrieved.append(
                 RetrievedChunk(

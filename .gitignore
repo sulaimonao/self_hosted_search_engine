@@ -40,3 +40,4 @@ _MAIN_0.toc
 !tests/api/test_shadow_api.py
 !tests/e2e/test_agent_browser.py
 !tests/backend/test_local_discovery.py
+!tests/backend/test_vector_index_filters.py

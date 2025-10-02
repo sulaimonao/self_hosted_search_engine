@@ -203,15 +203,26 @@ class VectorIndexService:
         k: int = 5,
         filters: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        del filters  # currently unused but reserved for future metadata filters
         cleaned = (query or "").strip()
         if not cleaned:
             return []
         vector = self._embed_query(cleaned)
         if not vector:
             return []
+        sanitized_filters: dict[str, Any] | None = None
+        if filters:
+            sanitized_filters = {
+                str(key): value
+                for key, value in filters.items()
+                if value is not None
+            }
+            if not sanitized_filters:
+                sanitized_filters = None
         retrieved = self._vector_store.query(
-            vector, max(1, int(k)), self._similarity_threshold
+            vector,
+            max(1, int(k)),
+            self._similarity_threshold,
+            filters=sanitized_filters,
         )
         hits: list[SearchHit] = []
         for item in retrieved:

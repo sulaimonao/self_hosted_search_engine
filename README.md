@@ -309,6 +309,7 @@ Key endpoints (all under `/api/` unless otherwise noted):
 | Endpoint | Description |
 | --- | --- |
 | `POST /api/tools/search_index` | Blend vector + BM25 retrieval, falling back to BM25 when embeddings are unavailable. |
+| `POST /api/index/search` | Query the vector index with a semantic embedding (`query`) and optional `filters` mapping to constrain metadata fields (e.g. `{ "category": "news" }`). |
 | `POST /api/tools/enqueue_crawl` | Queue pages for polite background crawling with dedupe metadata (`topic`, `reason`, `source_task_id`). |
 | `POST /api/tools/fetch_page` | Fetch and normalize a single page, storing it under `data/agent/documents/`. |
 | `POST /api/tools/reindex` | Incrementally embed + upsert changed documents into the agent vector store (`data/agent/vector_store/`). |
