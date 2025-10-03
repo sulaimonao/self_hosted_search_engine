@@ -175,12 +175,20 @@ def trigger_refresh():
     except ValueError as exc:
         return jsonify({"error": "invalid_query", "detail": str(exc)}), 400
 
-    response = {"job_id": job_id, "status": status, "created": created}
+    response: dict[str, Any] = {
+        "status": "queued",
+        "seed_ids": manual_seed_ids,
+        "created": bool(created),
+    }
+    if job_id:
+        response["job_id"] = job_id
     if not created:
         response["deduplicated"] = True
-    if manual_seed_ids:
-        response["seed_ids"] = manual_seed_ids
-    return jsonify(response), 202 if created else 200
+    if isinstance(status, dict):
+        message = status.get("message")
+        if isinstance(message, str) and message.strip():
+            response["detail"] = message.strip()
+    return jsonify(response), 202
 
 
 @bp.get("/status")

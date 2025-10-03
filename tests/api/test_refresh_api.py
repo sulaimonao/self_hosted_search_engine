@@ -82,8 +82,10 @@ def test_refresh_flow_and_status_polling():
     response = client.post("/api/refresh", json={"query": "manual refresh"})
     assert response.status_code == 202
     payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert payload["seed_ids"] == []
     assert payload["created"] is True
-    job_id = payload["job_id"]
+    job_id = payload.get("job_id")
     assert isinstance(job_id, str)
 
     deadline = time.time() + 2
@@ -154,8 +156,9 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
     gate.wait(timeout=1)
 
     second = client.post("/api/refresh", json={"query": "dedupe me"})
-    assert second.status_code == 200
+    assert second.status_code == 202
     second_payload = second.get_json()
+    assert second_payload["status"] == "queued"
     assert second_payload["job_id"] == job_id
     assert second_payload["created"] is False
     assert second_payload["deduplicated"] is True
@@ -163,6 +166,7 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
     forced = client.post("/api/refresh", json={"query": "dedupe me", "force": True})
     assert forced.status_code == 202
     forced_payload = forced.get_json()
+    assert forced_payload["status"] == "queued"
     assert forced_payload["created"] is True
     assert forced_payload["job_id"] != job_id
 

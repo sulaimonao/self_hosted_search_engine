@@ -357,7 +357,7 @@ Key endpoints (all under `/api/` unless otherwise noted):
 | `POST /api/tools/reindex` | Incrementally embed + upsert changed documents into the agent vector store (`data/agent/vector_store/`). |
 | `GET /api/tools/status` | Return counters for the frontier queue and vector store. |
 | `POST /api/tools/agent/turn` | Run the full policy loop (search → fetch ≤3 pages → reindex → synthesize answer with citations). |
-| `POST /api/refresh` | Trigger a focused crawl for the supplied query and optional LLM model override. |
+| `POST /api/refresh` | Trigger a focused crawl for the supplied query or explicit `seed_ids`; replies with `202` and a JSON status payload. |
 | `GET /api/refresh/status` | Report background crawl state (`queued`, `crawling`, `indexing`) plus counters. |
 | `GET /api/llm/status` | Report Ollama installation status, reachability, and active host. |
 | `GET /api/llm/models` | List locally available chat-capable Ollama models. |
@@ -467,8 +467,28 @@ curl -X POST http://127.0.0.1:5050/api/refresh \
 curl "http://127.0.0.1:5050/api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices"
 ```
 
-`POST` returns `{ job_id, status, created }` so callers can deduplicate
-concurrent requests. `GET` yields the current snapshot (`state`, `progress`, and
+`POST` now guarantees a JSON response, even when the crawl is merely queued. A
+successful request returns HTTP 202 with
+`{"status":"queued","seed_ids":[...],"job_id":"<hex>","created":true}`. When a
+matching job is already running the same payload is returned with
+`"deduplicated": true`. Always inspect the HTTP status before piping the body to
+`jq`—error responses are JSON too, but failed requests still carry meaningful
+status codes.
+
+Prefer the helper script during development:
+
+```bash
+scripts/refresh.sh workspace-example-seed
+```
+
+The script builds the required payload, POSTs it to `/api/refresh`, and prints
+both the HTTP status and JSON body in a shell-friendly format.
+
+**Tip:** Don’t pipe `/api/refresh` directly into `jq` unless you have confirmed
+the response is JSON (status 202/200). Validation failures still return JSON
+errors, but scripts should always check the HTTP status first.
+
+`GET /api/refresh/status` yields the current snapshot (`state`, `progress`, and
 counters for seeds/pages/docs). When no `job_id` is supplied the endpoint falls
 back to the most recent run for the supplied query or lists active jobs.
 

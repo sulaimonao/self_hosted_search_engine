@@ -99,7 +99,7 @@ Paste an absolute URL at any time to jump directly into the preview pane without
 
 ## Workspace browsing & crawling
 
-- External URLs now open inside the dedicated `/workspace` route. The preview header mirrors the omnibox history controls and exposes a **Crawl domain** shortcut.
+- External URLs now open inside the dedicated `/workspace` route. The preview header mirrors the omnibox history controls and exposes a **Crawl domain** shortcut whose label adapts to the active scope (page vs. domain).
 - Loading a page triggers a background call to `/api/extract?url=...`; the response auto-populates the Page context panel so chat immediately has server-side context (text plus optional screenshot).
-- Selecting **Crawl domain** posts `{ urls: [url], scope: "domain" }` to `/api/seeds`, then forces `/api/refresh` with `use_llm:false`. Progress is surfaced by polling `/api/index/stats` until the indexed document count increases.
-- The Local Search input stays disabled until `/api/index/stats` reports at least one document. When enabled it first attempts `GET /api/search?q=...` and gracefully falls back to `POST /api/search` for compatibility with older servers.
+- Selecting **Crawl** resolves the latest seed registry revision, persists the seed via `/api/seeds`, and posts `{ "query": { "seed_ids": ["<seed-id>"] }, "use_llm": false, "force": true }` to `/api/refresh`. Job events stream back through the `/api/jobs` poller so the UI can surface "Queued", "Running", or failure states without ever touching the legacy `/api/index/*` endpoints.
+- The local search box now stays active throughout a session—if the index is empty the backend simply returns zero results.
