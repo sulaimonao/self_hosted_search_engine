@@ -38,7 +38,6 @@ import {
   extractSelection,
   fetchModelInventory,
   fetchSeeds,
-  fetchIndexStats,
   searchIndex,
   reindexUrl,
   saveSeed,
@@ -179,16 +178,12 @@ function createInitialSearchState(): SearchState {
 
 interface CrawlMonitorState {
   running: boolean;
-  startDocuments: number;
-  currentDocuments: number;
+  statusText: string | null;
+  jobId: string | null;
+  targetUrl: string | null;
+  scope: CrawlScope | null;
   error: string | null;
   lastUpdated: number | null;
-}
-
-interface IndexStateSnapshot {
-  documents: number;
-  pending: number | null;
-  lastUpdatedAt: number | null;
 }
 
 interface AppShellProps {
@@ -246,15 +241,12 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
   const [discoveryItems, setDiscoveryItems] = useState<DiscoveryPreview[]>([]);
   const [discoveryBusyIds, setDiscoveryBusyIds] = useState<Set<string>>(() => new Set());
-  const [indexState, setIndexState] = useState<IndexStateSnapshot>({
-    documents: 0,
-    pending: null,
-    lastUpdatedAt: null,
-  });
   const [crawlMonitor, setCrawlMonitor] = useState<CrawlMonitorState>({
     running: false,
-    startDocuments: 0,
-    currentDocuments: 0,
+    statusText: null,
+    jobId: null,
+    targetUrl: null,
+    scope: null,
     error: null,
     lastUpdated: null,
   });
@@ -270,7 +262,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
   const shadowNotifiedRef = useRef(new Set<string>());
   const discoveryErrorNotifiedRef = useRef(false);
-  const indexStateRef = useRef<IndexStateSnapshot>(indexState);
 
   const agentEnabled = AGENT_ENABLED;
   const inAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
@@ -294,7 +285,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const currentUrl = previewState.history[previewState.index];
   const currentUrlIsHttp = isHttpUrl(currentUrl);
-  const hasDocuments = indexState.documents > 0;
+  const hasDocuments = true;
+  const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
   const shadowModeEnabled = SHADOW_MODE_ENABLED;
 
   const pushToast = useCallback(
@@ -312,31 +304,9 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     setToasts((items) => items.filter((toast) => toast.id !== id));
   }, []);
 
-  const updateIndexStats = useCallback(async () => {
-    try {
-      const stats = await fetchIndexStats();
-      setIndexState(() => {
-        const snapshot: IndexStateSnapshot = {
-          documents: stats.documents ?? 0,
-          pending: typeof stats.pending === "number" ? stats.pending : null,
-          lastUpdatedAt: stats.lastUpdatedAt ?? null,
-        };
-        indexStateRef.current = snapshot;
-        return snapshot;
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? "Index stats failed");
-      devlog({ evt: "ui.index.stats_error", message });
-    }
-  }, []);
-
   useEffect(() => {
     devlog({ evt: "ui.mount" });
   }, []);
-
-  useEffect(() => {
-    void updateIndexStats();
-  }, [updateIndexStats]);
 
   useEffect(() => {
     setPreviewState((state) => {
@@ -359,11 +329,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     setPageContext(initialContext ?? null);
     setIncludeContext(Boolean(initialContext));
   }, [initialContext]);
-
-  useEffect(() => {
-    indexStateRef.current = indexState;
-  }, [indexState]);
-
 
   useEffect(() => {
     setChatMessages((messages) => {
@@ -603,7 +568,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       return;
     }
 
-    const startDocs = indexStateRef.current.documents ?? 0;
+    const scope = defaultScope === "page" ? "page" : "domain";
+    const scopeLabel = scope === "page" ? "page" : "domain";
     const domainLabel = (() => {
       try {
         return new URL(targetUrl).hostname;
@@ -611,11 +577,14 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         return targetUrl;
       }
     })();
+    const crawlLabel = scope === "page" ? targetUrl : domainLabel;
 
     setCrawlMonitor({
       running: true,
-      startDocuments: startDocs,
-      currentDocuments: startDocs,
+      statusText: `Queueing ${scopeLabel} crawl for ${crawlLabel}…`,
+      jobId: null,
+      targetUrl,
+      scope,
       error: null,
       lastUpdated: Date.now(),
     });
@@ -623,78 +592,100 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     appendLog({
       id: uid(),
       label: "Crawl requested",
-      detail: `Domain crawl for ${domainLabel}`,
+      detail: `${scopeLabel === "page" ? "Page" : "Domain"} crawl for ${crawlLabel}`,
       status: "info",
       timestamp: new Date().toISOString(),
     });
 
     try {
-      const seedResult = await createDomainSeed(targetUrl);
+      const seedResult = await createDomainSeed(targetUrl, scope);
       if (seedResult.registry) {
         applySeedRegistry(seedResult.registry);
       }
+
+      const seedRecord = seedResult.seed;
+      if (!seedRecord) {
+        throw new Error("Unable to resolve seed id after creation");
+      }
+
       if (seedResult.duplicate) {
-        pushToast("Domain already queued. Refreshing index…");
+        pushToast(`${scopeLabel === "page" ? "Page" : "Domain"} already queued. Forcing refresh…`);
       } else {
-        pushToast(`Queued ${domainLabel} for crawling`);
+        pushToast(`Queued ${crawlLabel} for crawling`);
       }
 
-      await triggerRefresh({ useLlm: false, force: true });
+      const refresh = await triggerRefresh({
+        seedIds: [seedRecord.id],
+        useLlm: false,
+        force: true,
+      });
 
-      let indexedDocs = startDocs;
-      const deadline = Date.now() + 120000;
-      let indexed = false;
+      const jobDescription =
+        scope === "page"
+          ? `Focused crawl for page ${crawlLabel}`
+          : `Focused crawl for ${crawlLabel}`;
 
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        await updateIndexStats();
-        indexedDocs = indexStateRef.current.documents ?? 0;
-        setCrawlMonitor((state) => ({
-          ...state,
-          currentDocuments: indexedDocs,
+      if (refresh.jobId) {
+        const initialStatus = refresh.deduplicated
+          ? `Crawl already in progress for ${crawlLabel}`
+          : refresh.created
+          ? `Crawl queued for ${crawlLabel}`
+          : `Crawl request accepted for ${crawlLabel}`;
+
+        setCrawlMonitor({
+          running: true,
+          statusText: initialStatus,
+          jobId: refresh.jobId,
+          targetUrl,
+          scope,
+          error: null,
           lastUpdated: Date.now(),
-        }));
-        if (indexedDocs > startDocs) {
-          indexed = true;
-          break;
-        }
-      }
-
-      if (indexed) {
-        const gained = indexedDocs - startDocs;
-        pushToast(`Indexed ${gained} new document${gained === 1 ? "" : "s"}`, { variant: "success" });
-        appendLog({
-          id: uid(),
-          label: "Crawl complete",
-          detail: `Indexed ${gained} new document${gained === 1 ? "" : "s"} for ${domainLabel}`,
-          status: "success",
-          timestamp: new Date().toISOString(),
         });
-        setCrawlMonitor((state) => ({
-          ...state,
-          running: false,
-          currentDocuments: indexedDocs,
-          error: null,
-          lastUpdated: Date.now(),
-        }));
+
+        registerJob(refresh.jobId, jobDescription, {
+          onStatus: (status) => {
+            setCrawlMonitor({
+              running: status.state === "queued" || status.state === "running",
+              statusText:
+                status.state === "queued"
+                  ? `Crawl queued for ${crawlLabel}`
+                  : status.state === "running"
+                  ? status.description ?? `Crawl running for ${crawlLabel}`
+                  : status.state === "done"
+                  ? `Crawl complete for ${crawlLabel}`
+                  : `Crawl failed for ${crawlLabel}`,
+              jobId: refresh.jobId,
+              targetUrl,
+              scope,
+              error: status.state === "error" ? status.error ?? "Crawl failed" : null,
+              lastUpdated: Date.now(),
+            });
+          },
+        });
       } else {
-        setCrawlMonitor((state) => ({
-          ...state,
+        setCrawlMonitor({
           running: false,
-          currentDocuments: indexedDocs,
+          statusText: refresh.deduplicated
+            ? `Crawl already in progress for ${crawlLabel}`
+            : `Crawl request submitted for ${crawlLabel}`,
+          jobId: null,
+          targetUrl,
+          scope,
           error: null,
           lastUpdated: Date.now(),
-        }));
-        pushToast("Crawl running. Index will continue to update in the background.");
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? "Crawl failed");
-      setCrawlMonitor((state) => ({
-        ...state,
+      setCrawlMonitor({
         running: false,
+        statusText: `Crawl failed for ${crawlLabel}`,
+        jobId: null,
+        targetUrl,
+        scope,
         error: message,
         lastUpdated: Date.now(),
-      }));
+      });
       pushToast(message, { variant: "destructive" });
       appendLog({
         id: uid(),
@@ -703,17 +694,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         status: "error",
         timestamp: new Date().toISOString(),
       });
-    } finally {
-      await updateIndexStats();
     }
   }, [
     applySeedRegistry,
     appendLog,
     createDomainSeed,
     currentUrl,
+    defaultScope,
     pushToast,
+    registerJob,
     triggerRefresh,
-    updateIndexStats,
   ]);
 
   const refreshModels = useCallback(async () => {
@@ -880,8 +870,12 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     [appendLog, applySeedRegistry, ensureSeedRevision, handleSeedError]
   );
 
+  interface RegisterJobOptions {
+    onStatus?: (status: JobStatusSummary) => void;
+  }
+
   const registerJob = useCallback(
-    (jobId: string, description: string) => {
+    (jobId: string, description: string, options: RegisterJobOptions = {}) => {
       setJobSummaries((jobs) => {
         if (jobs.some((job) => job.jobId === jobId)) {
           return jobs.map((job) =>
@@ -909,6 +903,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                 : job
             )
           );
+          options.onStatus?.(status);
           if (status.state === "done" || status.state === "error") {
             appendLog({
               id: uid(),
@@ -1890,6 +1885,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               onCrawlDomain={handleCrawlDomain}
               crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
               crawlStatus={crawlMonitor}
+              crawlLabel={crawlButtonLabel}
             />
           ) : (
             <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">

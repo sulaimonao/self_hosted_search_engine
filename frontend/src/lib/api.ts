@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatResponsePayload,
   CrawlScope,
+  SeedRecord,
   SeedRegistryResponse,
   JobStatusSummary,
   ModelStatus,
@@ -29,13 +30,6 @@ const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
-
-export interface IndexStats {
-  documents: number;
-  indexedDocuments?: number | null;
-  pending?: number | null;
-  lastUpdatedAt?: number | null;
-}
 
 export interface SearchIndexOptions {
   signal?: AbortSignal;
@@ -63,35 +57,6 @@ function coerceBoolean(input: unknown): boolean {
     return normalized === "1" || normalized === "true" || normalized === "yes";
   }
   return false;
-}
-
-export async function fetchIndexStats(): Promise<IndexStats> {
-  const response = await fetch(api("/api/index/stats"));
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Index stats request failed (${response.status})`);
-  }
-
-  const payload = (await response.json()) as Record<string, unknown>;
-  const documents =
-    coerceNumber(payload.documents) ??
-    coerceNumber(payload.indexed_documents) ??
-    coerceNumber(payload.indexedDocs) ??
-    0;
-  const pending =
-    coerceNumber(payload.pending) ??
-    coerceNumber(payload.pending_documents ?? payload.pendingDocuments) ??
-    null;
-  const lastUpdated =
-    coerceNumber(payload.updated_at ?? payload.updatedAt ?? payload.last_updated ?? payload.lastUpdated) ??
-    null;
-
-  return {
-    documents,
-    indexedDocuments: documents,
-    pending,
-    lastUpdatedAt: lastUpdated,
-  };
 }
 
 const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
@@ -627,19 +592,64 @@ export async function startCrawlJob(request: CrawlJobRequest): Promise<CrawlJobR
 }
 
 export interface RefreshOptions {
-  query?: string;
+  query?: string | Record<string, unknown>;
+  seedIds?: string[];
   useLlm?: boolean;
   force?: boolean;
   model?: string | null;
+  budget?: number;
+  depth?: number;
+}
+
+export interface RefreshResponse {
+  jobId: string | null;
+  status: string | null;
+  created: boolean;
+  deduplicated: boolean;
+  raw: Record<string, unknown>;
+}
+
+function coercePositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" && typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  const normalized = Math.max(0, Math.floor(parsed));
+  return normalized > 0 ? normalized : undefined;
 }
 
 export async function triggerRefresh(
   options: RefreshOptions = {},
-): Promise<Record<string, unknown> | null> {
+): Promise<RefreshResponse> {
   const body: Record<string, unknown> = {};
-  if (typeof options.query === "string" && options.query.trim().length > 0) {
-    body.query = options.query.trim();
+
+  const seedIds = Array.isArray(options.seedIds)
+    ? options.seedIds
+        .map((id) => (typeof id === "string" ? id.trim() : String(id || "").trim()))
+        .filter((id) => id.length > 0)
+    : [];
+
+  let queryPayload: unknown;
+  if (typeof options.query === "string") {
+    const trimmed = options.query.trim();
+    if (trimmed.length > 0) {
+      queryPayload = trimmed;
+    }
+  } else if (options.query && typeof options.query === "object") {
+    queryPayload = options.query;
   }
+
+  if (queryPayload === undefined && seedIds.length > 0) {
+    queryPayload = { seed_ids: seedIds };
+  }
+
+  if (queryPayload !== undefined) {
+    body.query = queryPayload;
+  }
+
   if (typeof options.useLlm === "boolean") {
     body.use_llm = options.useLlm;
     body.llm = options.useLlm;
@@ -649,6 +659,14 @@ export async function triggerRefresh(
   }
   if (typeof options.model === "string" && options.model.trim().length > 0) {
     body.model = options.model.trim();
+  }
+  const budget = coercePositiveInteger(options.budget);
+  if (typeof budget === "number") {
+    body.budget = budget;
+  }
+  const depth = coercePositiveInteger(options.depth);
+  if (typeof depth === "number") {
+    body.depth = depth;
   }
 
   const response = await fetch(api("/api/refresh"), {
@@ -662,11 +680,23 @@ export async function triggerRefresh(
     throw new Error(text || `Refresh request failed (${response.status})`);
   }
 
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    return null;
-  }
-  return (await response.json()) as Record<string, unknown>;
+  const payload = (await response.json()) as Record<string, unknown>;
+  const jobIdRaw = payload.job_id ?? (payload as { jobId?: unknown }).jobId;
+  const jobId = typeof jobIdRaw === "string" && jobIdRaw.trim().length > 0 ? jobIdRaw.trim() : null;
+  const statusValue = payload.status ?? (payload as { state?: unknown }).state;
+  const status = typeof statusValue === "string" && statusValue.trim().length > 0 ? statusValue.trim() : null;
+  const createdValue = payload.created;
+  const created = typeof createdValue === "boolean" ? createdValue : Boolean(createdValue);
+  const dedupValue = payload.deduplicated;
+  const deduplicated = typeof dedupValue === "boolean" ? dedupValue : Boolean(dedupValue);
+
+  return {
+    jobId,
+    status,
+    created,
+    deduplicated,
+    raw: payload,
+  };
 }
 
 export async function reindexUrl(url: string): Promise<unknown> {
@@ -1031,77 +1061,93 @@ export async function saveSeed(request: SaveSeedRequest): Promise<SeedRegistryRe
 
 export interface SeedEnqueueResult {
   registry: SeedRegistryResponse | null;
+  seed: SeedRecord | null;
   duplicate: boolean;
   message?: string | null;
 }
 
-export async function createDomainSeed(url: string): Promise<SeedEnqueueResult> {
+function normalizeSeedUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.protocol || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+      return trimmed.toLowerCase();
+    }
+    const pathname = parsed.pathname ? parsed.pathname.replace(/\/+$/, "") : "";
+    const search = parsed.search ?? "";
+    const host = parsed.host.toLowerCase();
+    const composed = `${parsed.protocol}//${host}${pathname}${search}`;
+    return composed.replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
+}
+
+function findSeedForUrl(
+  registry: SeedRegistryResponse,
+  targetUrl: string,
+): SeedRecord | null {
+  const normalizedTarget = normalizeSeedUrl(targetUrl);
+  if (!normalizedTarget) {
+    return null;
+  }
+  for (const seed of registry.seeds) {
+    const url = typeof seed.url === "string" ? seed.url : null;
+    if (url && normalizeSeedUrl(url) === normalizedTarget) {
+      return seed;
+    }
+    if (Array.isArray(seed.entrypoints)) {
+      for (const entry of seed.entrypoints) {
+        if (typeof entry === "string" && normalizeSeedUrl(entry) === normalizedTarget) {
+          return seed;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export async function createDomainSeed(url: string, scope: CrawlScope = "domain"): Promise<SeedEnqueueResult> {
   const normalized = url.trim();
   if (!normalized) {
     throw new Error("URL is required");
   }
 
-  const requestBody = { urls: [normalized], scope: "domain" };
+  const snapshot = await fetchSeeds();
+  const revision = snapshot.revision;
+
   try {
-    const response = await fetch(api("/api/seeds"), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(requestBody),
+    const registry = await saveSeed({
+      action: "create",
+      revision,
+      seed: { url: normalized, scope },
     });
-
-    if (response.ok) {
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        const payload = (await response.json()) as Record<string, unknown>;
-        if (typeof payload.revision === "string" && Array.isArray(payload.seeds)) {
-          return {
-            registry: payload as SeedRegistryResponse,
-            duplicate: false,
-          };
-        }
-      }
-      return { registry: null, duplicate: false };
-    }
-
-    const raw = await response.text();
-    let message = raw;
-    try {
-      const parsed = raw ? (JSON.parse(raw) as { error?: string }) : null;
-      if (parsed?.error) {
-        message = parsed.error;
-      }
-    } catch {
-      // ignore JSON parse errors
-    }
-
-    if (response.status === 409) {
-      return { registry: null, duplicate: true, message };
-    }
-
-    if (response.status === 400 && message.toLowerCase().includes("revision")) {
-      const snapshot = await fetchSeeds();
-      try {
-        const registry = await saveSeed({
-          action: "create",
-          revision: snapshot.revision,
-          seed: { url: normalized, scope: "domain" },
-        });
-        return { registry, duplicate: false };
-      } catch (error) {
-        const status = (error as { status?: number }).status;
-        if (status === 409) {
-          return { registry: null, duplicate: true, message: (error as Error).message };
-        }
-        throw error;
-      }
-    }
-
-    throw new Error(message || `Seed request failed (${response.status})`);
+    const seed = findSeedForUrl(registry, normalized);
+    return {
+      registry,
+      seed,
+      duplicate: false,
+    };
   } catch (error) {
-    if (error instanceof Error) {
-      throw error;
+    const err = error instanceof Error ? error : new Error(String(error));
+    const status = (error as { status?: number }).status;
+    if (status === 409) {
+      let registry: SeedRegistryResponse | null = null;
+      try {
+        registry = await fetchSeeds();
+      } catch {
+        registry = snapshot;
+      }
+      const seed = registry ? findSeedForUrl(registry, normalized) : null;
+      return {
+        registry,
+        seed,
+        duplicate: true,
+        message: err.message,
+      };
     }
-    throw new Error(String(error ?? "Unable to queue domain seed"));
+    throw err;
   }
 }
 

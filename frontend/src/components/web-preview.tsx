@@ -20,6 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { CrawlScope } from "@/lib/types";
 
 const DEFAULT_URL = "https://duckduckgo.com";
 
@@ -54,11 +55,14 @@ interface WebPreviewProps {
   crawlDisabled?: boolean;
   crawlStatus?: {
     running: boolean;
-    startDocuments: number;
-    currentDocuments: number;
+    statusText: string | null;
+    jobId: string | null;
+    targetUrl: string | null;
+    scope: CrawlScope | null;
     error: string | null;
     lastUpdated: number | null;
   } | null;
+  crawlLabel?: string;
 }
 
 export function WebPreview({
@@ -75,6 +79,7 @@ export function WebPreview({
   onCrawlDomain,
   crawlDisabled = false,
   crawlStatus = null,
+  crawlLabel = "Crawl domain",
 }: WebPreviewProps) {
   const [addressValue, setAddressValue] = useState(url || DEFAULT_URL);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -210,23 +215,23 @@ export function WebPreview({
             {crawlStatus?.running ? (
               <>
                 <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                Crawling…
+                {crawlStatus.statusText ?? "Crawling…"}
               </>
             ) : (
               <>
                 <RefreshCcw className="mr-1 h-4 w-4" />
-                Crawl domain
+                {crawlLabel}
               </>
             )}
           </Button>
         ) : null}
       </div>
-      {crawlStatus?.running ? (
-        <div className="px-3 text-xs text-muted-foreground">
-          {domainHint ? `Crawling ${domainHint}` : "Crawling domain"} · {crawlStatus.currentDocuments.toLocaleString()} docs indexed
-        </div>
-      ) : crawlStatus?.error ? (
+      {crawlStatus?.error ? (
         <div className="px-3 text-xs text-destructive">{crawlStatus.error}</div>
+      ) : crawlStatus?.statusText ? (
+        <div className="px-3 text-xs text-muted-foreground">
+          {crawlStatus.statusText}
+        </div>
       ) : null}
       <div className="relative flex-1">
         <iframe

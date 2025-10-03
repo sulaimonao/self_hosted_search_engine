@@ -2,13 +2,79 @@
 
 from __future__ import annotations
 
+from typing import Any, Iterable, Sequence
+
 from flask import Blueprint, current_app, jsonify, request
+
+from backend.app.api import seeds as seeds_api
 
 bp = Blueprint("refresh_api", __name__, url_prefix="/api/refresh")
 
 
 def _get_worker():
     return current_app.config.get("REFRESH_WORKER")
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return [candidate] if candidate else []
+    if isinstance(value, (list, tuple, set)):
+        cleaned: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                candidate = item.strip()
+                if candidate:
+                    cleaned.append(candidate)
+        return cleaned
+    return []
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _resolve_seed_urls(seed_ids: Sequence[str]) -> tuple[list[str], list[str]]:
+    if not seed_ids:
+        return [], []
+
+    with seeds_api._LOCK:
+        registry, _ = seeds_api._read_registry()
+    records = seeds_api._collect_seeds(registry)
+    lookup = {str(entry.get("id")): entry for entry in records if entry.get("id")}
+
+    urls: list[str] = []
+    missing: list[str] = []
+    for identifier in seed_ids:
+        record = lookup.get(identifier)
+        if not record:
+            missing.append(identifier)
+            continue
+        url_value = record.get("url")
+        if isinstance(url_value, str) and url_value.strip():
+            urls.append(url_value.strip())
+            continue
+        entrypoints = record.get("entrypoints")
+        resolved: str | None = None
+        if isinstance(entrypoints, str) and entrypoints.strip():
+            resolved = entrypoints.strip()
+        elif isinstance(entrypoints, Sequence):
+            for candidate in entrypoints:
+                if isinstance(candidate, str) and candidate.strip():
+                    resolved = candidate.strip()
+                    break
+        if resolved:
+            urls.append(resolved)
+        else:
+            missing.append(identifier)
+    return urls, missing
 
 
 @bp.post("")
@@ -18,8 +84,45 @@ def trigger_refresh():
         return jsonify({"error": "refresh_unavailable"}), 503
 
     payload = request.get_json(silent=True) or {}
-    query = (payload.get("query") or "").strip()
-    if not query:
+    raw_query = payload.get("query")
+
+    manual_seed_ids: list[str] = []
+    manual_seed_urls: list[str] = []
+    query_text: str | None = None
+
+    if isinstance(raw_query, dict):
+        manual_seed_ids.extend(_coerce_str_list(raw_query.get("seed_ids")))
+        manual_seed_urls.extend(_coerce_str_list(raw_query.get("seed_urls")))
+        text_candidate = raw_query.get("text") or raw_query.get("query") or raw_query.get("q")
+        if isinstance(text_candidate, str):
+            query_text = text_candidate.strip() or None
+    elif isinstance(raw_query, str):
+        query_text = raw_query.strip() or None
+    elif raw_query is not None:
+        return jsonify({"error": "invalid_query"}), 400
+
+    manual_seed_ids = _dedupe_preserve_order([identifier.strip() for identifier in manual_seed_ids if identifier.strip()])
+
+    seeds_value = payload.get("seeds")
+    if seeds_value is not None and not isinstance(seeds_value, (str, list, tuple, set)):
+        return jsonify({"error": "invalid_seeds"}), 400
+    manual_seed_urls.extend(_coerce_str_list(seeds_value))
+
+    resolved_seed_urls, missing_ids = _resolve_seed_urls(manual_seed_ids)
+    if missing_ids:
+        return jsonify({"error": "unknown_seed", "missing": missing_ids}), 400
+    manual_seed_urls.extend(resolved_seed_urls)
+    manual_seed_urls = _dedupe_preserve_order([url.strip() for url in manual_seed_urls if isinstance(url, str) and url.strip()])
+
+    if query_text is None or not query_text.strip():
+        if manual_seed_ids:
+            canonical = ",".join(sorted(manual_seed_ids))
+            query_text = f"seeds:{canonical}" if canonical else None
+        elif manual_seed_urls:
+            canonical = ",".join(sorted(url.lower() for url in manual_seed_urls))
+            query_text = f"urls:{canonical}" if canonical else None
+
+    if not query_text:
         return jsonify({"error": "missing_query"}), 400
 
     use_llm_raw = payload.get("use_llm")
@@ -57,25 +160,11 @@ def trigger_refresh():
     force_raw = payload.get("force")
     force = bool(force_raw) if force_raw is not None else False
 
-    seeds_payload = payload.get("seeds")
-    seeds: list[str] | None = None
-    if seeds_payload is not None:
-        cleaned: list[str] = []
-        if isinstance(seeds_payload, str):
-            cleaned.append(seeds_payload)
-        elif isinstance(seeds_payload, (list, tuple, set)):
-            for item in seeds_payload:
-                if isinstance(item, str):
-                    value = item.strip()
-                    if value:
-                        cleaned.append(value)
-        else:
-            return jsonify({"error": "invalid_seeds"}), 400
-        seeds = cleaned if cleaned else None
+    seeds = manual_seed_urls if manual_seed_urls else None
 
     try:
         job_id, status, created = worker.enqueue(
-            query,
+            query_text,
             use_llm=use_llm,
             model=model,
             budget=budget,
@@ -89,6 +178,8 @@ def trigger_refresh():
     response = {"job_id": job_id, "status": status, "created": created}
     if not created:
         response["deduplicated"] = True
+    if manual_seed_ids:
+        response["seed_ids"] = manual_seed_ids
     return jsonify(response), 202 if created else 200
 
 
@@ -102,4 +193,3 @@ def refresh_status():
     query = request.args.get("query")
     snapshot = worker.status(job_id=job_id, query=query)
     return jsonify(snapshot)
-
