@@ -46,3 +46,5 @@ _MAIN_0.toc
 =======
 !tests/backend/test_agent_runtime.py
 >>>>>>> theirs
+/.venv
+/logs
