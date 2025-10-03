@@ -69,33 +69,7 @@ dev:
 	  $(MAKE) first-run; \
 	fi
 	@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
-	@echo "▶ Starting API (Flask)…"
-	PORT_PIDS="$$(lsof -tiTCP:$(BACKEND_PORT) -sTCP:LISTEN 2>/dev/null || true)"; \
-	CONFLICT=0; \
-	for pid in $$PORT_PIDS; do \
-	  CMD="$$(ps -p "$$pid" -o command= 2>/dev/null | tr -d '\r' || true)"; \
-	  if [ -z "$$CMD" ]; then \
-	    continue; \
-	  fi; \
-	  case "$$CMD" in \
-	    *"python -m backend.app"*) ;; \
-	    *) \
-	      echo "❌ Port $(BACKEND_PORT) is in use by: $$CMD"; \
-	      echo "   Please rerun with BACKEND_PORT=5051 make dev"; \
-	      CONFLICT=1; \
-	      break; \
-	      ;; \
-	  esac; \
-	done; \
-	if [ $$CONFLICT -eq 1 ]; then \
-	  exit 1; \
-	fi; \
-	if [ -z "$$PORT_PIDS" ]; then \
-	  mkdir -p logs; \
-	  (BACKEND_PORT=$(BACKEND_PORT) nohup $(VENV_PY) -m backend.app > logs/backend.log 2>&1 & echo $$! > logs/backend.pid) ; \
-	fi
-	@echo "⏳ Waiting for API…"
-	@bash -c 'for i in $$(seq 1 60); do curl -fsS "$(API_URL)" >/dev/null && exit 0; sleep 0.5; done; echo "API not ready" >&2; exit 1'
+	@BACKEND_PORT="$(BACKEND_PORT)" API_URL="$(API_URL)" VENV_PY="$(VENV_PY)" ./scripts/dev_backend.sh
 	@echo "▶ Starting Frontend (Next.js)…"
 	@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
 	  mkdir -p logs; \
@@ -106,7 +80,12 @@ dev:
 	    nohup npm run dev -- --hostname 0.0.0.0 --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
 	  ) ; \
 	fi
-	@echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API http://127.0.0.1:$(BACKEND_PORT)"
+	@API_ORIGIN="$${NEXT_PUBLIC_API_BASE_URL}"; \
+	if [ -z "$$API_ORIGIN" ]; then \
+	  API_ORIGIN="http://127.0.0.1:$(BACKEND_PORT)"; \
+	fi; \
+	API_ORIGIN="$$(printf "%s" "$$API_ORIGIN" | sed 's:/*$$::')"; \
+	echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API $$API_ORIGIN"
 	@if [ "$(AUTO_OPEN_BROWSER)" = "1" ]; then \
 	  URL="http://127.0.0.1:$(FRONTEND_PORT)"; \
 	  OS=$$(uname -s); \
@@ -126,39 +105,52 @@ dev:
 	fi
 
 stop:
-	@echo "🛑 Stopping dev processes…"
-	@BACKEND_PIDS=""; \
-	if [ -f logs/backend.pid ]; then \
-	  BACKEND_PIDS=$$(tr '\n' ' ' < logs/backend.pid); \
-	else \
-	  BACKEND_PIDS=$$(pgrep -f "$(BACKEND_CMD_PATTERN)" | tr '\n' ' ' || true); \
-	fi; \
-	if [ -n "$$BACKEND_PIDS" ]; then \
-	  if kill -0 $$BACKEND_PIDS >/dev/null 2>&1; then \
-	    kill $$BACKEND_PIDS >/dev/null 2>&1 && echo "Stopped backend ($$BACKEND_PIDS)" || true; \
-	  else \
-	    echo "Backend process not running"; \
+	@set -e; \
+	  echo "🛑 Stopping dev processes…"; \
+	  BACKEND_PORT="$(BACKEND_PORT)"; \
+	  BACKEND_CMD_PATTERN="$(BACKEND_CMD_PATTERN)"; \
+	  FRONTEND_PORT="$(FRONTEND_PORT)"; \
+	  FRONTEND_CMD_PATTERN="$(FRONTEND_CMD_PATTERN)"; \
+	  backend_from_file=""; \
+	  if [ -f logs/backend.pid ]; then \
+	    backend_from_file="$$(tr '\n' ' ' < logs/backend.pid)"; \
 	  fi; \
-	else \
-	  echo "No backend process found"; \
-	fi; \
-	rm -f logs/backend.pid
-	@FRONTEND_PIDS=""; \
-	if [ -f logs/frontend.pid ]; then \
-	  FRONTEND_PIDS=$$(tr '\n' ' ' < logs/frontend.pid); \
-	else \
-	  FRONTEND_PIDS=$$(pgrep -f "$(FRONTEND_CMD_PATTERN)" | tr '\n' ' ' || true); \
-	fi; \
-	if [ -n "$$FRONTEND_PIDS" ]; then \
-	  if kill -0 $$FRONTEND_PIDS >/dev/null 2>&1; then \
-	    kill $$FRONTEND_PIDS >/dev/null 2>&1 && echo "Stopped frontend ($$FRONTEND_PIDS)" || true; \
+	  backend_from_pattern="$$(pgrep -f "$$BACKEND_CMD_PATTERN" 2>/dev/null | tr '\n' ' ' || true)"; \
+	  backend_from_port="$$(lsof -tiTCP:"$$BACKEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
+	  backend_pids="$$(printf "%s\n%s\n%s\n" "$$backend_from_file" "$$backend_from_pattern" "$$backend_from_port" | tr ' ' '\n' | sed '/^$$/d' | sort -u | tr '\n' ' ')"; \
+	  if [ -n "$$backend_pids" ]; then \
+	    echo "Stopping backend ($$backend_pids)"; \
+	    kill $$backend_pids >/dev/null 2>&1 || true; \
+	    sleep 0.5; \
+	    still_listening="$$(lsof -tiTCP:"$$BACKEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
+	    if [ -n "$$still_listening" ]; then \
+	      echo "Backend still listening on $$BACKEND_PORT; sending SIGKILL"; \
+	      kill -9 $$still_listening >/dev/null 2>&1 || true; \
+	    fi; \
 	  else \
-	    echo "Frontend process not running"; \
+	    echo "No backend process found"; \
 	  fi; \
-	else \
-	  echo "No frontend process found"; \
-	fi; \
-	rm -f logs/frontend.pid
+	  rm -f logs/backend.pid; \
+	  frontend_from_file=""; \
+	  if [ -f logs/frontend.pid ]; then \
+	    frontend_from_file="$$(tr '\n' ' ' < logs/frontend.pid)"; \
+	  fi; \
+	  frontend_from_pattern="$$(pgrep -f "$$FRONTEND_CMD_PATTERN" 2>/dev/null | tr '\n' ' ' || true)"; \
+	  frontend_from_port="$$(lsof -tiTCP:"$$FRONTEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
+	  frontend_pids="$$(printf "%s\n%s\n%s\n" "$$frontend_from_file" "$$frontend_from_pattern" "$$frontend_from_port" | tr ' ' '\n' | sed '/^$$/d' | sort -u | tr '\n' ' ')"; \
+	  if [ -n "$$frontend_pids" ]; then \
+	    echo "Stopping frontend ($$frontend_pids)"; \
+	    kill $$frontend_pids >/dev/null 2>&1 || true; \
+	    sleep 0.5; \
+	    still_listening="$$(lsof -tiTCP:"$$FRONTEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
+	    if [ -n "$$still_listening" ]; then \
+	      echo "Frontend still listening on $$FRONTEND_PORT; sending SIGKILL"; \
+	      kill -9 $$still_listening >/dev/null 2>&1 || true; \
+	    fi; \
+	  else \
+	    echo "No frontend process found"; \
+	  fi; \
+	  rm -f logs/frontend.pid
 
 logs:
 	@echo "— Flask —"; pgrep -fl "$(BACKEND_CMD_PATTERN)" || echo "(no backend process)"

@@ -140,16 +140,23 @@ automatically calls `/api/llm/autopull` to download `gemma3` (falling back to
 model weights.
 
 Run `make stop` to terminate lingering dev servers from another terminal
-without hunting for process IDs.
+without hunting for process IDs. For an entirely clean cycle, pair it with the
+default port before relaunching:
+
+```bash
+make stop || true
+BACKEND_PORT=5050 make dev
+```
 
 Open the browser at `http://localhost:3100` to use the UI. Make sure `ollama`
 is listening on `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
 `localhost:5050` is busy (macOS ships AirPlay on that port), run
 `BACKEND_PORT=5051 make dev` instead; the proxy will automatically follow the
-updated port. `make dev` now detects conflicting listeners and exits early with
-a message naming the offender along with the override hint above. The Flask API
-root now returns a JSON ping to confirm the service is API-only and that the UI
-lives entirely in Next.js.
+updated port. When something else is already bound to the configured
+`BACKEND_PORT`, `make dev` now reuses that listener and proceeds directly to the
+health check—it only fails when the existing process never reports healthy. The
+Flask API root now returns a JSON ping to confirm the service is API-only and
+that the UI lives entirely in Next.js.
 
 Verify the stack after startup with:
 
