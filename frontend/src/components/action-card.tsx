@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Edit3, ExternalLink, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ const STATUS_LABEL: Record<ActionStatus, string> = {
 export function ActionCard({ action, onApprove, onEdit, onDismiss }: ActionCardProps) {
   const targetUrl = typeof action.metadata?.url === "string" ? action.metadata.url : null;
   const previewText = typeof action.metadata?.preview === "string" ? action.metadata.preview : null;
+  const router = useRouter();
   return (
     <Card
       className={cn(
@@ -57,7 +59,9 @@ export function ActionCard({ action, onApprove, onEdit, onDismiss }: ActionCardP
               size="icon"
               aria-label="Open resource"
               onClick={() => {
-                window.open(targetUrl, "_blank", "noopener,noreferrer");
+                if (!targetUrl) return;
+                const params = new URLSearchParams({ url: targetUrl });
+                router.push(`/workspace?${params.toString()}`);
               }}
             >
               <ExternalLink className="h-4 w-4" />

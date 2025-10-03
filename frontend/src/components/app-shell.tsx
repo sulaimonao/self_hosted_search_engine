@@ -38,6 +38,7 @@ import {
   extractSelection,
   fetchModelInventory,
   fetchSeeds,
+  fetchIndexStats,
   searchIndex,
   reindexUrl,
   saveSeed,
@@ -54,6 +55,8 @@ import {
   fetchDiscoveryItem,
   confirmDiscoveryItem,
   upsertIndexDocument,
+  createDomainSeed,
+  triggerRefresh,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import type {
@@ -74,6 +77,7 @@ import type {
 } from "@/lib/types";
 import { devlog } from "@/lib/devlog";
 import { normalizeInput } from "@/lib/normalize-input";
+import { AGENT_ENABLED, IN_APP_BROWSER_ENABLED } from "@/lib/flags";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
@@ -97,6 +101,16 @@ function modelSupportsVision(model: string | null | undefined) {
   if (!model) return false;
   const lowered = model.toLowerCase();
   return lowered.includes("vision") || lowered.includes("multimodal") || lowered.includes("vl");
+}
+
+function isHttpUrl(candidate: string | null | undefined) {
+  if (!candidate) return false;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULT_AGENT_LOG: AgentLogEntry[] = [
@@ -163,12 +177,41 @@ function createInitialSearchState(): SearchState {
   };
 }
 
-export function AppShell() {
+interface CrawlMonitorState {
+  running: boolean;
+  startDocuments: number;
+  currentDocuments: number;
+  error: string | null;
+  lastUpdated: number | null;
+}
+
+interface IndexStateSnapshot {
+  documents: number;
+  pending: number | null;
+  lastUpdatedAt: number | null;
+}
+
+interface AppShellProps {
+  initialUrl?: string | null;
+  initialContext?: PageExtractResponse | null;
+}
+
+export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const router = useRouter();
-  const [previewState, setPreviewState] = useState({
-    history: [INITIAL_URL],
+  const sanitizedInitialUrl = useMemo(() => {
+    if (typeof initialUrl === "string") {
+      const trimmed = initialUrl.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+    return INITIAL_URL;
+  }, [initialUrl]);
+
+  const [previewState, setPreviewState] = useState(() => ({
+    history: [sanitizedInitialUrl],
     index: 0,
-  });
+  }));
   const [reloadKey, setReloadKey] = useState(0);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(DEFAULT_CHAT_MESSAGES);
@@ -181,7 +224,7 @@ export function AppShell() {
   const [isSeedsLoading, setIsSeedsLoading] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
   const [defaultScope, setDefaultScope] = useState<CrawlScope>("page");
-  const [omniboxValue, setOmniboxValue] = useState(INITIAL_URL);
+  const [omniboxValue, setOmniboxValue] = useState(sanitizedInitialUrl);
   const [commandOpen, setCommandOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("chat");
@@ -193,8 +236,8 @@ export function AppShell() {
   const [modelWarning, setModelWarning] = useState<string | null>(null);
   const [isAutopulling, setIsAutopulling] = useState(false);
   const [autopullMessage, setAutopullMessage] = useState<string | null>(null);
-  const [pageContext, setPageContext] = useState<PageExtractResponse | null>(null);
-  const [includeContext, setIncludeContext] = useState(false);
+  const [pageContext, setPageContext] = useState<PageExtractResponse | null>(initialContext ?? null);
+  const [includeContext, setIncludeContext] = useState(Boolean(initialContext));
   const [isExtractingContext, setIsExtractingContext] = useState(false);
   const [manualContextTrigger, setManualContextTrigger] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -203,6 +246,18 @@ export function AppShell() {
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
   const [discoveryItems, setDiscoveryItems] = useState<DiscoveryPreview[]>([]);
   const [discoveryBusyIds, setDiscoveryBusyIds] = useState<Set<string>>(() => new Set());
+  const [indexState, setIndexState] = useState<IndexStateSnapshot>({
+    documents: 0,
+    pending: null,
+    lastUpdatedAt: null,
+  });
+  const [crawlMonitor, setCrawlMonitor] = useState<CrawlMonitorState>({
+    running: false,
+    startDocuments: 0,
+    currentDocuments: 0,
+    error: null,
+    lastUpdated: null,
+  });
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -215,8 +270,31 @@ export function AppShell() {
   const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
   const shadowNotifiedRef = useRef(new Set<string>());
   const discoveryErrorNotifiedRef = useRef(false);
+  const indexStateRef = useRef<IndexStateSnapshot>(indexState);
+
+  const agentEnabled = AGENT_ENABLED;
+  const inAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
+
+  const buildWorkspaceHref = useCallback((url: string) => {
+    const params = new URLSearchParams({ url });
+    return `/workspace?${params.toString()}`;
+  }, []);
+
+  const pushWorkspaceRoute = useCallback(
+    (url: string, replace = false) => {
+      const href = buildWorkspaceHref(url);
+      if (replace) {
+        router.replace(href);
+      } else {
+        router.push(href);
+      }
+    },
+    [buildWorkspaceHref, router],
+  );
 
   const currentUrl = previewState.history[previewState.index];
+  const currentUrlIsHttp = isHttpUrl(currentUrl);
+  const hasDocuments = indexState.documents > 0;
   const shadowModeEnabled = SHADOW_MODE_ENABLED;
 
   const pushToast = useCallback(
@@ -234,9 +312,58 @@ export function AppShell() {
     setToasts((items) => items.filter((toast) => toast.id !== id));
   }, []);
 
+  const updateIndexStats = useCallback(async () => {
+    try {
+      const stats = await fetchIndexStats();
+      setIndexState(() => {
+        const snapshot: IndexStateSnapshot = {
+          documents: stats.documents ?? 0,
+          pending: typeof stats.pending === "number" ? stats.pending : null,
+          lastUpdatedAt: stats.lastUpdatedAt ?? null,
+        };
+        indexStateRef.current = snapshot;
+        return snapshot;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Index stats failed");
+      devlog({ evt: "ui.index.stats_error", message });
+    }
+  }, []);
+
   useEffect(() => {
     devlog({ evt: "ui.mount" });
   }, []);
+
+  useEffect(() => {
+    void updateIndexStats();
+  }, [updateIndexStats]);
+
+  useEffect(() => {
+    setPreviewState((state) => {
+      const current = state.history[state.index];
+      if (current === sanitizedInitialUrl) {
+        return state;
+      }
+      return {
+        history: [sanitizedInitialUrl],
+        index: 0,
+      };
+    });
+    setOmniboxValue(sanitizedInitialUrl);
+  }, [sanitizedInitialUrl]);
+
+  useEffect(() => {
+    if (typeof initialContext === "undefined") {
+      return;
+    }
+    setPageContext(initialContext ?? null);
+    setIncludeContext(Boolean(initialContext));
+  }, [initialContext]);
+
+  useEffect(() => {
+    indexStateRef.current = indexState;
+  }, [indexState]);
+
 
   useEffect(() => {
     setChatMessages((messages) => {
@@ -270,32 +397,41 @@ export function AppShell() {
           index: nextHistory.length - 1,
         };
       });
+      pushWorkspaceRoute(value);
     },
-    []
+    [pushWorkspaceRoute]
   );
 
-  const replaceUrl = useCallback((target: string) => {
-    setIsPreviewLoading(true);
-    setPageContext(null);
-    setIncludeContext(false);
-    setPreviewState((state) => {
-      const nextHistory = [...state.history];
-      nextHistory[state.index] = target;
-      return {
-        history: nextHistory,
-        index: state.index,
-      };
-    });
-  }, []);
+  const replaceUrl = useCallback(
+    (target: string) => {
+      const value = target.trim();
+      if (!value) return;
+      setIsPreviewLoading(true);
+      setPageContext(null);
+      setIncludeContext(false);
+      setPreviewState((state) => {
+        const nextHistory = [...state.history];
+        nextHistory[state.index] = value;
+        return {
+          history: nextHistory,
+          index: state.index,
+        };
+      });
+      pushWorkspaceRoute(value, true);
+    },
+    [pushWorkspaceRoute]
+  );
 
   const handleNavigate = useCallback(
     (url: string, options?: { replace?: boolean }) => {
+      const target = url.trim();
+      if (!target) return;
+      setOmniboxValue(target);
       if (options?.replace) {
-        replaceUrl(url);
+        replaceUrl(target);
       } else {
-        navigateTo(url);
+        navigateTo(target);
       }
-      setOmniboxValue(url);
     },
     [navigateTo, replaceUrl]
   );
@@ -303,16 +439,34 @@ export function AppShell() {
   const handleBack = useCallback(() => {
     setPreviewState((state) => {
       if (state.index === 0) return state;
-      return { ...state, index: state.index - 1 };
+      const nextIndex = state.index - 1;
+      const nextUrl = state.history[nextIndex];
+      setIsPreviewLoading(true);
+      setPageContext(null);
+      setIncludeContext(false);
+      setOmniboxValue(nextUrl);
+      if (inAppBrowserEnabled && nextUrl) {
+        pushWorkspaceRoute(nextUrl, true);
+      }
+      return { ...state, index: nextIndex };
     });
-  }, []);
+  }, [inAppBrowserEnabled, pushWorkspaceRoute]);
 
   const handleForward = useCallback(() => {
     setPreviewState((state) => {
       if (state.index >= state.history.length - 1) return state;
-      return { ...state, index: state.index + 1 };
+      const nextIndex = state.index + 1;
+      const nextUrl = state.history[nextIndex];
+      setIsPreviewLoading(true);
+      setPageContext(null);
+      setIncludeContext(false);
+      setOmniboxValue(nextUrl);
+      if (inAppBrowserEnabled && nextUrl) {
+        pushWorkspaceRoute(nextUrl, true);
+      }
+      return { ...state, index: nextIndex };
     });
-  }, []);
+  }, [inAppBrowserEnabled, pushWorkspaceRoute]);
 
   const handleReload = useCallback(() => {
     setIsPreviewLoading(true);
@@ -441,6 +595,126 @@ export function AppShell() {
     },
     [refreshSeeds]
   );
+
+  const handleCrawlDomain = useCallback(async () => {
+    const targetUrl = (currentUrl ?? "").trim();
+    if (!isHttpUrl(targetUrl)) {
+      pushToast("Open a valid http(s) page before crawling.", { variant: "warning" });
+      return;
+    }
+
+    const startDocs = indexStateRef.current.documents ?? 0;
+    const domainLabel = (() => {
+      try {
+        return new URL(targetUrl).hostname;
+      } catch {
+        return targetUrl;
+      }
+    })();
+
+    setCrawlMonitor({
+      running: true,
+      startDocuments: startDocs,
+      currentDocuments: startDocs,
+      error: null,
+      lastUpdated: Date.now(),
+    });
+
+    appendLog({
+      id: uid(),
+      label: "Crawl requested",
+      detail: `Domain crawl for ${domainLabel}`,
+      status: "info",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      const seedResult = await createDomainSeed(targetUrl);
+      if (seedResult.registry) {
+        applySeedRegistry(seedResult.registry);
+      }
+      if (seedResult.duplicate) {
+        pushToast("Domain already queued. Refreshing index…");
+      } else {
+        pushToast(`Queued ${domainLabel} for crawling`);
+      }
+
+      await triggerRefresh({ useLlm: false, force: true });
+
+      let indexedDocs = startDocs;
+      const deadline = Date.now() + 120000;
+      let indexed = false;
+
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await updateIndexStats();
+        indexedDocs = indexStateRef.current.documents ?? 0;
+        setCrawlMonitor((state) => ({
+          ...state,
+          currentDocuments: indexedDocs,
+          lastUpdated: Date.now(),
+        }));
+        if (indexedDocs > startDocs) {
+          indexed = true;
+          break;
+        }
+      }
+
+      if (indexed) {
+        const gained = indexedDocs - startDocs;
+        pushToast(`Indexed ${gained} new document${gained === 1 ? "" : "s"}`, { variant: "success" });
+        appendLog({
+          id: uid(),
+          label: "Crawl complete",
+          detail: `Indexed ${gained} new document${gained === 1 ? "" : "s"} for ${domainLabel}`,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        });
+        setCrawlMonitor((state) => ({
+          ...state,
+          running: false,
+          currentDocuments: indexedDocs,
+          error: null,
+          lastUpdated: Date.now(),
+        }));
+      } else {
+        setCrawlMonitor((state) => ({
+          ...state,
+          running: false,
+          currentDocuments: indexedDocs,
+          error: null,
+          lastUpdated: Date.now(),
+        }));
+        pushToast("Crawl running. Index will continue to update in the background.");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Crawl failed");
+      setCrawlMonitor((state) => ({
+        ...state,
+        running: false,
+        error: message,
+        lastUpdated: Date.now(),
+      }));
+      pushToast(message, { variant: "destructive" });
+      appendLog({
+        id: uid(),
+        label: "Crawl failed",
+        detail: message,
+        status: "error",
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      await updateIndexStats();
+    }
+  }, [
+    applySeedRegistry,
+    appendLog,
+    createDomainSeed,
+    currentUrl,
+    pushToast,
+    triggerRefresh,
+    updateIndexStats,
+  ]);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -762,6 +1036,21 @@ export function AppShell() {
     [registerJob]
   );
 
+  const handleSearchQueryChange = useCallback((value: string) => {
+    setSearchState((state) => ({ ...state, query: value }));
+  }, []);
+
+  const handleLocalSearchSubmit = useCallback(
+    (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      void handleSearch(trimmed);
+    },
+    [handleSearch]
+  );
+
   const refreshSearch = useCallback(() => {
     if (searchState.query) {
       void handleSearch(searchState.query);
@@ -970,8 +1259,14 @@ export function AppShell() {
 
       const normalized = normalizeInput(trimmed);
       if (normalized.kind === "external") {
-        window.open(normalized.urlOrPath, "_blank", "noopener,noreferrer");
         handleNavigate(normalized.urlOrPath);
+        return;
+      }
+
+      if (!hasDocuments) {
+        pushToast("Index empty. Crawl this domain first to enable local search.", {
+          variant: "warning",
+        });
         return;
       }
 
@@ -981,7 +1276,7 @@ export function AppShell() {
       router.push(normalized.urlOrPath);
       void handleSearch(trimmed);
     },
-    [handleNavigate, handleSearch, handleCancelChat, isChatLoading, router]
+    [handleNavigate, handleSearch, handleCancelChat, hasDocuments, isChatLoading, router, pushToast]
   );
 
   const handleApproveAction = useCallback(
@@ -1563,8 +1858,11 @@ export function AppShell() {
           error={searchState.error}
           detail={searchState.detail}
           onOpenHit={handleNavigate}
-          onAskAgent={handleAskAgent}
+          onAskAgent={agentEnabled ? handleAskAgent : undefined}
           onRefresh={searchState.query ? refreshSearch : undefined}
+          onQueryChange={handleSearchQueryChange}
+          onSubmitQuery={handleLocalSearchSubmit}
+          inputDisabled={!hasDocuments}
           currentUrl={currentUrl}
           confidence={searchState.confidence}
           llmUsed={searchState.llmUsed}
@@ -1577,20 +1875,27 @@ export function AppShell() {
           candidates={searchState.candidates}
         />
         <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
-          <WebPreview
-            url={currentUrl}
-            history={previewState.history}
-            historyIndex={previewState.index}
-            isLoading={isPreviewLoading}
-            reloadKey={reloadKey}
-            onNavigate={handleNavigate}
-            onHistoryBack={handleBack}
-            onHistoryForward={handleForward}
-            onReload={handleReload}
-            onOpenInNewTab={(url) =>
-              window.open(url, "_blank", "noopener,noreferrer")
-            }
-          />
+          {inAppBrowserEnabled ? (
+            <WebPreview
+              url={currentUrl}
+              history={previewState.history}
+              historyIndex={previewState.index}
+              isLoading={isPreviewLoading}
+              reloadKey={reloadKey}
+              onNavigate={handleNavigate}
+              onHistoryBack={handleBack}
+              onHistoryForward={handleForward}
+              onReload={handleReload}
+              onOpenInNewTab={(url) => handleNavigate(url)}
+              onCrawlDomain={handleCrawlDomain}
+              crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
+              crawlStatus={crawlMonitor}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+              In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.
+            </div>
+          )}
         </section>
         <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">

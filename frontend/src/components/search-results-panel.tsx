@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, ArrowUpRight, Loader2, RefreshCcw, Search as SearchIcon } from "lucide-react";
-import { useMemo } from "react";
+import { FormEvent, useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import type { SearchHit } from "@/lib/types";
 
 const LOADING_PLACEHOLDERS = [0, 1, 2, 3];
@@ -26,6 +27,9 @@ interface SearchResultsPanelProps {
   onOpenHit: (url: string) => void;
   onAskAgent?: (query: string) => void;
   onRefresh?: () => void;
+  onQueryChange?: (value: string) => void;
+  onSubmitQuery?: (value: string) => void;
+  inputDisabled?: boolean;
   currentUrl?: string | null;
   confidence?: number | null;
   llmUsed?: boolean;
@@ -61,6 +65,9 @@ export function SearchResultsPanel({
   onOpenHit,
   onAskAgent,
   onRefresh,
+  onQueryChange,
+  onSubmitQuery,
+  inputDisabled = false,
   currentUrl,
   confidence,
   llmUsed,
@@ -143,6 +150,36 @@ export function SearchResultsPanel({
           ) : null}
         </div>
       </div>
+
+      <form
+        className="flex items-center gap-2 px-3 py-2"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          onSubmitQuery?.(query);
+        }}
+      >
+        <Input
+          value={query}
+          onChange={(event) => onQueryChange?.(event.target.value)}
+          placeholder={
+            inputDisabled ? "Crawl a domain to enable local search" : "Search indexed documents"
+          }
+          disabled={inputDisabled}
+          className="h-8 text-sm"
+        />
+        <Button
+          type="submit"
+          size="sm"
+          disabled={inputDisabled || isLoading || !query.trim()}
+        >
+          {isLoading ? (
+            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+          ) : (
+            <SearchIcon className="mr-1 h-4 w-4" />
+          )}
+          Search
+        </Button>
+      </form>
 
       {normalizedConfidence !== null ? (
         <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">

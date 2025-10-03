@@ -50,6 +50,15 @@ interface WebPreviewProps {
   onHistoryForward: () => void;
   onReload: () => void;
   onOpenInNewTab?: (url: string) => void;
+  onCrawlDomain?: () => void;
+  crawlDisabled?: boolean;
+  crawlStatus?: {
+    running: boolean;
+    startDocuments: number;
+    currentDocuments: number;
+    error: string | null;
+    lastUpdated: number | null;
+  } | null;
 }
 
 export function WebPreview({
@@ -63,9 +72,19 @@ export function WebPreview({
   onHistoryForward,
   onReload,
   onOpenInNewTab,
+  onCrawlDomain,
+  crawlDisabled = false,
+  crawlStatus = null,
 }: WebPreviewProps) {
   const [addressValue, setAddressValue] = useState(url || DEFAULT_URL);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const domainHint = useMemo(() => {
+    try {
+      return url ? new URL(url).hostname : null;
+    } catch {
+      return null;
+    }
+  }, [url]);
 
   useEffect(() => {
     setAddressValue(url);
@@ -179,7 +198,36 @@ export function WebPreview({
             <TooltipContent>Open in your browser</TooltipContent>
           </Tooltip>
         </TooltipProvider>
+        {onCrawlDomain ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="whitespace-nowrap"
+            onClick={onCrawlDomain}
+            disabled={crawlDisabled}
+          >
+            {crawlStatus?.running ? (
+              <>
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                Crawling…
+              </>
+            ) : (
+              <>
+                <RefreshCcw className="mr-1 h-4 w-4" />
+                Crawl domain
+              </>
+            )}
+          </Button>
+        ) : null}
       </div>
+      {crawlStatus?.running ? (
+        <div className="px-3 text-xs text-muted-foreground">
+          {domainHint ? `Crawling ${domainHint}` : "Crawling domain"} · {crawlStatus.currentDocuments.toLocaleString()} docs indexed
+        </div>
+      ) : crawlStatus?.error ? (
+        <div className="px-3 text-xs text-destructive">{crawlStatus.error}</div>
+      ) : null}
       <div className="relative flex-1">
         <iframe
           key={reloadKey}

@@ -48,6 +48,8 @@ npm run start      # serve the production build
 npm run lint       # ESLint (includes TypeScript checks)
 ```
 
+> The dev UI listens on `http://localhost:3100` (or `http://127.0.0.1:3100`). Both hosts are pre-whitelisted via `allowedDevOrigins` in `next.config.mjs`, eliminating the usual cross-origin warning banner.
+
 ## Environment variables
 
 - `NEXT_PUBLIC_API_BASE_URL`: Absolute base URL for backend requests. Leave blank when the SPA is served by Flask in production.
@@ -94,3 +96,10 @@ The omnibox now routes non-URL submissions through the local semantic index:
 4. If the search triggers a focused crawl, progress is reflected both in the panel and the Agent Ops tab.
 
 Paste an absolute URL at any time to jump directly into the preview pane without triggering search.
+
+## Workspace browsing & crawling
+
+- External URLs now open inside the dedicated `/workspace` route. The preview header mirrors the omnibox history controls and exposes a **Crawl domain** shortcut.
+- Loading a page triggers a background call to `/api/extract?url=...`; the response auto-populates the Page context panel so chat immediately has server-side context (text plus optional screenshot).
+- Selecting **Crawl domain** posts `{ urls: [url], scope: "domain" }` to `/api/seeds`, then forces `/api/refresh` with `use_llm:false`. Progress is surfaced by polling `/api/index/stats` until the indexed document count increases.
+- The Local Search input stays disabled until `/api/index/stats` reports at least one document. When enabled it first attempts `GET /api/search?q=...` and gracefully falls back to `POST /api/search` for compatibility with older servers.

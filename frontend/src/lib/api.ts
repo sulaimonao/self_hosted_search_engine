@@ -30,6 +30,13 @@ const JSON_HEADERS = {
   Accept: "application/json",
 };
 
+export interface IndexStats {
+  documents: number;
+  indexedDocuments?: number | null;
+  pending?: number | null;
+  lastUpdatedAt?: number | null;
+}
+
 export interface SearchIndexOptions {
   signal?: AbortSignal;
   limit?: number;
@@ -56,6 +63,35 @@ function coerceBoolean(input: unknown): boolean {
     return normalized === "1" || normalized === "true" || normalized === "yes";
   }
   return false;
+}
+
+export async function fetchIndexStats(): Promise<IndexStats> {
+  const response = await fetch(api("/api/index/stats"));
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Index stats request failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const documents =
+    coerceNumber(payload.documents) ??
+    coerceNumber(payload.indexed_documents) ??
+    coerceNumber(payload.indexedDocs) ??
+    0;
+  const pending =
+    coerceNumber(payload.pending) ??
+    coerceNumber(payload.pending_documents ?? payload.pendingDocuments) ??
+    null;
+  const lastUpdated =
+    coerceNumber(payload.updated_at ?? payload.updatedAt ?? payload.last_updated ?? payload.lastUpdated) ??
+    null;
+
+  return {
+    documents,
+    indexedDocuments: documents,
+    pending,
+    lastUpdatedAt: lastUpdated,
+  };
 }
 
 const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
@@ -243,7 +279,7 @@ export async function upsertIndexDocument(
 
 export async function searchIndex(
   query: string,
-  options: SearchIndexOptions = {}
+  options: SearchIndexOptions = {},
 ): Promise<SearchIndexResponse> {
   const trimmed = query.trim();
   if (!trimmed) {
@@ -261,16 +297,68 @@ export async function searchIndex(
     params.set("model", options.model);
   }
 
-  const response = await fetch(api(`/api/search?${params.toString()}`), {
-    signal: options.signal,
-  });
+  let payload: Record<string, unknown> | null = null;
+  let fallbackReason: string | null = null;
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Search request failed (${response.status})`);
+  try {
+    const response = await fetch(api(`/api/search?${params.toString()}`), {
+      signal: options.signal,
+    });
+
+    if (response.ok) {
+      payload = (await response.json()) as Record<string, unknown>;
+    } else {
+      const message = await response.text();
+      const status = response.status;
+      const shouldFallback = status === 404 || status === 405 || status === 500 || status === 501;
+      if (shouldFallback) {
+        fallbackReason = message || `GET /api/search returned ${status}`;
+      } else {
+        throw new Error(message || `Search request failed (${status})`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    fallbackReason =
+      error instanceof Error ? error.message : String(error ?? "GET /api/search unavailable");
   }
 
-  const payload = (await response.json()) as Record<string, unknown>;
+  if (!payload) {
+    const abortSignal = options.signal;
+    if (abortSignal?.aborted) {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
+
+    const body: Record<string, unknown> = { query: trimmed };
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+      body.limit = options.limit;
+    }
+    if (typeof options.useLlm === "boolean") {
+      body.use_llm = options.useLlm;
+      body.llm = options.useLlm;
+    }
+    if (options.model) {
+      body.model = options.model;
+    }
+
+    const postResponse = await fetch(api("/api/search"), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+      signal: abortSignal,
+    });
+
+    if (!postResponse.ok) {
+      const detail = await postResponse.text();
+      const message = detail || fallbackReason;
+      throw new Error(message || `Search request failed (${postResponse.status})`);
+    }
+
+    payload = (await postResponse.json()) as Record<string, unknown>;
+  }
+
   const rawResults = Array.isArray(payload.results)
     ? payload.results
     : Array.isArray(payload.hits)
@@ -536,6 +624,49 @@ export async function startCrawlJob(request: CrawlJobRequest): Promise<CrawlJobR
     throw new Error(reason || "Unable to queue crawl job");
   }
   return response.json();
+}
+
+export interface RefreshOptions {
+  query?: string;
+  useLlm?: boolean;
+  force?: boolean;
+  model?: string | null;
+}
+
+export async function triggerRefresh(
+  options: RefreshOptions = {},
+): Promise<Record<string, unknown> | null> {
+  const body: Record<string, unknown> = {};
+  if (typeof options.query === "string" && options.query.trim().length > 0) {
+    body.query = options.query.trim();
+  }
+  if (typeof options.useLlm === "boolean") {
+    body.use_llm = options.useLlm;
+    body.llm = options.useLlm;
+  }
+  if (typeof options.force === "boolean") {
+    body.force = options.force;
+  }
+  if (typeof options.model === "string" && options.model.trim().length > 0) {
+    body.model = options.model.trim();
+  }
+
+  const response = await fetch(api("/api/refresh"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Refresh request failed (${response.status})`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return null;
+  }
+  return (await response.json()) as Record<string, unknown>;
 }
 
 export async function reindexUrl(url: string): Promise<unknown> {
@@ -896,6 +1027,82 @@ export async function saveSeed(request: SaveSeedRequest): Promise<SeedRegistryRe
   }
 
   return response.json();
+}
+
+export interface SeedEnqueueResult {
+  registry: SeedRegistryResponse | null;
+  duplicate: boolean;
+  message?: string | null;
+}
+
+export async function createDomainSeed(url: string): Promise<SeedEnqueueResult> {
+  const normalized = url.trim();
+  if (!normalized) {
+    throw new Error("URL is required");
+  }
+
+  const requestBody = { urls: [normalized], scope: "domain" };
+  try {
+    const response = await fetch(api("/api/seeds"), {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(requestBody),
+    });
+
+    if (response.ok) {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        const payload = (await response.json()) as Record<string, unknown>;
+        if (typeof payload.revision === "string" && Array.isArray(payload.seeds)) {
+          return {
+            registry: payload as SeedRegistryResponse,
+            duplicate: false,
+          };
+        }
+      }
+      return { registry: null, duplicate: false };
+    }
+
+    const raw = await response.text();
+    let message = raw;
+    try {
+      const parsed = raw ? (JSON.parse(raw) as { error?: string }) : null;
+      if (parsed?.error) {
+        message = parsed.error;
+      }
+    } catch {
+      // ignore JSON parse errors
+    }
+
+    if (response.status === 409) {
+      return { registry: null, duplicate: true, message };
+    }
+
+    if (response.status === 400 && message.toLowerCase().includes("revision")) {
+      const snapshot = await fetchSeeds();
+      try {
+        const registry = await saveSeed({
+          action: "create",
+          revision: snapshot.revision,
+          seed: { url: normalized, scope: "domain" },
+        });
+        return { registry, duplicate: false };
+      } catch (error) {
+        const status = (error as { status?: number }).status;
+        if (status === 409) {
+          return { registry: null, duplicate: true, message: (error as Error).message };
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(message || `Seed request failed (${response.status})`);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(String(error ?? "Unable to queue domain seed"));
+  }
 }
 
 export interface SelectionResult {
