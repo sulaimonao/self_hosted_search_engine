@@ -69,31 +69,31 @@ dev:
 	  $(MAKE) first-run; \
 	fi
 	@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
-    @echo "▶ Starting API (Flask)…"
-    @PORT_PIDS="$$(lsof -tiTCP:$(BACKEND_PORT) -sTCP:LISTEN 2>/dev/null || true)"; \
-    CONFLICT=0; \
-    for pid in $$PORT_PIDS; do \
-      CMD="$$(ps -p "$$pid" -o command= 2>/dev/null | tr -d '\r' || true)"; \
-      if [ -z "$$CMD" ]; then \
-        continue; \
-      fi; \
-      case "$$CMD" in \
-        *"python -m backend.app"*) ;; \
-        *) \
-          echo "❌ Port $(BACKEND_PORT) is in use by: $$CMD"; \
-          echo "   Please rerun with BACKEND_PORT=5051 make dev"; \
-          CONFLICT=1; \
-          break; \
-          ;; \
-      esac; \
-    done; \
-    if [ $$CONFLICT -eq 1 ]; then \
-      exit 1; \
-    fi; \
-    if [ -z "$$PORT_PIDS" ]; then \
-      mkdir -p logs; \
-      (BACKEND_PORT=$(BACKEND_PORT) nohup $(VENV_PY) -m backend.app > logs/backend.log 2>&1 & echo $$! > logs/backend.pid) ; \
-    fi
+	@echo "▶ Starting API (Flask)…"
+	PORT_PIDS="$$(lsof -tiTCP:$(BACKEND_PORT) -sTCP:LISTEN 2>/dev/null || true)"; \
+	CONFLICT=0; \
+	for pid in $$PORT_PIDS; do \
+	  CMD="$$(ps -p "$$pid" -o command= 2>/dev/null | tr -d '\r' || true)"; \
+	  if [ -z "$$CMD" ]; then \
+	    continue; \
+	  fi; \
+	  case "$$CMD" in \
+	    *"python -m backend.app"*) ;; \
+	    *) \
+	      echo "❌ Port $(BACKEND_PORT) is in use by: $$CMD"; \
+	      echo "   Please rerun with BACKEND_PORT=5051 make dev"; \
+	      CONFLICT=1; \
+	      break; \
+	      ;; \
+	  esac; \
+	done; \
+	if [ $$CONFLICT -eq 1 ]; then \
+	  exit 1; \
+	fi; \
+	if [ -z "$$PORT_PIDS" ]; then \
+	  mkdir -p logs; \
+	  (BACKEND_PORT=$(BACKEND_PORT) nohup $(VENV_PY) -m backend.app > logs/backend.log 2>&1 & echo $$! > logs/backend.pid) ; \
+	fi
 	@echo "⏳ Waiting for API…"
 	@bash -c 'for i in $$(seq 1 60); do curl -fsS "$(API_URL)" >/dev/null && exit 0; sleep 0.5; done; echo "API not ready" >&2; exit 1'
 	@echo "▶ Starting Frontend (Next.js)…"
