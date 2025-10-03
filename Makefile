@@ -107,6 +107,23 @@ dev:
 	  ) ; \
 	fi
 	@echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API http://127.0.0.1:$(BACKEND_PORT)"
+	@if [ "$(AUTO_OPEN_BROWSER)" = "1" ]; then \
+	  URL="http://127.0.0.1:$(FRONTEND_PORT)"; \
+	  OS=$$(uname -s); \
+	  case "$$OS" in \
+	    Darwin) \
+	      (open "$$URL" >/dev/null 2>&1 &) || true; \
+	      ;; \
+	    Linux) \
+	      if command -v xdg-open >/dev/null 2>&1; then \
+	        (xdg-open "$$URL" >/dev/null 2>&1 &) || true; \
+	      fi; \
+	      ;; \
+	    MINGW*|MSYS*|CYGWIN*) \
+	      (cmd /c start "" "$$URL" >/dev/null 2>&1 &) || true; \
+	      ;; \
+	  esac; \
+	fi
 
 stop:
 	@echo "🛑 Stopping dev processes…"

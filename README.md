@@ -125,6 +125,10 @@ make dev
   your browser at `http://localhost:3100`; all `/api/*` calls proxy to the
   Flask API at the URL derived from `NEXT_PUBLIC_API_BASE_URL` (defaults to
   `http://127.0.0.1:${BACKEND_PORT}` with a fallback of `5050`).
+  Opt in with `AUTO_OPEN_BROWSER=1 make dev` to launch that URL automatically
+  once the frontend listener is ready (macOS uses `open`, Linux uses
+  `xdg-open`, and Windows shells delegate to `cmd /c start`; failures are
+  ignored so headless environments stay quiet).
 - Streams frontend dev instrumentation (via `/api/dev/log`) into the backend
   terminal so you can observe chat/search actions alongside Flask logs.
 - Tears both processes down when either exits or you press
