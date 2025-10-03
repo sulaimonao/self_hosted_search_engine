@@ -120,11 +120,14 @@ make dev
   command aborts if the API never becomes healthy, preventing the UI from
   spamming `ECONNREFUSED` during startup.
 - Installs frontend dependencies on demand (skips work when `node_modules`
-  already exists) and starts the Next.js dev server (binds to `0.0.0.0` and is
-  reachable at `http://localhost:3100`; override with `FRONTEND_PORT`). Point
-  your browser at `http://localhost:3100`; all `/api/*` calls proxy to the
-  Flask API at the URL derived from `NEXT_PUBLIC_API_BASE_URL` (defaults to
-  `http://127.0.0.1:${BACKEND_PORT}` with a fallback of `5050`).
+  already exists) and starts the Next.js dev server (binds to `localhost` and is
+  reachable at `http://localhost:3100`; override with `FRONTEND_PORT`). Always
+  open the UI at `http://localhost:3100` to avoid Next.js dev cross-origin
+  warnings; all `/api/*` calls proxy to the Flask API at the URL derived from
+  `NEXT_PUBLIC_API_BASE_URL` (defaults to
+  `http://127.0.0.1:${BACKEND_PORT}` with a fallback of `5050`). Thanks to the
+  dev origin allowlist, `http://127.0.0.1:3100` remains available if you prefer
+  that loopback host.
   Opt in with `AUTO_OPEN_BROWSER=1 make dev` to launch that URL automatically
   once the frontend listener is ready (macOS uses `open`, Linux uses
   `xdg-open`, and Windows shells delegate to `cmd /c start`; failures are
@@ -148,8 +151,9 @@ make stop || true
 BACKEND_PORT=5050 make dev
 ```
 
-Open the browser at `http://localhost:3100` to use the UI. Make sure `ollama`
-is listening on `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
+Open the browser at `http://localhost:3100` (not `127.0.0.1`) to use the UI and
+avoid dev-only cross-origin warnings. Make sure `ollama` is listening on
+`http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
 `localhost:5050` is busy (macOS ships AirPlay on that port), run
 `BACKEND_PORT=5051 make dev` instead; the proxy will automatically follow the
 updated port. When something else is already bound to the configured

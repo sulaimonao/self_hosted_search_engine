@@ -27,11 +27,12 @@ const baseConfig = {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  ...baseConfig,
+  reactStrictMode: true,
   allowedDevOrigins: [
     "http://localhost:3100",
     "http://127.0.0.1:3100",
   ],
+  ...baseConfig,
 };
 
 export default nextConfig;

@@ -77,7 +77,7 @@ dev:
 	    if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
 	      export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:$(BACKEND_PORT); \
 	    fi; \
-	    nohup npm run dev -- --hostname 0.0.0.0 --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
+	    nohup npm run dev -- --hostname localhost --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
 	  ) ; \
 	fi
 	@API_ORIGIN="$${NEXT_PUBLIC_API_BASE_URL}"; \
@@ -85,9 +85,10 @@ dev:
 	  API_ORIGIN="http://127.0.0.1:$(BACKEND_PORT)"; \
 	fi; \
 	API_ORIGIN="$$(printf "%s" "$$API_ORIGIN" | sed 's:/*$$::')"; \
-	echo "✅ UI http://127.0.0.1:$(FRONTEND_PORT)  |  API $$API_ORIGIN"
+	echo "🚀 Frontend ready at http://localhost:$(FRONTEND_PORT)"; \
+	echo "ℹ️  API $$API_ORIGIN"
 	@if [ "$(AUTO_OPEN_BROWSER)" = "1" ]; then \
-	  URL="http://127.0.0.1:$(FRONTEND_PORT)"; \
+	  URL="http://localhost:$(FRONTEND_PORT)"; \
 	  OS=$$(uname -s); \
 	  case "$$OS" in \
 	    Darwin) \
