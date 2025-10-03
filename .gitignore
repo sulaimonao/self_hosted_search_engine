@@ -37,6 +37,7 @@ _MAIN_0.toc
 !backend/app/__main__.py
 !backend/app/shadow/__init__.py
 !backend/app/shadow/manager.py
+!observability/__init__.py
 !tests/api/test_index_api.py
 !tests/api/test_shadow_api.py
 !tests/e2e/test_agent_browser.py
@@ -48,3 +49,4 @@ _MAIN_0.toc
 >>>>>>> theirs
 /.venv
 /logs
+.venv/
