@@ -21,6 +21,7 @@ import type {
   ConfiguredModels,
   LlmHealth,
   PageExtractResponse,
+  ShadowConfig,
   ShadowStatus,
   DiscoveryPreview,
   DiscoveryItem,
@@ -57,6 +58,21 @@ function coerceBoolean(input: unknown): boolean {
     return normalized === "1" || normalized === "true" || normalized === "yes";
   }
   return false;
+}
+
+function tryParseJson(text: string): Record<string, unknown> | null {
+  if (!text || !text.trim()) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(text);
+    if (value && typeof value === "object") {
+      return value as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
@@ -105,6 +121,36 @@ function normalizeShadowStatus(
   };
 }
 
+function normalizeShadowConfig(payload: Record<string, unknown>): ShadowConfig {
+  const enabled = coerceBoolean(payload.enabled);
+  const queued = coerceNumber(payload.queued);
+  const running = coerceNumber(payload.running);
+  const lastUrlRaw =
+    typeof payload.last_url === "string"
+      ? payload.last_url
+      : typeof payload.lastUrl === "string"
+      ? payload.lastUrl
+      : null;
+  const lastStateRaw =
+    typeof payload.last_state === "string"
+      ? payload.last_state
+      : typeof payload.lastState === "string"
+      ? payload.lastState
+      : null;
+  const updatedAt = coerceNumber(payload.updated_at ?? payload.updatedAt);
+  const lastUpdatedAt = coerceNumber(payload.last_updated_at ?? payload.lastUpdatedAt);
+
+  return {
+    enabled,
+    queued: typeof queued === "number" ? queued : undefined,
+    running: typeof running === "number" ? running : undefined,
+    lastUrl: lastUrlRaw ?? null,
+    lastState: lastStateRaw ?? null,
+    updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+    lastUpdatedAt: typeof lastUpdatedAt === "number" ? lastUpdatedAt : null,
+  };
+}
+
 export async function queueShadowIndex(url: string): Promise<ShadowStatus> {
   const normalized = url.trim();
   if (!normalized) {
@@ -141,6 +187,43 @@ export async function fetchShadowStatus(url: string): Promise<ShadowStatus> {
 
   const payload = (await response.json()) as Record<string, unknown>;
   return normalizeShadowStatus(payload, normalized);
+}
+
+export async function fetchShadowConfig(): Promise<ShadowConfig> {
+  const response = await fetch(api("/api/shadow"), { cache: "no-store" });
+  const text = await response.text();
+  if (!response.ok) {
+    const payload = tryParseJson(text);
+    const message =
+      (payload?.error && typeof payload.error === "string" && payload.error.trim())
+        ? payload.error.trim()
+        : text || `Shadow config fetch failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  const payload = tryParseJson(text) ?? {};
+  return normalizeShadowConfig(payload);
+}
+
+export async function updateShadowConfig(input: { enabled: boolean }): Promise<ShadowConfig> {
+  const response = await fetch(api("/api/shadow"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ enabled: Boolean(input.enabled) }),
+  });
+
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+
+  if (!response.ok) {
+    const message =
+      (payload.error && typeof payload.error === "string" && payload.error.trim())
+        ? payload.error.trim()
+        : text || `Shadow config update failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return normalizeShadowConfig(payload);
 }
 
 export function subscribeDiscoveryEvents(
@@ -675,12 +758,25 @@ export async function triggerRefresh(
     body: JSON.stringify(body),
   });
 
+  const text = await response.text();
+
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Refresh request failed (${response.status})`);
+    const parsed = tryParseJson(text);
+    const message =
+      parsed && typeof parsed.error === "string" && parsed.error.trim().length > 0
+        ? parsed.error.trim()
+        : text || `Refresh request failed (${response.status})`;
+    throw new Error(message);
   }
 
-  const payload = (await response.json()) as Record<string, unknown>;
+  let payload = tryParseJson(text) ?? {};
+  if (response.status === 202) {
+    payload = {
+      status: "queued",
+      seed_ids: seedIds.length > 0 ? seedIds : undefined,
+      ...payload,
+    };
+  }
   const jobIdRaw = payload.job_id ?? (payload as { jobId?: unknown }).jobId;
   const jobId = typeof jobIdRaw === "string" && jobIdRaw.trim().length > 0 ? jobIdRaw.trim() : null;
   const statusValue = payload.status ?? (payload as { state?: unknown }).state;

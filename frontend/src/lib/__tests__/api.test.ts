@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchModelInventory, sendChat, ChatRequestError } from "@/lib/api";
+import {
+  fetchModelInventory,
+  sendChat,
+  ChatRequestError,
+  triggerRefresh,
+  fetchShadowConfig,
+  updateShadowConfig,
+} from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
 
 afterEach(() => {
@@ -101,5 +108,57 @@ describe("sendChat", () => {
       hint: "ollama pull gpt-oss",
       code: "model_not_found",
     } satisfies Partial<ChatRequestError>);
+  });
+});
+
+describe("triggerRefresh", () => {
+  it("treats empty 202 responses as queued", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("POST");
+      const payload = JSON.parse(init?.body as string);
+      expect(payload.query.seed_ids).toEqual(["seed-1"]);
+      return new Response("", {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await triggerRefresh({ seedIds: ["seed-1"], force: true, useLlm: false });
+    expect(result.status).toBe("queued");
+    expect(result.jobId).toBeNull();
+    expect(result.raw.status).toBe("queued");
+  });
+});
+
+describe("shadow config", () => {
+  it("parses config payload", async () => {
+    const response = new Response(
+      JSON.stringify({
+        enabled: true,
+        queued: 2,
+        running: 1,
+        last_url: "https://example.com",
+        last_state: "running",
+        updated_at: 1700000000,
+      }),
+      { status: 200 },
+    );
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const config = await fetchShadowConfig();
+    expect(config.enabled).toBe(true);
+    expect(config.queued).toBe(2);
+    expect(config.running).toBe(1);
+    expect(config.lastUrl).toBe("https://example.com");
+  });
+
+  it("throws on update failure with error message", async () => {
+    const response = new Response(JSON.stringify({ error: "shadow_disabled" }), { status: 409 });
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateShadowConfig({ enabled: true })).rejects.toThrow("shadow_disabled");
   });
 });

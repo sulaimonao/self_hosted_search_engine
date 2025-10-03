@@ -195,7 +195,13 @@ export function WebPreview({
                 variant="outline"
                 size="icon"
                 aria-label="Open in new tab"
-                onClick={() => onOpenInNewTab?.(url)}
+                onClick={() => {
+                  if (onOpenInNewTab) {
+                    onOpenInNewTab(url);
+                  } else if (typeof window !== "undefined") {
+                    window.open(url, "_blank", "noopener,noreferrer");
+                  }
+                }}
               >
                 <ExternalLink className="h-4 w-4" />
               </Button>

@@ -7,7 +7,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import trafilatura
 from flask import Flask
@@ -42,12 +42,15 @@ class ShadowIndexer:
         app: Flask,
         runner: JobRunner,
         vector_index: VectorIndexService,
+        enabled: bool = False,
     ) -> None:
         self._app = app
         self._runner = runner
         self._vector_index = vector_index
         self._lock = threading.RLock()
         self._states: Dict[str, Dict[str, Any]] = {}
+        self._enabled = bool(enabled)
+        self._mode_updated_at = time.time()
 
     # ------------------------------------------------------------------
     # Public API
@@ -56,6 +59,9 @@ class ShadowIndexer:
         normalized = self._normalize_url(url)
         if not normalized:
             raise ValueError("url_required")
+
+        if not self.enabled:
+            raise RuntimeError("shadow_disabled")
 
         with self._lock:
             existing = self._states.get(normalized)
@@ -96,6 +102,51 @@ class ShadowIndexer:
             if state:
                 return dict(state)
         return {"url": normalized, "state": "idle"}
+
+    @property
+    def enabled(self) -> bool:
+        with self._lock:
+            return self._enabled
+
+    def set_enabled(self, enabled: bool) -> Dict[str, Any]:
+        with self._lock:
+            self._enabled = bool(enabled)
+            self._mode_updated_at = time.time()
+        return self.get_config()
+
+    def get_config(self) -> Dict[str, Any]:
+        with self._lock:
+            queued = 0
+            running = 0
+            latest: Optional[Dict[str, Any]] = None
+            latest_ts = 0.0
+            for state in self._states.values():
+                status = state.get("state")
+                if status == "queued":
+                    queued += 1
+                elif status == "running":
+                    running += 1
+                updated_at = state.get("updated_at")
+                try:
+                    ts = float(updated_at) if updated_at is not None else 0.0
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if ts >= latest_ts:
+                    latest_ts = ts
+                    latest = state
+
+            payload: Dict[str, Any] = {
+                "enabled": self._enabled,
+                "queued": queued,
+                "running": running,
+                "updated_at": self._mode_updated_at,
+            }
+            if latest:
+                payload["last_url"] = latest.get("url")
+                payload["last_state"] = latest.get("state")
+                if "updated_at" in latest:
+                    payload["last_updated_at"] = latest.get("updated_at")
+            return payload
 
     # ------------------------------------------------------------------
     # Internal helpers

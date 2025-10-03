@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -15,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -50,6 +52,8 @@ import {
   ChatRequestError,
   queueShadowIndex,
   fetchShadowStatus,
+  fetchShadowConfig,
+  updateShadowConfig,
   subscribeDiscoveryEvents,
   fetchDiscoveryItem,
   confirmDiscoveryItem,
@@ -73,6 +77,7 @@ import type {
   SearchHit,
   PageExtractResponse,
   DiscoveryPreview,
+  ShadowConfig,
 } from "@/lib/types";
 import { devlog } from "@/lib/devlog";
 import { normalizeInput } from "@/lib/normalize-input";
@@ -287,7 +292,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const currentUrlIsHttp = isHttpUrl(currentUrl);
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
-  const shadowModeEnabled = SHADOW_MODE_ENABLED;
+  const [shadowModeEnabled, setShadowModeEnabled] = useState<boolean>(SHADOW_MODE_ENABLED);
+  const [shadowConfig, setShadowConfig] = useState<ShadowConfig | null>(null);
+  const [shadowConfigLoading, setShadowConfigLoading] = useState(true);
+  const [shadowConfigSaving, setShadowConfigSaving] = useState(false);
+  const [shadowConfigError, setShadowConfigError] = useState<string | null>(null);
 
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
@@ -306,6 +315,43 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   useEffect(() => {
     devlog({ evt: "ui.mount" });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      setShadowConfigLoading(true);
+      setShadowConfigError(null);
+      try {
+        const config = await fetchShadowConfig();
+        if (cancelled) {
+          return;
+        }
+        setShadowConfig(config);
+        setShadowModeEnabled(Boolean(config.enabled));
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error ?? "Unable to load shadow mode status");
+        setShadowConfigError(message);
+        setShadowModeEnabled(false);
+      } finally {
+        if (!cancelled) {
+          setShadowConfigLoading(false);
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -400,6 +446,15 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [navigateTo, replaceUrl]
   );
+
+  const handleOpenInNewTab = useCallback((url: string) => {
+    const target = url.trim();
+    if (!target) return;
+    devlog({ evt: "ui.preview.open_external", url: target });
+    if (typeof window !== "undefined") {
+      window.open(target, "_blank", "noopener,noreferrer");
+    }
+  }, []);
 
   const handleBack = useCallback(() => {
     setPreviewState((state) => {
@@ -559,6 +614,38 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       return err;
     },
     [refreshSeeds]
+  );
+
+  const handleShadowToggle = useCallback(
+    async (next: boolean) => {
+      const previous = shadowModeEnabled;
+      if (next === previous) {
+        return;
+      }
+      setShadowModeEnabled(next);
+      setShadowConfigSaving(true);
+      setShadowConfigError(null);
+      try {
+        const config = await updateShadowConfig({ enabled: next });
+        setShadowConfig(config);
+        setShadowModeEnabled(Boolean(config.enabled));
+        setShadowConfigError(null);
+        devlog({ evt: "ui.shadow.mode", enabled: Boolean(config.enabled) });
+        pushToast(config.enabled ? "Shadow mode enabled" : "Shadow mode disabled");
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error ?? "Failed to update shadow mode");
+        setShadowModeEnabled(previous);
+        setShadowConfigError(message);
+        pushToast(message, { variant: "destructive" });
+        devlog({ evt: "ui.shadow.toggle_error", enabled: next, message });
+      } finally {
+        setShadowConfigSaving(false);
+      }
+    },
+    [pushToast, shadowModeEnabled],
   );
 
   const handleCrawlDomain = useCallback(async () => {
@@ -1676,7 +1763,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [pushToast]);
 
   useEffect(() => {
-    if (!shadowModeEnabled) {
+    if (!shadowModeEnabled || shadowConfigSaving) {
       shadowWatcherRef.current?.cancel?.();
       shadowWatcherRef.current = null;
       return;
@@ -1758,7 +1845,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       cancelled = true;
       shadowWatcherRef.current = null;
     };
-  }, [currentUrl, pushToast, shadowModeEnabled]);
+  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving]);
 
   useEffect(() => {
     chatHistoryRef.current = chatMessages;
@@ -1833,6 +1920,32 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const supportsVision = useMemo(() => modelSupportsVision(chatModel), [chatModel]);
 
+  const shadowStatusText = useMemo(() => {
+    if (shadowConfigError) {
+      return shadowConfigError;
+    }
+    if (shadowConfigLoading) {
+      return "Checking status…";
+    }
+    if (!shadowConfig) {
+      return shadowModeEnabled ? "Idle" : "Disabled";
+    }
+    const details: string[] = [];
+    if (typeof shadowConfig.running === "number" && shadowConfig.running > 0) {
+      details.push(`${shadowConfig.running} running`);
+    }
+    if (typeof shadowConfig.queued === "number" && shadowConfig.queued > 0) {
+      details.push(`${shadowConfig.queued} queued`);
+    }
+    if (shadowConfig.lastState && shadowConfig.lastUrl) {
+      details.push(`${shadowConfig.lastState} ${shadowConfig.lastUrl}`);
+    }
+    if (details.length === 0) {
+      return shadowModeEnabled ? "Idle" : "Disabled";
+    }
+    return details.join(" · ");
+  }, [shadowConfig, shadowConfigError, shadowConfigLoading, shadowModeEnabled]);
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <OmniBox
@@ -1843,6 +1956,35 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         onOpenCommand={() => setCommandOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="font-semibold text-foreground">Shadow mode</span>
+          <Badge variant={shadowModeEnabled ? "default" : "outline"}>
+            {shadowModeEnabled ? "Enabled" : "Disabled"}
+          </Badge>
+          {shadowConfigLoading || shadowConfigSaving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
+          ) : null}
+          {shadowStatusText ? (
+            <span
+              className={`max-w-[16rem] truncate ${
+                shadowConfigError ? "text-destructive" : "text-muted-foreground"
+              }`}
+              title={shadowStatusText}
+            >
+              {shadowStatusText}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={shadowModeEnabled}
+            onCheckedChange={handleShadowToggle}
+            disabled={shadowConfigLoading || shadowConfigSaving}
+            aria-label="Toggle shadow mode"
+          />
+        </div>
+      </div>
       <div className="flex flex-1 flex-col lg:flex-row">
         <SearchResultsPanel
           className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
@@ -1881,7 +2023,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               onHistoryBack={handleBack}
               onHistoryForward={handleForward}
               onReload={handleReload}
-              onOpenInNewTab={(url) => handleNavigate(url)}
+              onOpenInNewTab={handleOpenInNewTab}
               onCrawlDomain={handleCrawlDomain}
               crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
               crawlStatus={crawlMonitor}
