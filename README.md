@@ -142,8 +142,10 @@ Open the browser at `http://localhost:3100` to use the UI. Make sure `ollama`
 is listening on `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
 `localhost:5050` is busy (macOS ships AirPlay on that port), run
 `BACKEND_PORT=5051 make dev` instead; the proxy will automatically follow the
-updated port. The Flask API root now returns a JSON ping to confirm the service
-is API-only and that the UI lives entirely in Next.js.
+updated port. `make dev` now detects conflicting listeners and exits early with
+a message naming the offender along with the override hint above. The Flask API
+root now returns a JSON ping to confirm the service is API-only and that the UI
+lives entirely in Next.js.
 
 Verify the stack after startup with:
 
