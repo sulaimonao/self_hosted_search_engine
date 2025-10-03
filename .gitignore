@@ -50,3 +50,4 @@ _MAIN_0.toc
 /.venv
 /logs
 .venv/
+logs/backend.pid
