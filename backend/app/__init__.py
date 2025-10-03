@@ -252,8 +252,20 @@ def create_app() -> Flask:
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
     )
-    shadow_manager = ShadowIndexer(app=app, runner=runner, vector_index=vector_index_service)
+    feature_shadow_mode = os.getenv("FEATURE_SHADOW_MODE", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    shadow_manager = ShadowIndexer(
+        app=app,
+        runner=runner,
+        vector_index=vector_index_service,
+        enabled=feature_shadow_mode,
+    )
     app.config.setdefault("SHADOW_INDEX_MANAGER", shadow_manager)
+    app.config.setdefault("FEATURE_SHADOW_MODE", feature_shadow_mode)
     app.config.setdefault(
         "SEED_REGISTRY_PATH",
         Path(__file__).resolve().parents[2] / "seeds" / "registry.yaml",

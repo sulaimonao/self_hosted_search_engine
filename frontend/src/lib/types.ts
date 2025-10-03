@@ -198,6 +198,16 @@ export interface ShadowStatus {
   updated_at?: number;
 }
 
+export interface ShadowConfig {
+  enabled: boolean;
+  queued?: number;
+  running?: number;
+  lastUrl?: string | null;
+  lastState?: string | null;
+  updatedAt?: number | null;
+  lastUpdatedAt?: number | null;
+}
+
 export interface DiscoveryPreview {
   id: string;
   path: string;
