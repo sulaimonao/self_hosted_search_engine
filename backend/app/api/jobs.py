@@ -47,3 +47,52 @@ def focused_last_index_time():
         except Exception:
             value = 0
     return jsonify({"last_index_time": value})
+
+
+@bp.get("/crawl/start")
+def crawl_start():
+    worker = current_app.config.get("REFRESH_WORKER")
+    if worker is None:
+        return jsonify({"error": "refresh_unavailable"}), 503
+
+    seed_id = request.args.get("seed_id", "").strip()
+    url = request.args.get("url", "").strip()
+    query = request.args.get("query", "").strip()
+    force = request.args.get("force", "0").lower() in {"1", "true", "yes", "on"}
+
+    seeds: list[str] = []
+    if url:
+        seeds.append(url)
+        if not query:
+            query = url
+    if seed_id:
+        seeds.append(seed_id)
+        if not query:
+            query = seed_id
+
+    query = query.strip()
+    if not query:
+        return jsonify({"error": "missing_query"}), 400
+
+    try:
+        job_id, status, created = worker.enqueue(
+            query,
+            use_llm=False,
+            model=None,
+            seeds=seeds or None,
+            force=force,
+        )
+    except ValueError as exc:
+        return jsonify({"error": "invalid_query", "detail": str(exc)}), 400
+
+    response = {
+        "job_id": job_id,
+        "created": bool(created),
+        "status": "queued",
+        "seeds": seeds,
+    }
+    if isinstance(status, dict):
+        response["status"] = status.get("state") or "queued"
+        if status.get("message"):
+            response["message"] = status["message"]
+    return jsonify(response)
