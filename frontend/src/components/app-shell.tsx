@@ -36,6 +36,8 @@ import { ToastContainer, ToastMessage } from "@/components/toast-container";
 import { LocalDiscoveryPanel } from "@/components/local-discovery-panel";
 import { CopilotHeader } from "@/components/copilot-header";
 import { ContextPanel } from "@/components/context-panel";
+import { ProgressPanel } from "@/components/ProgressPanel";
+import { DocInspector } from "@/components/DocInspector";
 import {
   extractSelection,
   fetchModelInventory,
@@ -62,6 +64,7 @@ import {
   triggerRefresh,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
+import { recordVisit } from "@/lib/shadow";
 import type {
   AgentLogEntry,
   ChatMessage,
@@ -237,6 +240,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [isAutopulling, setIsAutopulling] = useState(false);
   const [autopullMessage, setAutopullMessage] = useState<string | null>(null);
   const [pageContext, setPageContext] = useState<PageExtractResponse | null>(initialContext ?? null);
+  const [docMetadata, setDocMetadata] = useState<Record<string, unknown> | null>(null);
   const [includeContext, setIncludeContext] = useState(Boolean(initialContext));
   const [isExtractingContext, setIsExtractingContext] = useState(false);
   const [manualContextTrigger, setManualContextTrigger] = useState(0);
@@ -391,6 +395,65 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       return [{ ...first, createdAt: new Date().toISOString() }, ...rest];
     });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentUrl || !/^https?:/i.test(currentUrl)) {
+      setDocMetadata(null);
+      return;
+    }
+    const controller = new AbortController();
+    const loadMetadata = async () => {
+      try {
+        const listResp = await fetch(
+          `/api/docs?query=${encodeURIComponent(currentUrl)}`,
+          { signal: controller.signal },
+        );
+        if (!listResp.ok) {
+          if (!cancelled) {
+            setDocMetadata(null);
+          }
+          return;
+        }
+        const payload = (await listResp.json()) as { items?: Array<Record<string, unknown>> };
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const match =
+          items.find((item) => typeof item.url === "string" && item.url === currentUrl) ??
+          items[0];
+        if (!match) {
+          if (!cancelled) {
+            setDocMetadata(null);
+          }
+          return;
+        }
+        if (match && typeof match.id === "string" && match.id) {
+          const detailResp = await fetch(`/api/docs/${match.id}`, { signal: controller.signal });
+          if (detailResp.ok) {
+            const detailPayload = await detailResp.json();
+            if (!cancelled) {
+              const detail = detailPayload?.item ?? match;
+              setDocMetadata(detail as Record<string, unknown>);
+            }
+            return;
+          }
+        }
+        if (!cancelled) {
+          setDocMetadata(match as Record<string, unknown>);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDocMetadata(null);
+        }
+      }
+    };
+
+    void loadMetadata();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [currentUrl]);
 
   const navigateTo = useCallback(
     (inputValue: string) => {
@@ -1785,6 +1848,14 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
     const run = async () => {
       try {
+        await recordVisit({ url: targetUrl });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "Failed to record visit");
+        devlog({ evt: "ui.shadow.visit_error", url: targetUrl, message });
+      }
+
+      try {
         await queueShadowIndex(targetUrl);
       } catch (error) {
         const message =
@@ -2043,6 +2114,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
             </TabsList>
             <TabsContent value="chat" className="flex-1 flex flex-col">
               <div className="flex flex-1 flex-col gap-3 p-3">
+                <ProgressPanel jobId={searchState.jobId} />
+                <DocInspector doc={docMetadata} />
                 <ContextPanel
                   url={currentUrl}
                   context={pageContext}

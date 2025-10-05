@@ -49,6 +49,11 @@ def create_app() -> Flask:
     from .api import chat as chat_api
     from .api import discovery as discovery_api
     from .api import extract as extract_api
+    from .api import progress as progress_api
+    from .api import visits as visits_api
+    from .api import docs as docs_api
+    from .api import chat_history as chat_history_api
+    from .api import memory as memory_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
     from .api import index as index_api
@@ -66,6 +71,9 @@ def create_app() -> Flask:
     from .shadow import ShadowIndexer
     from .metrics import metrics as metrics_module
     from .search.service import SearchService
+    from .db import AppStateDB
+    from .services.progress_bus import ProgressBus
+    from .services.labeler import LabelWorker, MemoryAgingWorker
     from server.refresh_worker import RefreshWorker
     from server.learned_web_db import get_db
     from .middleware import request_id as request_id_middleware
@@ -131,6 +139,9 @@ def create_app() -> Flask:
     config.ensure_dirs()
     config.log_summary()
 
+    state_db = AppStateDB(config.app_state_db_path)
+    progress_bus = ProgressBus()
+
     engine_config = EngineConfig.from_yaml(CONFIG_PATH)
     app.config.setdefault("RAG_ENGINE_CONFIG", engine_config)
 
@@ -141,9 +152,21 @@ def create_app() -> Flask:
 
     db = get_db(config.learned_web_db_path)
     runner = JobRunner(config.logs_dir)
-    manager = FocusedCrawlManager(config, runner, db)
+    manager = FocusedCrawlManager(
+        config,
+        runner,
+        db,
+        state_db=state_db,
+        progress_bus=progress_bus,
+    )
     search_service = SearchService(config, manager)
-    refresh_worker = RefreshWorker(config, search_service=search_service, db=db)
+    refresh_worker = RefreshWorker(
+        config,
+        search_service=search_service,
+        db=db,
+        state_db=state_db,
+        progress_bus=progress_bus,
+    )
 
     documents_dir = config.agent_data_dir / "documents"
     frontier_store = FrontierStore(config.frontier_db_path)
@@ -186,6 +209,36 @@ def create_app() -> Flask:
     app.config.setdefault("FEATURE_LOCAL_DISCOVERY", feature_local_discovery)
 
     reload_enabled = os.getenv("BACKEND_RELOAD", "0").lower() in {"1", "true", "yes", "on"}
+
+    label_worker = None
+    memory_worker = None
+    try:
+        worker_interval = float(os.getenv("LABELER_INTERVAL", "600"))
+    except (TypeError, ValueError):
+        worker_interval = 600.0
+    try:
+        memory_interval = float(os.getenv("MEMORY_AGING_INTERVAL", "86400"))
+    except (TypeError, ValueError):
+        memory_interval = 86_400.0
+    should_start_workers = not reload_enabled or os.getenv("WERKZEUG_RUN_MAIN") == "true"
+    if should_start_workers:
+        try:
+            label_worker = LabelWorker(state_db, interval=worker_interval)
+            memory_worker = MemoryAgingWorker(state_db, interval=memory_interval)
+            label_worker.start()
+            memory_worker.start()
+        except Exception:  # pragma: no cover - defensive logging
+            LOGGER.exception("background enrichment workers failed to start")
+            label_worker = None
+            memory_worker = None
+        else:
+            import atexit
+
+            atexit.register(label_worker.stop)
+            atexit.register(memory_worker.stop)
+
+    app.config.setdefault("LABEL_WORKER", label_worker)
+    app.config.setdefault("MEMORY_AGING_WORKER", memory_worker)
 
     if feature_local_discovery:
         from .services.local_discovery import LocalDiscoveryService
@@ -249,6 +302,8 @@ def create_app() -> Flask:
         SEARCH_SERVICE=search_service,
         REFRESH_WORKER=refresh_worker,
         LEARNED_WEB_DB=db,
+        APP_STATE_DB=state_db,
+        PROGRESS_BUS=progress_bus,
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
     )
@@ -274,6 +329,11 @@ def create_app() -> Flask:
 
     app.register_blueprint(search_api.bp)
     app.register_blueprint(jobs_api.bp)
+    app.register_blueprint(progress_api.bp)
+    app.register_blueprint(visits_api.bp)
+    app.register_blueprint(docs_api.bp)
+    app.register_blueprint(memory_api.bp)
+    app.register_blueprint(chat_history_api.bp)
     app.register_blueprint(chat_api.bp)
     app.register_blueprint(llm_api.bp)
     app.register_blueprint(research_api.bp)

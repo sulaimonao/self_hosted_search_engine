@@ -11,7 +11,9 @@ from collections import deque
 from typing import TYPE_CHECKING, Deque, Dict, Optional, Sequence
 
 from backend.app.config import AppConfig
+from backend.app.db import AppStateDB
 from backend.app.jobs.focused_crawl import run_focused_crawl
+from backend.app.services.progress_bus import ProgressBus
 
 
 if TYPE_CHECKING:  # pragma: no cover - imported for typing only
@@ -34,11 +36,15 @@ class RefreshWorker:
         max_history: int = 20,
         search_service: Optional["SearchService"] = None,
         db: Optional["LearnedWebDB"] = None,
+        state_db: Optional[AppStateDB] = None,
+        progress_bus: Optional[ProgressBus] = None,
     ) -> None:
         self.config = config
         self.max_history = max_history
         self._search_service = search_service
         self._db = db
+        self._state_db = state_db
+        self._progress_bus = progress_bus
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._jobs: Dict[str, dict] = {}
         self._query_to_job: Dict[str, str] = {}
@@ -117,6 +123,25 @@ class RefreshWorker:
             self._jobs[job_id] = record
             self._query_to_job[normalized] = job_id
             self._queue.put(job_id)
+            if self._state_db is not None:
+                primary_seed = seed_list[0] if seed_list else None
+                self._state_db.record_crawl_job(
+                    job_id,
+                    seed=primary_seed,
+                    query=query,
+                    normalized_path=str(self.config.normalized_path),
+                )
+            if self._progress_bus is not None:
+                self._progress_bus.ensure_queue(job_id)
+                self._progress_bus.publish(
+                    job_id,
+                    {
+                        "stage": "queued",
+                        "job_id": job_id,
+                        "query": query,
+                        "seeds": seed_list or [],
+                    },
+                )
             return job_id, self._snapshot(record), True
 
     def status(self, *, job_id: Optional[str] = None, query: Optional[str] = None) -> dict:
@@ -167,8 +192,29 @@ class RefreshWorker:
             depth = int(job.get("depth") or self.DEFAULT_FRONTIER_DEPTH)
             manual_seeds = list(job.get("seeds") or [])
 
+        state_db = self._state_db
+        progress_bus = self._progress_bus
+        if state_db is not None:
+            state_db.update_crawl_status(job_id, "running")
+        if progress_bus is not None:
+            progress_bus.publish(
+                job_id,
+                {"stage": "running", "job_id": job_id, "query": job.get("query")},
+            )
+
         def _progress(stage: str, payload: dict) -> None:
-            self._handle_progress(job_id, stage, payload)
+            payload_dict = dict(payload or {})
+            stats_snapshot = None
+            if state_db is not None:
+                stats_snapshot = state_db.record_crawl_event(job_id, stage, payload_dict)
+            event = dict(payload_dict)
+            event["stage"] = stage
+            event["job_id"] = job_id
+            if stats_snapshot is not None:
+                event["stats"] = stats_snapshot
+            if progress_bus is not None:
+                progress_bus.publish(job_id, event)
+            self._handle_progress(job_id, stage, payload_dict)
 
         try:
             result = run_focused_crawl(
@@ -181,6 +227,8 @@ class RefreshWorker:
                 frontier_depth=depth,
                 progress_callback=_progress,
                 db=self._db,
+                state_db=state_db,
+                job_id=job_id,
             )
         except Exception as exc:  # pragma: no cover - defensive path
             self._mark_error(job_id, str(exc))
@@ -191,6 +239,31 @@ class RefreshWorker:
                 self._search_service.reload_index()
             except Exception:  # pragma: no cover - defensive logging only
                 LOGGER.exception("failed to reload search index after refresh")
+
+        stats_payload = {
+            "pages_fetched": int(result.get("pages_fetched", 0) or 0),
+            "docs_indexed": int(result.get("docs_indexed", 0) or 0),
+            "skipped": int(result.get("skipped", 0) or 0),
+            "deduped": int(result.get("deduped", 0) or 0),
+            "embedded": int(result.get("embedded", 0) or 0),
+            "new_domains": int(result.get("new_domains", 0) or 0),
+        }
+        preview_payload = result.get("normalized_preview") or []
+        normalized_path = result.get("normalized_path")
+        if state_db is not None:
+            state_db.update_crawl_status(
+                job_id,
+                "success",
+                stats=stats_payload,
+                preview=preview_payload,
+                normalized_path=str(normalized_path) if normalized_path else None,
+            )
+            state_db.record_crawl_event(job_id, "done", {"stats": stats_payload})
+        if progress_bus is not None:
+            progress_bus.publish(
+                job_id,
+                {"stage": "done", "job_id": job_id, "stats": stats_payload},
+            )
 
         with self._lock:
             job = self._jobs.get(job_id)
@@ -241,6 +314,14 @@ class RefreshWorker:
             normalized = job.get("normalized_query")
             if normalized and self._query_to_job.get(normalized) == job_id:
                 self._query_to_job.pop(normalized, None)
+        if self._state_db is not None:
+            self._state_db.update_crawl_status(job_id, "error", error=error)
+            self._state_db.record_crawl_event(job_id, "error", {"error": error})
+        if self._progress_bus is not None:
+            self._progress_bus.publish(
+                job_id,
+                {"stage": "error", "job_id": job_id, "error": error},
+            )
 
     def _handle_progress(self, job_id: str, stage: str, payload: dict) -> None:
         message = self._stage_message(stage, payload)

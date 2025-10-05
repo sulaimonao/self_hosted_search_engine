@@ -24,6 +24,8 @@ def _patch_refresh_worker(monkeypatch: pytest.MonkeyPatch):
         query_embedding=None,
         progress_callback=None,
         db=None,
+        state_db=None,
+        job_id=None,
     ):
         if progress_callback:
             progress_callback(
@@ -126,6 +128,8 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
         query_embedding=None,
         progress_callback=None,
         db=None,
+        state_db=None,
+        job_id=None,
     ):
         if progress_callback:
             progress_callback("frontier_start", {"query": query})

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -11,6 +12,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 from crawler.run import FocusedCrawler
 from server.discover import DiscoveryEngine
+
+from backend.app.db import AppStateDB
+from backend.app.services.categorizer import deterministic_categories
+from backend.app.services.progress_bus import ProgressBus
 
 from ..config import AppConfig
 from ..indexer.incremental import incremental_index
@@ -28,6 +33,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from crawler.frontier import Candidate
 
 
+def _document_key(url: str, content_hash: str) -> str:
+    payload = f"{url}\u0001{content_hash}".encode("utf-8", errors="ignore")
+    return hashlib.sha1(payload).hexdigest()
+
+
 def run_focused_crawl(
     query: str,
     budget: int,
@@ -41,6 +51,8 @@ def run_focused_crawl(
     query_embedding: Optional[Sequence[float]] = None,
     progress_callback: Optional[Callable[[str, dict], None]] = None,
     db: Optional[LearnedWebDB] = None,
+    state_db: Optional[AppStateDB] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Execute the full focused crawl pipeline and return summary statistics."""
 
@@ -173,7 +185,8 @@ def run_focused_crawl(
         if raw_path:
             print(f"[focused] raw capture written to {raw_path}")
 
-        normalized_docs = []
+        normalized_docs: List[Dict[str, object]] = []
+        preview_samples: List[Dict[str, object]] = []
         if pages and raw_path:
             _emit("normalize_start", pages=len(pages))
             with start_span(
@@ -189,7 +202,30 @@ def run_focused_crawl(
                 )
                 if normalize_span is not None:
                     normalize_span.set_attribute("docs", len(normalized_docs))
-            _emit("normalize_complete", docs=len(normalized_docs))
+            enriched_docs: List[Dict[str, object]] = []
+            for doc in normalized_docs:
+                url_value = str(doc.get("url") or "")
+                body = str(doc.get("body") or "")
+                categories, site = deterministic_categories(url_value, body)
+                tokens = len(body.split()) if body else 0
+                content_hash = str(doc.get("content_hash") or "")
+                doc["site"] = site
+                doc["categories"] = categories
+                doc["tokens"] = tokens
+                doc["verification"] = {"hash": content_hash, "sample": body[:200]}
+                enriched_docs.append(doc)
+            normalized_docs = enriched_docs
+            preview_samples = [
+                {
+                    "url": doc.get("url"),
+                    "title": doc.get("title"),
+                    "site": doc.get("site"),
+                    "categories": doc.get("categories"),
+                    "hash": doc.get("content_hash"),
+                }
+                for doc in normalized_docs[:5]
+            ]
+            _emit("normalize_complete", docs=len(normalized_docs), preview=preview_samples)
             print(f"[focused] normalized {len(normalized_docs)} document(s)")
             _emit("index_start", docs=len(normalized_docs))
             with start_span(
@@ -207,6 +243,38 @@ def run_focused_crawl(
                     index_span.set_attribute("index.added", added)
                     index_span.set_attribute("index.skipped", skipped)
                     index_span.set_attribute("index.deduped", deduped)
+            if state_db is not None and job_id:
+                for doc in normalized_docs:
+                    url_value = str(doc.get("url") or "")
+                    content_hash = str(doc.get("content_hash") or "")
+                    if not url_value:
+                        continue
+                    doc_key = _document_key(url_value, content_hash or url_value)
+                    description = str(doc.get("h1h2") or doc.get("body", "")[:160])
+                    fetched_at = doc.get("fetched_at")
+                    try:
+                        fetched_ts = float(fetched_at) if fetched_at is not None else time.time()
+                    except (TypeError, ValueError):
+                        fetched_ts = time.time()
+                    state_db.upsert_document(
+                        job_id=job_id,
+                        document_id=doc_key,
+                        url=url_value,
+                        canonical_url=str(doc.get("canonical_url") or url_value),
+                        site=str(doc.get("site") or "") or None,
+                        title=str(doc.get("title") or "") or None,
+                        description=description or None,
+                        language=str(doc.get("lang") or "") or None,
+                        fetched_at=fetched_ts,
+                        normalized_path=str(config.normalized_path),
+                        text_len=len(str(doc.get("body") or "")),
+                        tokens=int(doc.get("tokens") or 0),
+                        content_hash=content_hash or None,
+                        categories=doc.get("categories") or [],
+                        labels=[],
+                        source="focused_crawl",
+                        verification=doc.get("verification") or {},
+                    )
             if learned_db is not None:
                 try:
                     urls_to_mark = [
@@ -280,6 +348,8 @@ def run_focused_crawl(
         "deduped": deduped,
         "duration": duration,
         "normalized_docs": normalized_docs,
+        "normalized_preview": preview_samples,
+        "normalized_path": str(config.normalized_path),
         "raw_path": str(raw_path) if raw_path else None,
         "crawl_id": crawl_id,
         "embedded": embedded_count,
@@ -409,6 +479,8 @@ class FocusedCrawlManager:
     config: AppConfig
     runner: JobRunner
     db: LearnedWebDB
+    state_db: AppStateDB | None = None
+    progress_bus: ProgressBus | None = None
 
     def __post_init__(self) -> None:
         import threading
@@ -470,9 +542,32 @@ class FocusedCrawlManager:
                 if unique:
                     seeds = unique
 
+            job_id_holder: Dict[str, str] = {}
+
             def _job() -> dict:
+                job_ref = job_id_holder.get("id")
+                state_db = self.state_db
+                progress_bus = self.progress_bus
+
+                if state_db is not None and job_ref:
+                    state_db.update_crawl_status(job_ref, "running")
+
+                def _progress(stage: str, payload: dict) -> None:
+                    payload_dict = dict(payload or {})
+                    stats_snapshot = None
+                    if state_db is not None and job_ref:
+                        stats_snapshot = state_db.record_crawl_event(job_ref, stage, payload_dict)
+                    event = dict(payload_dict)
+                    event["stage"] = stage
+                    if job_ref:
+                        event["job_id"] = job_ref
+                    if stats_snapshot is not None:
+                        event["stats"] = stats_snapshot
+                    if progress_bus is not None and job_ref:
+                        progress_bus.publish(job_ref, event)
+
                 try:
-                    return run_focused_crawl(
+                    result = run_focused_crawl(
                         q,
                         self.config.focused_budget,
                         use_llm,
@@ -480,20 +575,83 @@ class FocusedCrawlManager:
                         config=self.config,
                         extra_seeds=seeds,
                         query_embedding=query_embedding,
+                        progress_callback=_progress,
                         db=self.db,
+                        state_db=self.state_db,
+                        job_id=job_ref,
                     )
                 except TypeError as exc:
                     if "unexpected keyword argument" not in str(exc):
                         raise
-                    return run_focused_crawl(
+                    result = run_focused_crawl(
                         q,
                         self.config.focused_budget,
                         use_llm,
                         model,
                         config=self.config,
+                        progress_callback=_progress,
+                        db=self.db,
+                        state_db=self.state_db,
+                        job_id=job_ref,
                     )
+                except Exception as exc:
+                    if state_db is not None and job_ref:
+                        state_db.update_crawl_status(job_ref, "error", error=str(exc))
+                        state_db.record_crawl_event(job_ref, "error", {"error": str(exc)})
+                    if progress_bus is not None and job_ref:
+                        progress_bus.publish(
+                            job_ref,
+                            {"stage": "error", "job_id": job_ref, "error": str(exc)},
+                        )
+                    raise
+
+                stats_payload = {
+                    "pages_fetched": int(result.get("pages_fetched", 0) or 0),
+                    "docs_indexed": int(result.get("docs_indexed", 0) or 0),
+                    "skipped": int(result.get("skipped", 0) or 0),
+                    "deduped": int(result.get("deduped", 0) or 0),
+                    "embedded": int(result.get("embedded", 0) or 0),
+                    "new_domains": int(result.get("new_domains", 0) or 0),
+                }
+                preview_payload = result.get("normalized_preview") or []
+                normalized_path = result.get("normalized_path")
+                if state_db is not None and job_ref:
+                    state_db.update_crawl_status(
+                        job_ref,
+                        "success",
+                        stats=stats_payload,
+                        preview=preview_payload,
+                        normalized_path=str(normalized_path) if normalized_path else None,
+                    )
+                    state_db.record_crawl_event(job_ref, "done", {"stats": stats_payload})
+                if progress_bus is not None and job_ref:
+                    progress_bus.publish(
+                        job_ref,
+                        {"stage": "done", "job_id": job_ref, "stats": stats_payload},
+                    )
+                return result
 
             job_id = self.runner.submit(_job)
+            job_id_holder["id"] = job_id
+            if self.state_db is not None:
+                primary_seed = seed_urls[0] if seed_urls else None
+                self.state_db.record_crawl_job(
+                    job_id,
+                    seed=primary_seed,
+                    query=q,
+                    normalized_path=str(self.config.normalized_path),
+                )
+            if self.progress_bus is not None:
+                self.progress_bus.ensure_queue(job_id)
+                self.progress_bus.publish(
+                    job_id,
+                    {
+                        "stage": "queued",
+                        "job_id": job_id,
+                        "query": q,
+                        "seeds": seed_urls,
+                    },
+                )
             self._history[q] = now
             self._persist_history()
         LOGGER.info("scheduled focused crawl for '%s' as job %s", q, job_id)

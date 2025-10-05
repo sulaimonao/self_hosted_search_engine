@@ -52,6 +52,7 @@ class AppConfig:
     last_index_time_path: Path
     logs_dir: Path
     learned_web_db_path: Path
+    app_state_db_path: Path
     frontier_db_path: Path
     agent_data_dir: Path
     agent_plans_dir: Path
@@ -106,6 +107,10 @@ class AppConfig:
             os.getenv("LEARNED_WEB_DB_PATH"), data_dir / "learned_web.sqlite3"
         )
         _guard_directory(learned_web_db_path.parent, label="LEARNED_WEB_DB_PATH parent")
+        app_state_db_path = _resolve_path(
+            os.getenv("APP_STATE_DB_PATH"), data_dir / "app_state.sqlite3"
+        )
+        _guard_directory(app_state_db_path.parent, label="APP_STATE_DB_PATH parent")
 
         agent_root_default = data_dir / "agent"
         agent_root = _resolve_path(os.getenv("AGENT_DATA_DIR"), agent_root_default)
@@ -155,6 +160,7 @@ class AppConfig:
             last_index_time_path=last_index_time_path,
             logs_dir=logs_dir,
             learned_web_db_path=learned_web_db_path,
+            app_state_db_path=app_state_db_path,
             frontier_db_path=frontier_db_path,
             agent_data_dir=agent_root,
             agent_plans_dir=agent_plans_dir,
@@ -191,6 +197,7 @@ class AppConfig:
             self.simhash_path.parent,
             self.last_index_time_path.parent,
             self.learned_web_db_path.parent,
+            self.app_state_db_path.parent,
             self.frontier_db_path.parent,
             self.agent_data_dir,
             self.agent_plans_dir,
@@ -217,6 +224,7 @@ class AppConfig:
             "crawl_use_playwright": self.crawl_use_playwright,
             "use_llm_rerank": self.use_llm_rerank,
             "learned_web_db_path": str(self.learned_web_db_path),
+            "app_state_db_path": str(self.app_state_db_path),
             "frontier_db_path": str(self.frontier_db_path),
             "agent_data_dir": str(self.agent_data_dir),
             "agent_max_fetch_per_turn": self.agent_max_fetch_per_turn,
