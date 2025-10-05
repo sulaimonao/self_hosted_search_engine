@@ -42,6 +42,7 @@ _MAIN_0.toc
 !backend/app/services/categorizer.py
 !backend/app/services/context_assembler.py
 !backend/app/services/labeler.py
+!backend/app/services/embeddings.py
 !backend/app/services/__init__.py
 !backend/app/db/__init__.py
 !backend/app/db/schema.py
