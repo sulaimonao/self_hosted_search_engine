@@ -1,5 +1,7 @@
 
-.PHONY: bootstrap dev stop logs verify first-run preflight setup
+.DEFAULT_GOAL := start
+
+.PHONY: start bootstrap dev stop logs verify first-run preflight setup
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
@@ -48,11 +50,16 @@ setup:
 bootstrap:
 	@bash scripts/bootstrap.sh
 
+start:
+	@echo "💡 Tip: Press Ctrl+C to quit safely. Cleanup will run automatically."
+	@trap '$(MAKE) stop || true' EXIT INT TERM; \
+		$(MAKE) dev
+
 dev:
 	@# If stdout is not a TTY, skip (prevents sandboxes from hanging)
 	@if [ ! -t 1 ]; then \
-	  echo "Non-interactive environment detected; skipping 'make dev'."; \
-	  echo "Run 'make verify' instead."; \
+  echo "Non-interactive environment detected; skipping 'make dev'."; \
+  echo "Run 'make verify' instead."; \
 	  exit 0; \
 	fi
 	@missing=0; \
@@ -106,52 +113,12 @@ dev:
 	fi
 
 stop:
-	@set -e; \
-	  echo "🛑 Stopping dev processes…"; \
-	  BACKEND_PORT="$(BACKEND_PORT)"; \
-	  BACKEND_CMD_PATTERN="$(BACKEND_CMD_PATTERN)"; \
-	  FRONTEND_PORT="$(FRONTEND_PORT)"; \
-	  FRONTEND_CMD_PATTERN="$(FRONTEND_CMD_PATTERN)"; \
-	  backend_from_file=""; \
-	  if [ -f logs/backend.pid ]; then \
-	    backend_from_file="$$(tr '\n' ' ' < logs/backend.pid)"; \
-	  fi; \
-	  backend_from_pattern="$$(pgrep -f "$$BACKEND_CMD_PATTERN" 2>/dev/null | tr '\n' ' ' || true)"; \
-	  backend_from_port="$$(lsof -tiTCP:"$$BACKEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
-	  backend_pids="$$(printf "%s\n%s\n%s\n" "$$backend_from_file" "$$backend_from_pattern" "$$backend_from_port" | tr ' ' '\n' | sed '/^$$/d' | sort -u | tr '\n' ' ')"; \
-	  if [ -n "$$backend_pids" ]; then \
-	    echo "Stopping backend ($$backend_pids)"; \
-	    kill $$backend_pids >/dev/null 2>&1 || true; \
-	    sleep 0.5; \
-	    still_listening="$$(lsof -tiTCP:"$$BACKEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
-	    if [ -n "$$still_listening" ]; then \
-	      echo "Backend still listening on $$BACKEND_PORT; sending SIGKILL"; \
-	      kill -9 $$still_listening >/dev/null 2>&1 || true; \
-	    fi; \
-	  else \
-	    echo "No backend process found"; \
-	  fi; \
-	  rm -f logs/backend.pid; \
-	  frontend_from_file=""; \
-	  if [ -f logs/frontend.pid ]; then \
-	    frontend_from_file="$$(tr '\n' ' ' < logs/frontend.pid)"; \
-	  fi; \
-	  frontend_from_pattern="$$(pgrep -f "$$FRONTEND_CMD_PATTERN" 2>/dev/null | tr '\n' ' ' || true)"; \
-	  frontend_from_port="$$(lsof -tiTCP:"$$FRONTEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
-	  frontend_pids="$$(printf "%s\n%s\n%s\n" "$$frontend_from_file" "$$frontend_from_pattern" "$$frontend_from_port" | tr ' ' '\n' | sed '/^$$/d' | sort -u | tr '\n' ' ')"; \
-	  if [ -n "$$frontend_pids" ]; then \
-	    echo "Stopping frontend ($$frontend_pids)"; \
-	    kill $$frontend_pids >/dev/null 2>&1 || true; \
-	    sleep 0.5; \
-	    still_listening="$$(lsof -tiTCP:"$$FRONTEND_PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"; \
-	    if [ -n "$$still_listening" ]; then \
-	      echo "Frontend still listening on $$FRONTEND_PORT; sending SIGKILL"; \
-	      kill -9 $$still_listening >/dev/null 2>&1 || true; \
-	    fi; \
-	  else \
-	    echo "No frontend process found"; \
-	  fi; \
-	  rm -f logs/frontend.pid
+	@echo "🛑 Stopping dev processes…"
+	@BACKEND_PORT="$(BACKEND_PORT)" \
+		FRONTEND_PORT="$(FRONTEND_PORT)" \
+		BACKEND_CMD_PATTERN="$(BACKEND_CMD_PATTERN)" \
+		FRONTEND_CMD_PATTERN="$(FRONTEND_CMD_PATTERN)" \
+		bash scripts/stop_all.sh
 
 logs:
 	@echo "— Flask —"; pgrep -fl "$(BACKEND_CMD_PATTERN)" || echo "(no backend process)"

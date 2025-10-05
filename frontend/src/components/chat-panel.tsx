@@ -5,6 +5,7 @@ import { ChevronDown, Loader2, StopCircle } from "lucide-react";
 
 import { ActionCard } from "@/components/action-card";
 import { Button } from "@/components/ui/button";
+import { ChatMessageMarkdown } from "@/components/chat-message";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -122,9 +123,7 @@ export function ChatPanel({
                             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                               Answer
                             </p>
-                            <div className="whitespace-pre-wrap leading-relaxed text-foreground">
-                              {displayAnswer}
-                            </div>
+                            <ChatMessageMarkdown text={displayAnswer} />
                           </section>
                           {message.citations && message.citations.length > 0 ? (
                             <div className="space-y-1 text-xs text-muted-foreground">
@@ -158,14 +157,15 @@ export function ChatPanel({
                                 <span>Show reasoning</span>
                                 <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
                               </summary>
-                              <div className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/90">
-                                {reasoningText}
-                              </div>
+                              <ChatMessageMarkdown
+                                text={reasoningText}
+                                className="mt-2 text-xs text-foreground/90"
+                              />
                             </details>
                           ) : null}
                         </div>
                       ) : (
-                        <div className="leading-relaxed whitespace-pre-wrap">{message.content}</div>
+                        <ChatMessageMarkdown text={message.content ?? ""} />
                       )}
                     </div>
                   </div>
