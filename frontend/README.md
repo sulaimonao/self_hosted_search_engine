@@ -48,7 +48,7 @@ npm run start      # serve the production build
 npm run lint       # ESLint (includes TypeScript checks)
 ```
 
-> The dev UI listens on `http://localhost:3100` (or `http://127.0.0.1:3100`). Both hosts are pre-whitelisted via `allowedDevOrigins` in `next.config.mjs`, eliminating the usual cross-origin warning banner.
+> The dev UI listens on `http://localhost:3100` (or `http://127.0.0.1:3100`). Use either host as needed when proxying requests to the backend.
 
 ## Environment variables
 
