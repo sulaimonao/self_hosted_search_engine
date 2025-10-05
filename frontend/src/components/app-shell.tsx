@@ -711,151 +711,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     [pushToast, shadowModeEnabled],
   );
 
-  const handleCrawlDomain = useCallback(async () => {
-    const targetUrl = (currentUrl ?? "").trim();
-    if (!isHttpUrl(targetUrl)) {
-      pushToast("Open a valid http(s) page before crawling.", { variant: "warning" });
-      return;
-    }
-
-    const scope = defaultScope === "page" ? "page" : "domain";
-    const scopeLabel = scope === "page" ? "page" : "domain";
-    const domainLabel = (() => {
-      try {
-        return new URL(targetUrl).hostname;
-      } catch {
-        return targetUrl;
-      }
-    })();
-    const crawlLabel = scope === "page" ? targetUrl : domainLabel;
-
-    setCrawlMonitor({
-      running: true,
-      statusText: `Queueing ${scopeLabel} crawl for ${crawlLabel}…`,
-      jobId: null,
-      targetUrl,
-      scope,
-      error: null,
-      lastUpdated: Date.now(),
-    });
-
-    appendLog({
-      id: uid(),
-      label: "Crawl requested",
-      detail: `${scopeLabel === "page" ? "Page" : "Domain"} crawl for ${crawlLabel}`,
-      status: "info",
-      timestamp: new Date().toISOString(),
-    });
-
-    try {
-      const seedResult = await createDomainSeed(targetUrl, scope);
-      if (seedResult.registry) {
-        applySeedRegistry(seedResult.registry);
-      }
-
-      const seedRecord = seedResult.seed;
-      if (!seedRecord) {
-        throw new Error("Unable to resolve seed id after creation");
-      }
-
-      if (seedResult.duplicate) {
-        pushToast(`${scopeLabel === "page" ? "Page" : "Domain"} already queued. Forcing refresh…`);
-      } else {
-        pushToast(`Queued ${crawlLabel} for crawling`);
-      }
-
-      const refresh = await triggerRefresh({
-        seedIds: [seedRecord.id],
-        useLlm: false,
-        force: true,
-      });
-
-      const jobDescription =
-        scope === "page"
-          ? `Focused crawl for page ${crawlLabel}`
-          : `Focused crawl for ${crawlLabel}`;
-
-      if (refresh.jobId) {
-        const initialStatus = refresh.deduplicated
-          ? `Crawl already in progress for ${crawlLabel}`
-          : refresh.created
-          ? `Crawl queued for ${crawlLabel}`
-          : `Crawl request accepted for ${crawlLabel}`;
-
-        setCrawlMonitor({
-          running: true,
-          statusText: initialStatus,
-          jobId: refresh.jobId,
-          targetUrl,
-          scope,
-          error: null,
-          lastUpdated: Date.now(),
-        });
-
-        registerJob(refresh.jobId, jobDescription, {
-          onStatus: (status) => {
-            setCrawlMonitor({
-              running: status.state === "queued" || status.state === "running",
-              statusText:
-                status.state === "queued"
-                  ? `Crawl queued for ${crawlLabel}`
-                  : status.state === "running"
-                  ? status.description ?? `Crawl running for ${crawlLabel}`
-                  : status.state === "done"
-                  ? `Crawl complete for ${crawlLabel}`
-                  : `Crawl failed for ${crawlLabel}`,
-              jobId: refresh.jobId,
-              targetUrl,
-              scope,
-              error: status.state === "error" ? status.error ?? "Crawl failed" : null,
-              lastUpdated: Date.now(),
-            });
-          },
-        });
-      } else {
-        setCrawlMonitor({
-          running: false,
-          statusText: refresh.deduplicated
-            ? `Crawl already in progress for ${crawlLabel}`
-            : `Crawl request submitted for ${crawlLabel}`,
-          jobId: null,
-          targetUrl,
-          scope,
-          error: null,
-          lastUpdated: Date.now(),
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? "Crawl failed");
-      setCrawlMonitor({
-        running: false,
-        statusText: `Crawl failed for ${crawlLabel}`,
-        jobId: null,
-        targetUrl,
-        scope,
-        error: message,
-        lastUpdated: Date.now(),
-      });
-      pushToast(message, { variant: "destructive" });
-      appendLog({
-        id: uid(),
-        label: "Crawl failed",
-        detail: message,
-        status: "error",
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }, [
-    applySeedRegistry,
-    appendLog,
-    createDomainSeed,
-    currentUrl,
-    defaultScope,
-    pushToast,
-    registerJob,
-    triggerRefresh,
-  ]);
-
   const refreshModels = useCallback(async () => {
     try {
       const inventory = await fetchModelInventory();
@@ -1091,6 +946,151 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [appendLog]
   );
+
+  const handleCrawlDomain = useCallback(async () => {
+    const targetUrl = (currentUrl ?? "").trim();
+    if (!isHttpUrl(targetUrl)) {
+      pushToast("Open a valid http(s) page before crawling.", { variant: "warning" });
+      return;
+    }
+
+    const scope = defaultScope === "page" ? "page" : "domain";
+    const scopeLabel = scope === "page" ? "page" : "domain";
+    const domainLabel = (() => {
+      try {
+        return new URL(targetUrl).hostname;
+      } catch {
+        return targetUrl;
+      }
+    })();
+    const crawlLabel = scope === "page" ? targetUrl : domainLabel;
+
+    setCrawlMonitor({
+      running: true,
+      statusText: `Queueing ${scopeLabel} crawl for ${crawlLabel}…`,
+      jobId: null,
+      targetUrl,
+      scope,
+      error: null,
+      lastUpdated: Date.now(),
+    });
+
+    appendLog({
+      id: uid(),
+      label: "Crawl requested",
+      detail: `${scopeLabel === "page" ? "Page" : "Domain"} crawl for ${crawlLabel}`,
+      status: "info",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      const seedResult = await createDomainSeed(targetUrl, scope);
+      if (seedResult.registry) {
+        applySeedRegistry(seedResult.registry);
+      }
+
+      const seedRecord = seedResult.seed;
+      if (!seedRecord) {
+        throw new Error("Unable to resolve seed id after creation");
+      }
+
+      if (seedResult.duplicate) {
+        pushToast(`${scopeLabel === "page" ? "Page" : "Domain"} already queued. Forcing refresh…`);
+      } else {
+        pushToast(`Queued ${crawlLabel} for crawling`);
+      }
+
+      const refresh = await triggerRefresh({
+        seedIds: [seedRecord.id],
+        useLlm: false,
+        force: true,
+      });
+
+      const jobDescription =
+        scope === "page"
+          ? `Focused crawl for page ${crawlLabel}`
+          : `Focused crawl for ${crawlLabel}`;
+
+      if (refresh.jobId) {
+        const initialStatus = refresh.deduplicated
+          ? `Crawl already in progress for ${crawlLabel}`
+          : refresh.created
+          ? `Crawl queued for ${crawlLabel}`
+          : `Crawl request accepted for ${crawlLabel}`;
+
+        setCrawlMonitor({
+          running: true,
+          statusText: initialStatus,
+          jobId: refresh.jobId,
+          targetUrl,
+          scope,
+          error: null,
+          lastUpdated: Date.now(),
+        });
+
+        registerJob(refresh.jobId, jobDescription, {
+          onStatus: (status) => {
+            setCrawlMonitor({
+              running: status.state === "queued" || status.state === "running",
+              statusText:
+                status.state === "queued"
+                  ? `Crawl queued for ${crawlLabel}`
+                  : status.state === "running"
+                  ? status.description ?? `Crawl running for ${crawlLabel}`
+                  : status.state === "done"
+                  ? `Crawl complete for ${crawlLabel}`
+                  : `Crawl failed for ${crawlLabel}`,
+              jobId: refresh.jobId,
+              targetUrl,
+              scope,
+              error: status.state === "error" ? status.error ?? "Crawl failed" : null,
+              lastUpdated: Date.now(),
+            });
+          },
+        });
+      } else {
+        setCrawlMonitor({
+          running: false,
+          statusText: refresh.deduplicated
+            ? `Crawl already in progress for ${crawlLabel}`
+            : `Crawl request submitted for ${crawlLabel}`,
+          jobId: null,
+          targetUrl,
+          scope,
+          error: null,
+          lastUpdated: Date.now(),
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "Crawl failed");
+      setCrawlMonitor({
+        running: false,
+        statusText: `Crawl failed for ${crawlLabel}`,
+        jobId: null,
+        targetUrl,
+        scope,
+        error: message,
+        lastUpdated: Date.now(),
+      });
+      pushToast(message, { variant: "destructive" });
+      appendLog({
+        id: uid(),
+        label: "Crawl failed",
+        detail: message,
+        status: "error",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [
+    applySeedRegistry,
+    appendLog,
+    createDomainSeed,
+    currentUrl,
+    defaultScope,
+    pushToast,
+    registerJob,
+    triggerRefresh,
+  ]);
 
   const handleSearch = useCallback(
     async (value: string) => {
