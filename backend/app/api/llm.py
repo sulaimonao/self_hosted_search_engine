@@ -239,13 +239,26 @@ def llm_health() -> Any:
     engine_config = _get_engine_config()
     manager = _get_embed_manager()
     probe = _probe_ollama(engine_config.ollama.base_url, manager)
+    models = probe.get("models") if isinstance(probe, Mapping) else []
+    model_list = list(models) if isinstance(models, Iterable) else []
+    duration_ms = int(probe.get("duration_ms", 0)) if isinstance(probe, Mapping) else 0
+    reachable = bool(probe.get("reachable")) if isinstance(probe, Mapping) else False
     payload = {
-        "reachable": bool(probe["reachable"]),
-        "model_count": len(probe["models"]),
-        "duration_ms": int(probe["duration_ms"]),
+        "ok": True,
+        "data": {
+            "host": engine_config.ollama.base_url,
+            "reachable": reachable,
+            "model_count": len(model_list),
+        },
+        "reachable": reachable,
+        "model_count": len(model_list),
+        "duration_ms": duration_ms,
         "host": engine_config.ollama.base_url,
     }
+    if model_list:
+        payload["data"]["models"] = model_list
     if probe.get("error"):
+        payload["data"]["error"] = probe["error"]
         payload["error"] = probe["error"]
     trace_id = getattr(g, "trace_id", None)
     log_event(

@@ -32,6 +32,11 @@ _MAIN_0.toc
 !backend/app/api/docs.py
 !backend/app/api/memory.py
 !backend/app/api/chat_history.py
+!backend/app/api/_shipit_jobs.py
+!backend/app/api/shipit_crawl.py
+!backend/app/api/shipit_diag.py
+!backend/app/api/shipit_history.py
+!backend/app/api/shipit_ingest.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
