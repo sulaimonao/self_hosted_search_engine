@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import textwrap
 import time
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any, cast
 from urllib.parse import urlunparse
 
@@ -24,6 +26,42 @@ from backend.logging_utils import event_base, redact, write_event
 from server.llm import LLMError
 from server.runlog import add_run_log_line, current_run_log
 from observability import start_span
+
+from .shipit_history import append_history
+from .shipit_crawl import create_crawl_job
+
+
+def _shipit_search_payload(query: str, page: int, size: int) -> tuple[int, list[dict[str, Any]], dict[str, list[list[Any]]]]:
+    base_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
+    domain = f"{base_hash[:6]}.example.com"
+    total = max(size * 4, size)
+    hits: list[dict[str, Any]] = []
+    topic_key = query.split()[0].lower() if query else "general"
+    for index in range(size):
+        rank = (page - 1) * size + index + 1
+        url = f"https://{domain}/docs/{rank}"
+        timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat()
+        hits.append(
+            {
+                "id": f"{base_hash}-{rank}",
+                "url": url,
+                "title": f"{query.title()} Result {rank}" if query else f"Result {rank}",
+                "snippet": f"Stubbed snippet for '{query}' (result {rank}).",
+                "score": round(max(0.0, 1.0 - (index * 0.05)), 3),
+                "topics": [topic_key] if query else [],
+                "source_type": "web",
+                "first_seen": timestamp,
+                "last_seen": timestamp,
+                "domain": domain,
+            }
+        )
+    facets = {
+        "topic": [[topic_key, total]],
+        "source_type": [["web", total]],
+        "domain": [[domain, total]],
+        "recency": [["30d", total]],
+    }
+    return total, hits, facets
 
 bp = Blueprint("search_api", __name__, url_prefix="/api")
 
@@ -479,6 +517,19 @@ def embedder_ensure_endpoint():
 @bp.post("/crawl")
 def crawl_validation_endpoint():
     payload = request.get_json(silent=True) or {}
+    seeds_raw = payload.get("seeds")
+    if isinstance(seeds_raw, Sequence):
+        seeds: list[str] = []
+        for entry in seeds_raw:
+            if isinstance(entry, str) and entry.strip():
+                seeds.append(entry.strip())
+        if not seeds:
+            return jsonify({"ok": False, "error": "seeds_required"}), 400
+        mode = payload.get("mode", "fresh")
+        if mode not in {"fresh", "incremental"}:
+            return jsonify({"ok": False, "error": "invalid_mode"}), 400
+        job_id = create_crawl_job(seeds, mode)
+        return jsonify({"ok": True, "data": {"job_id": job_id}}), 202
     inputs = {"url": payload.get("url"), "depth": payload.get("depth")}
     with start_span(
         "http.crawl.validate",
@@ -515,6 +566,39 @@ def crawl_validation_endpoint():
 @bp.get("/search")
 def search_endpoint():
     query = (request.args.get("q") or "").strip()
+    shipit_mode = request.args.get("shipit")
+    if shipit_mode:
+        if not query:
+            return jsonify({"ok": False, "error": "query_required"}), 400
+        page_raw = request.args.get("page", "1")
+        size_raw = request.args.get("size", "10")
+        try:
+            page = max(1, int(page_raw))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            size = max(1, min(int(size_raw), 50))
+        except (TypeError, ValueError):
+            size = 10
+        total, hits, facets = _shipit_search_payload(query, page, size)
+        append_history(
+            {
+                "id": f"shipit-{hashlib.md5(query.encode('utf-8')).hexdigest()}",
+                "query": query,
+                "results_count": total,
+            }
+        )
+        payload = {
+            "ok": True,
+            "data": {
+                "total": total,
+                "page": page,
+                "size": size,
+                "facets": facets,
+                "hits": hits,
+            },
+        }
+        return jsonify(payload)
     if not query:
         return jsonify({"error": "Missing 'q' parameter"}), 400
 

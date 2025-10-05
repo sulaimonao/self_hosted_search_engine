@@ -6,7 +6,9 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -56,6 +58,7 @@ def create_app() -> Flask:
     from .api import memory as memory_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
+    from .api import shipit_diag as shipit_diag_api
     from .api import index as index_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
@@ -65,6 +68,9 @@ def create_app() -> Flask:
     from .api import research as research_api
     from .api import seeds as seeds_api
     from .api import search as search_api
+    from .api import shipit_crawl as shipit_crawl_api
+    from .api import shipit_history as shipit_history_api
+    from .api import shipit_ingest as shipit_ingest_api
     from .config import AppConfig
     from .jobs.focused_crawl import FocusedCrawlManager
     from .jobs.runner import JobRunner
@@ -327,6 +333,14 @@ def create_app() -> Flask:
     )
     app.config.setdefault("SEED_WORKSPACE_DIRECTORY", "workspace")
 
+    from .api._shipit_jobs import SimulatedJobStore
+
+    app.config.setdefault("SHIPIT_JOB_STORE", SimulatedJobStore())
+    app.config.setdefault("SHIPIT_HISTORY", deque(maxlen=100))
+    app.config.setdefault("SHIPIT_HISTORY_LOCK", threading.Lock())
+    app.config.setdefault("SHIPIT_MEMORY", [])
+    app.config.setdefault("SHIPIT_MEMORY_LOCK", threading.Lock())
+
     app.register_blueprint(search_api.bp)
     app.register_blueprint(jobs_api.bp)
     app.register_blueprint(progress_api.bp)
@@ -338,6 +352,7 @@ def create_app() -> Flask:
     app.register_blueprint(llm_api.bp)
     app.register_blueprint(research_api.bp)
     app.register_blueprint(diagnostics_api.bp)
+    app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
@@ -347,6 +362,9 @@ def create_app() -> Flask:
     app.register_blueprint(index_api.bp)
     app.register_blueprint(discovery_api.bp)
     app.register_blueprint(shadow_api.bp)
+    app.register_blueprint(shipit_crawl_api.bp)
+    app.register_blueprint(shipit_history_api.bp)
+    app.register_blueprint(shipit_ingest_api.bp)
     if feature_agent_mode and browser_manager is not None:
         app.register_blueprint(agent_browser_api.bp)
 
