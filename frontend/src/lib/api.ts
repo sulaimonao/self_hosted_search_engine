@@ -12,6 +12,7 @@ import type {
   SeedRecord,
   SeedRegistryResponse,
   JobStatusSummary,
+  JobStatusStats,
   ModelStatus,
   OllamaStatus,
   SelectionActionPayload,
@@ -31,6 +32,21 @@ const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
+
+export interface MetaTimeResponse {
+  server_time: string;
+  server_time_utc: string;
+  server_timezone: string;
+  epoch_ms: number;
+}
+
+export async function fetchServerTime(): Promise<MetaTimeResponse> {
+  const response = await fetch(api("/api/meta/time"));
+  if (!response.ok) {
+    throw new Error(`Unable to fetch server time (${response.status})`);
+  }
+  return response.json();
+}
 
 export interface SearchIndexOptions {
   signal?: AbortSignal;
@@ -546,6 +562,10 @@ export interface ChatSendOptions {
   textContext?: string | null;
   imageContext?: string | null;
   signal?: AbortSignal;
+  clientTimezone?: string | null;
+  serverTime?: string | null;
+  serverTimezone?: string | null;
+  serverUtc?: string | null;
 }
 
 export interface ChatSendResult {
@@ -568,6 +588,10 @@ export async function sendChat(
       url: options.url ?? undefined,
       text_context: options.textContext ?? undefined,
       image_context: options.imageContext ?? undefined,
+      client_timezone: options.clientTimezone ?? undefined,
+      server_time: options.serverTime ?? undefined,
+      server_timezone: options.serverTimezone ?? undefined,
+      server_time_utc: options.serverUtc ?? undefined,
     }),
     signal: options.signal,
   });
@@ -808,9 +832,24 @@ export async function reindexUrl(url: string): Promise<unknown> {
 }
 
 export interface JobStatusPayload {
-  state: string;
+  job_id?: string;
+  state?: string;
+  phase?: string;
+  progress?: number;
+  eta_seconds?: number;
+  stats?: {
+    pages_fetched?: number;
+    normalized_docs?: number;
+    docs_indexed?: number;
+    skipped?: number;
+    deduped?: number;
+    embedded?: number;
+  };
+  started_at?: number;
+  updated_at?: number;
   logs_tail?: string[];
   error?: string;
+  message?: string;
   result?: unknown;
 }
 
@@ -836,35 +875,7 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
     while (active) {
       try {
         const payload = await fetchJobStatus(jobId);
-        const rawState = typeof payload.state === "string" ? payload.state : "unknown";
-        const normalizedState: JobStatusSummary["state"] =
-          rawState === "queued"
-            ? "queued"
-            : rawState === "running"
-            ? "running"
-            : rawState === "done"
-            ? "done"
-            : rawState === "error"
-            ? "error"
-            : "running";
-        const progress =
-          normalizedState === "done"
-            ? 100
-            : normalizedState === "running"
-            ? 65
-            : normalizedState === "queued"
-            ? 15
-            : normalizedState === "error"
-            ? 100
-            : 0;
-        handlers.onStatus({
-          jobId,
-          state: normalizedState,
-          progress,
-          description: `Job ${jobId}`,
-          lastUpdated: new Date().toISOString(),
-          error: payload.error ?? undefined,
-        });
+        handlers.onStatus(normalizeJobStatus(jobId, payload));
         const logs = payload.logs_tail ?? [];
         for (const line of logs) {
           if (!previousLogs.has(line)) {
@@ -872,7 +883,8 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
             handlers.onLog?.(line);
           }
         }
-        if (normalizedState === "done" || normalizedState === "error") {
+        const state = typeof payload.state === "string" ? payload.state.toLowerCase() : "unknown";
+        if (state === "done" || state === "error") {
           break;
         }
       } catch (error) {
@@ -887,6 +899,52 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
 
   return () => {
     active = false;
+  };
+}
+
+function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatusSummary {
+  const rawState = typeof payload.state === "string" ? payload.state.toLowerCase() : "unknown";
+  const state: JobStatusSummary["state"] =
+    rawState === "queued"
+      ? "queued"
+      : rawState === "running"
+      ? "running"
+      : rawState === "done"
+      ? "done"
+      : rawState === "error"
+      ? "error"
+      : "running";
+  const statsPayload = payload.stats ?? {};
+  const stats: JobStatusStats = {
+    pagesFetched: Number(statsPayload.pages_fetched ?? 0) || 0,
+    normalizedDocs: Number(statsPayload.normalized_docs ?? 0) || 0,
+    docsIndexed: Number(statsPayload.docs_indexed ?? 0) || 0,
+    skipped: Number(statsPayload.skipped ?? 0) || 0,
+    deduped: Number(statsPayload.deduped ?? 0) || 0,
+    embedded: Number(statsPayload.embedded ?? 0) || 0,
+  };
+  const progressFraction = typeof payload.progress === "number" && Number.isFinite(payload.progress) ? payload.progress : undefined;
+  const progress =
+    progressFraction !== undefined
+      ? Math.max(0, Math.min(100, Math.round(progressFraction * 100)))
+      : state === "done" || state === "error"
+      ? 100
+      : state === "running"
+      ? 65
+      : state === "queued"
+      ? 15
+      : 0;
+  return {
+    jobId,
+    state,
+    phase: typeof payload.phase === "string" && payload.phase.trim() ? payload.phase : state,
+    progress,
+    etaSeconds: typeof payload.eta_seconds === "number" && Number.isFinite(payload.eta_seconds) ? Math.max(0, payload.eta_seconds) : undefined,
+    stats,
+    error: typeof payload.error === "string" ? payload.error : undefined,
+    message: typeof payload.message === "string" ? payload.message : undefined,
+    description: `Job ${jobId}`,
+    lastUpdated: new Date().toISOString(),
   };
 }
 

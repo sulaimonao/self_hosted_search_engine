@@ -57,6 +57,15 @@ def update_shadow_config():
     return jsonify(config), 200
 
 
+@bp.post("/toggle")
+def toggle_shadow():
+    manager, error_response = _manager_or_unavailable()
+    if error_response is not None:
+        return error_response
+    config = manager.toggle()
+    return jsonify(config), 200
+
+
 @bp.post("/queue")
 def queue_shadow():
     payload = request.get_json(silent=True) or {}

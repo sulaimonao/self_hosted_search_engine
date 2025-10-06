@@ -6,6 +6,7 @@ from backend.app import create_app
 class DummyShadowManager:
     def __init__(self) -> None:
         self.enqueued: list[str] = []
+        self.enabled = False
 
     def enqueue(self, url: str):
         self.enqueued.append(url)
@@ -19,6 +20,17 @@ class DummyShadowManager:
             "title": "Example",
             "chunks": 5,
         }
+
+    def get_config(self):
+        return {"enabled": self.enabled, "queued": len(self.enqueued), "running": 0}
+
+    def set_enabled(self, enabled: bool):
+        self.enabled = bool(enabled)
+        return self.get_config()
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        return self.get_config()
 
 
 def test_shadow_queue_and_status():
@@ -49,3 +61,11 @@ def test_shadow_queue_and_status():
 
     missing_status = client.get("/api/shadow/status")
     assert missing_status.status_code == 400
+
+    toggle = client.post("/api/shadow/toggle")
+    assert toggle.status_code == 200
+    toggle_data = toggle.get_json()
+    assert toggle_data["enabled"] is True
+    toggle_again = client.post("/api/shadow/toggle")
+    assert toggle_again.status_code == 200
+    assert toggle_again.get_json()["enabled"] is False

@@ -37,10 +37,12 @@ _MAIN_0.toc
 !backend/app/api/shipit_diag.py
 !backend/app/api/shipit_history.py
 !backend/app/api/shipit_ingest.py
+!backend/app/api/meta.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
 !backend/app/services/vector_index.py
+!backend/app/services/pending_vector_worker.py
 !backend/app/services/agent_browser.py
 !backend/app/services/local_discovery.py
 !backend/app/services/progress_bus.py
@@ -62,9 +64,11 @@ _MAIN_0.toc
 !tests/api/test_progress_api.py
 !tests/api/test_visits_api.py
 !tests/api/test_docs_api.py
+!tests/api/test_meta_api.py
 !tests/e2e/test_agent_browser.py
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
+!tests/backend/test_vector_index_retry.py
 !tests/backend/test_agent_runtime.py
 /.venv
 .venv/

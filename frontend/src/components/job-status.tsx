@@ -55,19 +55,30 @@ export function JobStatus({ jobs }: JobStatusProps) {
           const meta = STATUS_META[job.state];
           return (
             <div key={job.jobId} className="rounded border px-3 py-2">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
                   <p className="text-sm font-medium">{job.description ?? job.jobId}</p>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span className={cn("flex items-center gap-1", meta.tone)}>
                       {meta.icon}
                       {meta.label}
                     </span>
-                    {typeof job.etaSeconds === "number" && job.state === "running" && (
-                      <Badge variant="outline">eta {Math.max(job.etaSeconds, 1)}s</Badge>
+                    <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
+                      {job.phase}
+                    </Badge>
+                    {typeof job.etaSeconds === "number" && job.state === "running" && job.etaSeconds > 0 && (
+                      <Badge variant="outline">eta {formatEta(job.etaSeconds)}</Badge>
                     )}
                     <span>Updated {new Date(job.lastUpdated).toLocaleTimeString()}</span>
                   </div>
+                  <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+                    {renderStat("Fetched", job.stats.pagesFetched)}
+                    {renderStat("Docs", job.stats.docsIndexed)}
+                    {renderStat("Normalized", job.stats.normalizedDocs)}
+                    {renderStat("Embedded", job.stats.embedded)}
+                    {renderStat("Skipped", job.stats.skipped)}
+                  </div>
+                  {job.message && <p className="text-xs text-muted-foreground">{job.message}</p>}
                 </div>
                 {job.error && (
                   <Badge variant="destructive" className="text-[11px]">
@@ -82,4 +93,23 @@ export function JobStatus({ jobs }: JobStatusProps) {
       </CardContent>
     </Card>
   );
+}
+
+function renderStat(label: string, value: number) {
+  return (
+    <span>
+      <span className="font-medium text-foreground">{value}</span> {label}
+    </span>
+  );
+}
+
+function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "--";
+  const clamped = Math.max(0, Math.round(seconds));
+  if (clamped < 60) {
+    return `${clamped}s`;
+  }
+  const mins = Math.floor(clamped / 60);
+  const secs = clamped % 60;
+  return `${mins}m ${secs.toString().padStart(2, "0")}s`;
 }

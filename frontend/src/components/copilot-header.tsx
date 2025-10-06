@@ -20,6 +20,12 @@ interface CopilotHeaderProps {
   installMessage?: string | null;
   reachable?: boolean;
   statusLabel?: string;
+  timeSummary?: {
+    serverLocal: string;
+    serverUtc: string;
+    serverZone: string;
+    clientZone: string;
+  } | null;
 }
 
 export function CopilotHeader({
@@ -31,6 +37,7 @@ export function CopilotHeader({
   installMessage,
   reachable = true,
   statusLabel,
+  timeSummary,
 }: CopilotHeaderProps) {
   const hasModels = chatModels.length > 0;
   const disabled = installing || chatModels.length === 0;
@@ -43,6 +50,14 @@ export function CopilotHeader({
           <p className="text-xs text-muted-foreground">
             {statusLabel ?? (installing ? "Installing model" : hasModels ? "Ready" : "No models detected")}
           </p>
+          {timeSummary ? (
+            <p
+              className="text-xs text-muted-foreground/80"
+              title={`Server UTC ${timeSummary.serverUtc}`}
+            >
+              Server: {timeSummary.serverLocal} ({timeSummary.serverZone}) • You: {timeSummary.clientZone}
+            </p>
+          ) : null}
         </div>
         {hasModels ? (
           <div className="flex items-center gap-2 text-xs">

@@ -49,12 +49,24 @@ export interface AgentLogEntry {
   meta?: Record<string, unknown>;
 }
 
+export interface JobStatusStats {
+  pagesFetched: number;
+  normalizedDocs: number;
+  docsIndexed: number;
+  skipped: number;
+  deduped: number;
+  embedded: number;
+}
+
 export interface JobStatusSummary {
   jobId: string;
   state: "idle" | "queued" | "running" | "done" | "error";
+  phase: string;
   progress: number;
   etaSeconds?: number;
+  stats: JobStatusStats;
   error?: string;
+  message?: string;
   description?: string;
   lastUpdated: string;
 }

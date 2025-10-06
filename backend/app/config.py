@@ -58,6 +58,7 @@ class AppConfig:
     agent_plans_dir: Path
     agent_sessions_dir: Path
     telemetry_dir: Path
+    shadow_state_path: Path
     agent_max_fetch_per_turn: int
     agent_coverage_threshold: float
     focused_enabled: bool
@@ -100,6 +101,10 @@ class AppConfig:
             os.getenv("LAST_INDEX_TIME_PATH"), data_dir / "state" / ".last_index_time"
         )
         _guard_directory(last_index_time_path.parent, label="LAST_INDEX_TIME_PATH parent")
+        shadow_state_path = _resolve_path(
+            os.getenv("SHADOW_STATE_PATH"), data_dir / "state" / "shadow_state.json"
+        )
+        _guard_directory(shadow_state_path.parent, label="SHADOW_STATE_PATH parent")
         logs_dir = _guard_directory(
             _resolve_path(os.getenv("LOGS_DIR"), data_dir / "logs"), label="LOGS_DIR"
         )
@@ -166,6 +171,7 @@ class AppConfig:
             agent_plans_dir=agent_plans_dir,
             agent_sessions_dir=agent_sessions_dir,
             telemetry_dir=telemetry_dir,
+            shadow_state_path=shadow_state_path,
             agent_max_fetch_per_turn=agent_max_fetch_per_turn,
             agent_coverage_threshold=agent_coverage_threshold,
             focused_enabled=focused_enabled,
@@ -196,6 +202,7 @@ class AppConfig:
             self.ledger_path.parent,
             self.simhash_path.parent,
             self.last_index_time_path.parent,
+            self.shadow_state_path.parent,
             self.learned_web_db_path.parent,
             self.app_state_db_path.parent,
             self.frontier_db_path.parent,
