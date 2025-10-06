@@ -12,7 +12,7 @@ index:
   persist_dir: ./data/chroma
   db_path: ./data/index.duckdb
 crawl:
-  user_agent: "SelfHostedSearchBot/0.1 (+https://example.com/bot)"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
   request_timeout: 15
   read_timeout: 30
   max_pages: 5

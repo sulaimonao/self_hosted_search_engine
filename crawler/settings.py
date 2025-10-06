@@ -6,7 +6,11 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
-DEFAULT_USER_AGENT = os.getenv("CRAWL_USER_AGENT", "SelfHostedSearchBot/0.1 (+local)")
+DEFAULT_USER_AGENT = os.getenv(
+    "CRAWL_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+)
 
 
 def _as_bool(value: str | bool | None, default: bool) -> bool:
