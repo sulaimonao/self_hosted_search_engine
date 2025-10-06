@@ -62,6 +62,7 @@ def create_app() -> Flask:
     from .api import index as index_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
+    from .api import meta as meta_api
     from .api import refresh as refresh_api
     from .api import plan as plan_api
     from .api import shadow as shadow_api
@@ -180,6 +181,7 @@ def create_app() -> Flask:
     vector_index_service = VectorIndexService(
         engine_config=engine_config,
         app_config=config,
+        state_db=state_db,
     )
     crawler_client = CrawlClient(
         user_agent=os.getenv("AGENT_USER_AGENT", "SelfHostedSearchAgent/0.1"),
@@ -301,6 +303,22 @@ def create_app() -> Flask:
     else:
         app.config.setdefault("AGENT_BROWSER_MANAGER", None)
 
+    from backend.app.services.pending_vector_worker import PendingVectorWorker
+
+    vector_pending_worker: PendingVectorWorker | None = None
+    try:
+        vector_pending_worker = PendingVectorWorker(state_db, vector_index_service)
+        vector_pending_worker.start()
+    except Exception:  # pragma: no cover - defensive guard
+        LOGGER.exception("pending vector worker failed to start")
+        vector_pending_worker = None
+    else:
+        import atexit
+
+        atexit.register(vector_pending_worker.stop)
+
+    threading.Thread(target=vector_index_service.warmup, name="embed-warmup", daemon=True).start()
+
     app.config.update(
         APP_CONFIG=config,
         JOB_RUNNER=runner,
@@ -312,6 +330,7 @@ def create_app() -> Flask:
         PROGRESS_BUS=progress_bus,
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
+        VECTOR_PENDING_WORKER=vector_pending_worker,
     )
     feature_shadow_mode = os.getenv("FEATURE_SHADOW_MODE", "0").lower() in {
         "1",
@@ -324,6 +343,7 @@ def create_app() -> Flask:
         runner=runner,
         vector_index=vector_index_service,
         enabled=feature_shadow_mode,
+        state_path=config.shadow_state_path,
     )
     app.config.setdefault("SHADOW_INDEX_MANAGER", shadow_manager)
     app.config.setdefault("FEATURE_SHADOW_MODE", feature_shadow_mode)
@@ -354,6 +374,7 @@ def create_app() -> Flask:
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
+    app.register_blueprint(meta_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
     app.register_blueprint(agent_tools_api.bp)

@@ -7,6 +7,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 import json
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import trafilatura
@@ -43,6 +44,7 @@ class ShadowIndexer:
         runner: JobRunner,
         vector_index: VectorIndexService,
         enabled: bool = False,
+        state_path: Path | None = None,
     ) -> None:
         self._app = app
         self._runner = runner
@@ -50,7 +52,9 @@ class ShadowIndexer:
         self._lock = threading.RLock()
         self._states: Dict[str, Dict[str, Any]] = {}
         self._enabled = bool(enabled)
+        self._state_path = state_path
         self._mode_updated_at = time.time()
+        self._restore_state()
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,6 +116,14 @@ class ShadowIndexer:
         with self._lock:
             self._enabled = bool(enabled)
             self._mode_updated_at = time.time()
+            self._persist_state()
+        return self.get_config()
+
+    def toggle(self) -> Dict[str, Any]:
+        with self._lock:
+            self._enabled = not self._enabled
+            self._mode_updated_at = time.time()
+            self._persist_state()
         return self.get_config()
 
     def get_config(self) -> Dict[str, Any]:
@@ -147,6 +159,33 @@ class ShadowIndexer:
                 if "updated_at" in latest:
                     payload["last_updated_at"] = latest.get("updated_at")
             return payload
+
+    def _restore_state(self) -> None:
+        if self._state_path is None:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        if not self._state_path.exists():
+            return
+        try:
+            raw = json.loads(self._state_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        enabled = raw.get("enabled") if isinstance(raw, dict) else None
+        if isinstance(enabled, bool):
+            self._enabled = enabled
+
+    def _persist_state(self) -> None:
+        if self._state_path is None:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"enabled": self._enabled, "updated_at": time.time()}
+            self._state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -189,6 +189,10 @@ def _prepare_messages(
     url: str | None,
     text_context: str | None,
     image_context: str | None,
+    client_timezone: str | None = None,
+    server_time: str | None = None,
+    server_timezone: str | None = None,
+    server_time_utc: str | None = None,
 ) -> tuple[list[dict[str, Any]], bool, str]:
     messages = [dict(message) for message in base_messages]
 
@@ -202,6 +206,16 @@ def _prepare_messages(
     system_sections = [_SCHEMA_PROMPT]
     if context_bits:
         system_sections.append("\n\n".join(context_bits))
+    time_bits: list[str] = []
+    if server_time:
+        label = server_timezone or "server-local"
+        time_bits.append(f"Server time ({label}): {server_time}")
+    if server_time_utc:
+        time_bits.append(f"Server time (UTC): {server_time_utc}")
+    if client_timezone:
+        time_bits.append(f"Client timezone: {client_timezone}")
+    if time_bits:
+        system_sections.append("Time context:\n" + "\n".join(time_bits))
     system_prompt = "\n\n".join(section for section in system_sections if section)
 
     image_used = False
@@ -334,6 +348,30 @@ def chat_invoke() -> Response:
     text_context = (payload.get("text_context") or "").strip() or None
     image_context_raw = payload.get("image_context")
     image_context = image_context_raw if isinstance(image_context_raw, str) and image_context_raw.strip() else None
+    client_timezone_raw = payload.get("client_timezone")
+    server_time_raw = payload.get("server_time")
+    server_timezone_raw = payload.get("server_timezone")
+    server_time_utc_raw = payload.get("server_time_utc")
+    client_timezone = (
+        client_timezone_raw.strip()
+        if isinstance(client_timezone_raw, str)
+        else None
+    )
+    server_time = (
+        server_time_raw.strip()
+        if isinstance(server_time_raw, str)
+        else None
+    )
+    server_timezone = (
+        server_timezone_raw.strip()
+        if isinstance(server_timezone_raw, str)
+        else None
+    )
+    server_time_utc = (
+        server_time_utc_raw.strip()
+        if isinstance(server_time_utc_raw, str)
+        else None
+    )
 
     trace_id = getattr(g, "trace_id", None)
     primary_model, fallback_model, _ = _configured_models()
@@ -374,6 +412,10 @@ def chat_invoke() -> Response:
                 url=url_value,
                 text_context=text_context,
                 image_context=image_context,
+                client_timezone=client_timezone,
+                server_time=server_time,
+                server_timezone=server_timezone,
+                server_time_utc=server_time_utc,
             )
 
             log_event(

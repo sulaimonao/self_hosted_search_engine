@@ -20,9 +20,11 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 
 def migrate(connection: sqlite3.Connection) -> None:
-    """Apply bootstrap migration(s) to *connection*."""
+    """Apply all SQL migrations located in :mod:`backend.app.db.migrations`."""
 
-    migration_path = MIGRATIONS_DIR / "001_init.sql"
-    sql = migration_path.read_text(encoding="utf-8")
-    with connection:
-        connection.executescript(sql)
+    for migration_path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        sql = migration_path.read_text(encoding="utf-8")
+        if not sql.strip():
+            continue
+        with connection:
+            connection.executescript(sql)

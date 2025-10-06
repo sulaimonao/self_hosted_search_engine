@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from typing import Any, Dict
+
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..config import AppConfig
@@ -12,6 +15,12 @@ bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 
 @bp.get("/jobs/<job_id>/status")
 def job_status(job_id: str):
+    worker = current_app.config.get("REFRESH_WORKER")
+    if worker is not None:
+        snapshot = worker.status(job_id=job_id).get("job")
+        if snapshot:
+            payload = _format_refresh_job(snapshot)
+            return jsonify(payload)
     runner: JobRunner = current_app.config["JOB_RUNNER"]
     payload = runner.status(job_id)
     return jsonify(payload)
@@ -47,6 +56,46 @@ def focused_last_index_time():
         except Exception:
             value = 0
     return jsonify({"last_index_time": value})
+
+
+def _format_refresh_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    state = str(job.get("state") or "unknown")
+    stage = str(job.get("stage") or "queued")
+    stats = job.get("stats") or {}
+    if not isinstance(stats, dict):
+        stats = {}
+    started_at = job.get("started_at")
+    if isinstance(started_at, (int, float)):
+        elapsed = max(0.0, time.time() - float(started_at))
+    else:
+        elapsed = None
+    progress_pct = float(job.get("progress") or 0.0)
+    eta_seconds = None
+    if state == "running" and elapsed is not None and progress_pct > 0:
+        remaining = max(0.0, 100.0 - progress_pct)
+        eta_seconds = max(0.0, (elapsed * remaining) / max(progress_pct, 1e-6))
+
+    payload: Dict[str, Any] = {
+        "job_id": job.get("id") or job.get("job_id") or job.get("jobId") or "",
+        "state": state,
+        "phase": stage,
+        "progress": max(0.0, min(1.0, progress_pct / 100.0)),
+        "eta_seconds": eta_seconds,
+        "stats": {
+            "pages_fetched": int(stats.get("pages_fetched", 0) or 0),
+            "normalized_docs": int(stats.get("normalized_docs", 0) or 0),
+            "docs_indexed": int(stats.get("docs_indexed", 0) or 0),
+            "skipped": int(stats.get("skipped", 0) or 0),
+            "deduped": int(stats.get("deduped", 0) or 0),
+            "embedded": int(stats.get("embedded", 0) or 0),
+        },
+        "started_at": started_at,
+        "updated_at": job.get("updated_at"),
+        "message": job.get("message"),
+        "error": job.get("error"),
+    }
+
+    return payload
 
 
 @bp.get("/crawl/start")

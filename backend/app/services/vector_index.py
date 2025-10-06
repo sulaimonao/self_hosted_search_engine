@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -16,6 +17,7 @@ from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.llm.ollama_client import OllamaClient, OllamaClientError
 
 from backend.app.config import AppConfig
+from backend.app.db import AppStateDB
 from backend.app.indexer.dedupe import SimHashIndex, simhash64
 from backend.app.search.embedding import embed_query as _fallback_embed
 from backend.app.services import ollama_client as ollama_services
@@ -87,9 +89,11 @@ class VectorIndexService:
         *,
         engine_config: EngineConfig,
         app_config: AppConfig,
+        state_db: AppStateDB | None = None,
     ) -> None:
         self._engine_config = engine_config
         self._app_config = app_config
+        self._state_db = state_db
         self._vector_store = VectorStore(
             engine_config.index.persist_dir, engine_config.index.db_path
         )
@@ -170,35 +174,38 @@ class VectorIndexService:
                     self._persist_dedupe()
                 return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
 
-            vectors = self._embed_documents([chunk.text for chunk in chunks])
-            if len(vectors) != len(chunks):
-                raise EmbedderUnavailableError(
-                    self._embed_model,
-                    detail="embedding count mismatch",
-                )
-            dims = len(vectors[0]) if vectors else 0
-
-            with self._lock:
-                self._vector_store.upsert(
+            try:
+                vectors = self._embed_with_retry([chunk.text for chunk in chunks])
+            except EmbedderUnavailableError:
+                with self._lock:
+                    self._simhash_index.update(storage_key, sim_signature)
+                    self._persist_dedupe()
+                self._queue_pending_vectors(
                     storage_key,
                     resolved_title,
-                    None,
                     doc_hash,
+                    url,
+                    metadata,
                     chunks,
-                    vectors,
-                    metadata=metadata,
-                    doc_id=storage_key,
+                    sim_signature,
                 )
-                self._simhash_index.update(storage_key, sim_signature)
-                self._persist_dedupe()
-                if dims:
-                    self._last_dims = dims
-            LOGGER.info(
-                "indexed document %s (title=%s, chunks=%s, dims=%s)",
+                LOGGER.info(
+                    "queued document %s for deferred embedding (%s chunks)",
+                    storage_key,
+                    len(chunks),
+                )
+                return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
+
+            dims = len(vectors[0]) if vectors else 0
+
+            self._persist_vectors(
                 storage_key,
                 resolved_title,
-                len(chunks),
-                dims,
+                doc_hash,
+                metadata,
+                chunks,
+                vectors,
+                sim_signature,
             )
             if span is not None:
                 span.set_attribute("vector.chunks", len(chunks))
@@ -274,6 +281,57 @@ class VectorIndexService:
         except Exception:  # pragma: no cover - persistence best effort
             LOGGER.debug("failed to persist vector simhash index", exc_info=True)
 
+    def warmup(self, *, attempts: int = 3) -> None:
+        if self._test_mode:
+            return
+        payload = ["Self-hosted search warmup"]
+        try:
+            self._embed_with_retry(payload, attempts=attempts)
+        except EmbedderUnavailableError as exc:
+            LOGGER.info("embedding warmup deferred: %s", exc)
+
+    def index_from_pending(
+        self,
+        *,
+        doc_id: str,
+        title: str,
+        resolved_title: str,
+        doc_hash: str,
+        sim_signature: int | None,
+        url: str,
+        metadata: Mapping[str, Any] | None,
+        chunks: Sequence[tuple[int, str, Mapping[str, Any]]],
+    ) -> None:
+        chunk_objects = []
+        texts: list[str] = []
+        from engine.indexing.chunk import Chunk  # local import to avoid cycles
+
+        for index, text, chunk_meta in chunks:
+            data = chunk_meta or {}
+            start = int(data.get("start", 0)) if isinstance(data, Mapping) else 0
+            end = int(data.get("end", 0)) if isinstance(data, Mapping) else 0
+            tokens = int(data.get("token_count", 0)) if isinstance(data, Mapping) else 0
+            chunk_objects.append(Chunk(text=text, start=start, end=end, token_count=tokens))
+            texts.append(text)
+
+        if not chunk_objects:
+            LOGGER.debug("no chunks provided for pending doc %s", doc_id)
+            return
+
+        vectors = self._embed_with_retry(texts)
+        if len(vectors) != len(chunk_objects):
+            raise EmbedderUnavailableError(self._embed_model, detail="embedding count mismatch")
+
+        self._persist_vectors(
+            doc_id,
+            resolved_title or title or url or doc_id,
+            doc_hash,
+            metadata,
+            chunk_objects,
+            vectors,
+            sim_signature=sim_signature,
+        )
+
     def _ensure_embedder_ready(self) -> None:
         if self._test_mode:
             return
@@ -344,6 +402,109 @@ class VectorIndexService:
             self._embed_model,
         )
         return vectors
+
+    def _embed_with_retry(
+        self,
+        texts: Sequence[str],
+        *,
+        attempts: int = 3,
+        initial_delay: float = 0.75,
+    ) -> list[list[float]]:
+        delay = float(initial_delay)
+        last_exc: EmbedderUnavailableError | None = None
+        for attempt in range(max(1, int(attempts))):
+            try:
+                return self._embed_documents(texts)
+            except EmbedderUnavailableError as exc:
+                last_exc = exc
+                if attempt == attempts - 1:
+                    break
+                LOGGER.info(
+                    "embedding attempt %s/%s unavailable (%s); retrying in %.2fs",
+                    attempt + 1,
+                    attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(min(delay, 5.0))
+                delay = min(delay * 2, 30.0)
+        if last_exc is None:
+            raise EmbedderUnavailableError(self._embed_model, detail="embedding retry exhausted")
+        raise last_exc
+
+    def _queue_pending_vectors(
+        self,
+        doc_id: str,
+        resolved_title: str,
+        doc_hash: str,
+        url: str | None,
+        metadata: Mapping[str, Any] | None,
+        chunks: Sequence[Any],
+        sim_signature: int,
+        job_id: str | None = None,
+    ) -> None:
+        if self._state_db is None:
+            raise EmbedderUnavailableError(self._embed_model, detail="pending queue unavailable")
+        chunk_payload: list[tuple[int, str, Mapping[str, Any]]] = []
+        for index, chunk in enumerate(chunks):
+            chunk_payload.append(
+                (
+                    index,
+                    chunk.text,
+                    {
+                        "start": chunk.start,
+                        "end": chunk.end,
+                        "token_count": chunk.token_count,
+                    },
+                )
+            )
+        self._state_db.enqueue_pending_document(
+            doc_id=doc_id,
+            job_id=job_id,
+            url=url,
+            title=resolved_title,
+            resolved_title=resolved_title,
+            doc_hash=doc_hash,
+            sim_signature=sim_signature,
+            metadata=metadata or {},
+            chunks=chunk_payload,
+            initial_delay=5.0,
+        )
+
+    def _persist_vectors(
+        self,
+        storage_key: str,
+        resolved_title: str,
+        doc_hash: str,
+        metadata: Mapping[str, Any] | None,
+        chunks: Sequence[Any],
+        vectors: Sequence[Sequence[float]],
+        sim_signature: int | None,
+    ) -> None:
+        dims = len(vectors[0]) if vectors else 0
+        with self._lock:
+            self._vector_store.upsert(
+                storage_key,
+                resolved_title,
+                None,
+                doc_hash,
+                chunks,
+                vectors,
+                metadata=metadata,
+                doc_id=storage_key,
+            )
+            if sim_signature is not None:
+                self._simhash_index.update(storage_key, sim_signature)
+                self._persist_dedupe()
+            if dims:
+                self._last_dims = dims
+        LOGGER.info(
+            "indexed document %s (title=%s, chunks=%s, dims=%s)",
+            storage_key,
+            resolved_title,
+            len(chunks),
+            dims,
+        )
 
     def _embed_query(self, query: str) -> list[float]:
         if self._test_mode:

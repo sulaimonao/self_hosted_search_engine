@@ -75,6 +75,10 @@ describe("sendChat", () => {
       const payload = JSON.parse(body);
       expect(payload.model).toBe("gpt-oss");
       expect(payload.url).toBe("https://example.com");
+      expect(payload.client_timezone).toBe("America/Los_Angeles");
+      expect(payload.server_time).toBe("2024-01-01T12:00:00");
+      expect(payload.server_timezone).toBe("UTC-5");
+      expect(payload.server_time_utc).toBe("2024-01-01T17:00:00Z");
       return response;
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -82,6 +86,10 @@ describe("sendChat", () => {
     const result = await sendChat(history, "hi", {
       model: "gpt-oss",
       url: "https://example.com",
+      clientTimezone: "America/Los_Angeles",
+      serverTime: "2024-01-01T12:00:00",
+      serverTimezone: "UTC-5",
+      serverUtc: "2024-01-01T17:00:00Z",
     });
 
     expect(result.traceId).toBe("req_test");

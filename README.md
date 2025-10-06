@@ -328,6 +328,13 @@ field length via `LOG_MAX_FIELD_BYTES`. Follow live events with:
 ./scripts/tail_telemetry.sh
 ```
 
+The refresh pipeline now streams normalized documents to SQLite immediately, even
+when the embedding model is still warming up. Pending chunks land in the
+`pending_documents`, `pending_chunks`, and `pending_vectors_queue` tables inside
+`data/app_state.sqlite3`. A background worker drains that queue once Ollama
+reports the embedder as ready, keeping partial crawl results searchable via the
+BM25 index until vectors become available.
+
 Every Flask request emits `req.start` / `req.end` events with request, session,
 and user correlation IDs. Tool invocations emit
 `tool.start` / `tool.end` / `tool.error` events with redacted inputs and result
@@ -359,9 +366,12 @@ Key endpoints (all under `/api/` unless otherwise noted):
 | `POST /api/tools/agent/turn` | Run the full policy loop (search → fetch ≤3 pages → reindex → synthesize answer with citations). |
 | `POST /api/refresh` | Trigger a focused crawl for the supplied query or explicit `seed_ids`; replies with `202` and a JSON status payload. |
 | `GET /api/refresh/status` | Report background crawl state (`queued`, `crawling`, `indexing`) plus counters. |
+| `GET /api/jobs/<job_id>/status` | Return structured job progress including phase, stats, progress, and ETA. |
 | `GET /api/llm/status` | Report Ollama installation status, reachability, and active host. |
 | `GET /api/llm/models` | List locally available chat-capable Ollama models. |
 | `POST /api/diagnostics` | Capture repository + runtime snapshot for debugging. |
+| `GET /api/meta/time` | Provide server time (local + UTC) and timezone metadata for chat grounding. |
+| `POST /api/shadow/toggle` | Toggle persisted shadow-mode indexing state without editing config files. |
 
 The agent persists its planning artefacts in `data/agent/`:
 

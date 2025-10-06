@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -178,7 +179,7 @@ class AppStateDB:
                     job_id = excluded.job_id,
                     verification = excluded.verification
                 """,
-                (
+                ( 
                     document_id,
                     url,
                     canonical_url,
@@ -198,6 +199,161 @@ class AppStateDB:
                     verification_json,
                 ),
             )
+
+    # ------------------------------------------------------------------
+    # Pending vectors
+    # ------------------------------------------------------------------
+    def enqueue_pending_document(
+        self,
+        *,
+        doc_id: str,
+        job_id: str | None,
+        url: str | None,
+        title: str | None,
+        resolved_title: str,
+        doc_hash: str,
+        sim_signature: int | None,
+        metadata: Mapping[str, Any] | None,
+        chunks: Sequence[tuple[int, str, Mapping[str, Any] | None]],
+        initial_delay: float = 0.0,
+    ) -> None:
+        metadata_json = _serialize(metadata or {})
+        now = time.time()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO pending_documents(doc_id, job_id, url, title, resolved_title, doc_hash, sim_signature, metadata, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(doc_id) DO UPDATE SET
+                    job_id = excluded.job_id,
+                    url = excluded.url,
+                    title = excluded.title,
+                    resolved_title = excluded.resolved_title,
+                    doc_hash = excluded.doc_hash,
+                    sim_signature = excluded.sim_signature,
+                    metadata = excluded.metadata,
+                    updated_at = ?
+                """,
+                (
+                    doc_id,
+                    job_id,
+                    url,
+                    title,
+                    resolved_title,
+                    doc_hash,
+                    int(sim_signature) if sim_signature is not None else None,
+                    metadata_json,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM pending_chunks WHERE doc_id = ?",
+                (doc_id,),
+            )
+            for index, text, chunk_metadata in chunks:
+                self._conn.execute(
+                    """
+                    INSERT INTO pending_chunks(doc_id, chunk_index, text, metadata, created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(doc_id, chunk_index) DO UPDATE SET
+                        text = excluded.text,
+                        metadata = excluded.metadata,
+                        updated_at = ?
+                    """,
+                    (doc_id, index, text, _serialize(chunk_metadata or {}), now, now, now),
+                )
+            next_attempt = max(now + float(initial_delay), now)
+            self._conn.execute(
+                """
+                INSERT INTO pending_vectors_queue(doc_id, attempts, next_attempt_at, created_at, updated_at)
+                VALUES(?, 0, ?, ?, ?)
+                ON CONFLICT(doc_id) DO UPDATE SET
+                    next_attempt_at = ?,
+                    updated_at = ?
+                """,
+                (doc_id, next_attempt, now, now, next_attempt, now),
+            )
+
+    def pop_pending_documents(self, limit: int = 5) -> list[dict[str, Any]]:
+        now = time.time()
+        rows: list[dict[str, Any]] = []
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                SELECT q.doc_id, q.attempts, d.job_id, d.url, d.title, d.resolved_title, d.doc_hash, d.sim_signature, d.metadata
+                  FROM pending_vectors_queue AS q
+                  JOIN pending_documents AS d ON d.doc_id = q.doc_id
+                 WHERE q.next_attempt_at <= ?
+                 ORDER BY q.next_attempt_at ASC
+                 LIMIT ?
+                """,
+                (now, int(limit)),
+            )
+            candidates = list(cursor.fetchall())
+            for row in candidates:
+                doc_id = row["doc_id"]
+                chunk_rows = self._conn.execute(
+                    "SELECT chunk_index, text, metadata FROM pending_chunks WHERE doc_id = ? ORDER BY chunk_index ASC",
+                    (doc_id,),
+                ).fetchall()
+                chunks = [
+                    {
+                        "index": chunk_row["chunk_index"],
+                        "text": chunk_row["text"],
+                        "metadata": _deserialize(chunk_row["metadata"], {}),
+                    }
+                    for chunk_row in chunk_rows
+                ]
+                rows.append(
+                    {
+                        "doc_id": doc_id,
+                        "attempts": row["attempts"],
+                        "job_id": row["job_id"],
+                        "url": row["url"],
+                        "title": row["title"],
+                        "resolved_title": row["resolved_title"],
+                        "doc_hash": row["doc_hash"],
+                        "sim_signature": row["sim_signature"],
+                        "metadata": _deserialize(row["metadata"], {}),
+                        "chunks": chunks,
+                    }
+                )
+                self._conn.execute(
+                    "DELETE FROM pending_vectors_queue WHERE doc_id = ?",
+                    (doc_id,),
+                )
+        return rows
+
+    def reschedule_pending_document(self, doc_id: str, *, delay: float, attempts: int) -> None:
+        now = time.time()
+        next_attempt = now + max(1.0, float(delay))
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO pending_vectors_queue(doc_id, attempts, next_attempt_at, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(doc_id) DO UPDATE SET
+                    attempts = ?,
+                    next_attempt_at = ?,
+                    updated_at = ?
+                """,
+                (
+                    doc_id,
+                    int(attempts),
+                    next_attempt,
+                    now,
+                    now,
+                    int(attempts),
+                    next_attempt,
+                    now,
+                ),
+            )
+
+    def clear_pending_document(self, doc_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM pending_documents WHERE doc_id = ?", (doc_id,))
 
     def list_documents(self, *, query: str | None = None, site: str | None = None, limit: int = 100) -> list[DocumentRecord]:
         conditions: list[str] = []

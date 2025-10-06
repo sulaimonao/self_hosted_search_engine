@@ -58,11 +58,13 @@ import {
   updateShadowConfig,
   subscribeDiscoveryEvents,
   fetchDiscoveryItem,
+  fetchServerTime,
   confirmDiscoveryItem,
   upsertIndexDocument,
   createDomainSeed,
   triggerRefresh,
 } from "@/lib/api";
+import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import { recordVisit } from "@/lib/shadow";
 import type {
@@ -289,6 +291,32 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     error: null,
     lastUpdated: null,
   });
+  const clientTimezone = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
+    [],
+  );
+  const [timeMeta, setTimeMeta] = useState<MetaTimeResponse | null>(null);
+  const timeSummary = useMemo(() => {
+    if (!timeMeta) return null;
+    let serverLocal = timeMeta.server_time;
+    let serverUtc = timeMeta.server_time_utc;
+    try {
+      serverLocal = new Date(timeMeta.server_time).toLocaleString();
+    } catch {
+      serverLocal = timeMeta.server_time;
+    }
+    try {
+      serverUtc = new Date(timeMeta.server_time_utc).toLocaleString(undefined, { timeZone: "UTC" });
+    } catch {
+      serverUtc = timeMeta.server_time_utc;
+    }
+    return {
+      serverLocal,
+      serverUtc,
+      serverZone: timeMeta.server_timezone,
+      clientZone: clientTimezone,
+    };
+  }, [timeMeta, clientTimezone]);
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -349,6 +377,26 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   useEffect(() => {
     devlog({ evt: "ui.mount" });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const meta = await fetchServerTime();
+        if (!cancelled) {
+          setTimeMeta(meta);
+        }
+      } catch (error) {
+        devlog({ evt: "ui.time.error", error: error instanceof Error ? error.message : String(error) });
+      }
+    };
+    load();
+    const interval = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -921,9 +969,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           {
             jobId,
             state: "queued",
+            phase: "queued",
             progress: 10,
             description,
             lastUpdated: new Date().toISOString(),
+            stats: {
+              pagesFetched: 0,
+              normalizedDocs: 0,
+              docsIndexed: 0,
+              skipped: 0,
+              deduped: 0,
+              embedded: 0,
+            },
           },
           ...jobs,
         ];
@@ -1297,6 +1354,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           url: contextUrl || undefined,
           textContext: textContext ?? undefined,
           imageContext: imageContext ?? undefined,
+          clientTimezone,
+          serverTime: timeMeta?.server_time ?? null,
+          serverTimezone: timeMeta?.server_timezone ?? null,
+          serverUtc: timeMeta?.server_time_utc ?? null,
         });
 
         lastSuccessfulModelRef.current = result.model ?? chatModel;
@@ -1387,7 +1448,17 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         updateAssistant((message) => ({ ...message, streaming: false }));
       }
     },
-    [appendLog, appendMessage, chatModel, currentUrl, includeContext, pageContext, pushToast]
+    [
+      appendLog,
+      appendMessage,
+      chatModel,
+      currentUrl,
+      includeContext,
+      pageContext,
+      pushToast,
+      clientTimezone,
+      timeMeta,
+    ]
   );
 
 
@@ -2172,6 +2243,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                       installMessage={autopullMessage}
                       reachable={Boolean(ollamaStatus?.running)}
                       statusLabel={isChatLoading ? "Generating response" : undefined}
+                      timeSummary={timeSummary}
                     />
                   }
                   messages={chatMessages}
