@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ class IndexResult:
     chunks: int
     dims: int
     duplicate_of: str | None = None
+    pending_embedding: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -43,6 +45,7 @@ class IndexResult:
         if self.duplicate_of:
             payload["duplicate_of"] = self.duplicate_of
         payload["skipped"] = self.chunks == 0
+        payload["pending_embedding"] = bool(self.pending_embedding)
         return payload
 
 
@@ -104,6 +107,7 @@ class VectorIndexService:
         self._dev_allow_autopull = bool(app_config.dev_allow_autopull)
         self._autopull_started = False
         self._lock = threading.RLock()
+        self._embed_ready_event = threading.Event()
         self._dedupe_path = app_config.agent_data_dir / "vector_simhash.json"
         self._dedupe_path.parent.mkdir(parents=True, exist_ok=True)
         self._simhash_index = SimHashIndex.load(self._dedupe_path)
@@ -116,6 +120,8 @@ class VectorIndexService:
         self._embedder: OllamaEmbedder | None = None
         if not self._test_mode:
             self._embedder = OllamaEmbedder(self._client, self._embed_model)
+        else:
+            self._embed_ready_event.set()
         LOGGER.debug(
             "vector index initialised (test_mode=%s, model=%s)",
             self._test_mode,
@@ -176,7 +182,7 @@ class VectorIndexService:
 
             try:
                 vectors = self._embed_with_retry([chunk.text for chunk in chunks])
-            except EmbedderUnavailableError:
+            except EmbedderUnavailableError as exc:
                 with self._lock:
                     self._simhash_index.update(storage_key, sim_signature)
                     self._persist_dedupe()
@@ -188,13 +194,19 @@ class VectorIndexService:
                     metadata,
                     chunks,
                     sim_signature,
+                    last_error=str(exc),
                 )
                 LOGGER.info(
                     "queued document %s for deferred embedding (%s chunks)",
                     storage_key,
                     len(chunks),
                 )
-                return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
+                return IndexResult(
+                    doc_id=storage_key,
+                    chunks=0,
+                    dims=self._last_dims,
+                    pending_embedding=True,
+                )
 
             dims = len(vectors[0]) if vectors else 0
 
@@ -332,46 +344,69 @@ class VectorIndexService:
             sim_signature=sim_signature,
         )
 
-    def _ensure_embedder_ready(self) -> None:
-        if self._test_mode:
+    def _ensure_embedder_ready(self, *, max_wait: float = 60.0) -> None:
+        if self._test_mode or self._embed_ready_event.is_set():
             return
         assert self._embedder is not None  # noqa: S101 - programming error guard
-        try:
-            available = self._client.has_model(self._embed_model)
-        except OllamaClientError as exc:
-            raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
-        if available:
-            return
+        start = time.monotonic()
+        delay = 0.5
         autopull_started = False
-        if self._dev_allow_autopull and not self._autopull_started:
+        last_error: str | None = None
+        while True:
             try:
-                ollama_services.pull_model(
-                    self._embed_model, base_url=self._client.base_url
-                )
-            except FileNotFoundError as exc:
-                LOGGER.warning("ollama CLI missing for autopull: %s", exc)
-            except Exception as exc:  # pragma: no cover - subprocess edge cases
-                LOGGER.warning(
-                    "failed to start autopull for %s: %s", self._embed_model, exc
-                )
+                available = self._client.has_model(self._embed_model)
+            except OllamaClientError as exc:
+                raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
+
+            if available:
+                try:
+                    self._embedder.embed_documents(["."])
+                except EmbeddingError as exc:
+                    last_error = str(exc)
+                else:
+                    self._embed_ready_event.set()
+                    return
             else:
-                self._autopull_started = True
-                autopull_started = True
-                LOGGER.info(
-                    "auto-pulling embedding model %s from %s",
-                    self._embed_model,
-                    self._client.base_url,
+                if self._dev_allow_autopull and not self._autopull_started:
+                    try:
+                        ollama_services.pull_model(
+                            self._embed_model, base_url=self._client.base_url
+                        )
+                    except FileNotFoundError as exc:
+                        LOGGER.warning("ollama CLI missing for autopull: %s", exc)
+                    except Exception as exc:  # pragma: no cover - subprocess edge cases
+                        LOGGER.warning(
+                            "failed to start autopull for %s: %s",
+                            self._embed_model,
+                            exc,
+                        )
+                    else:
+                        self._autopull_started = True
+                        autopull_started = True
+                        LOGGER.info(
+                            "auto-pulling embedding model %s from %s",
+                            self._embed_model,
+                            self._client.base_url,
+                        )
+
+            elapsed = time.monotonic() - start
+            if elapsed >= max_wait:
+                detail = (
+                    last_error
+                    or (
+                        "embedding model is not available locally"
+                        if not self._dev_allow_autopull and not self._autopull_started
+                        else "embedding model is warming up"
+                    )
                 )
-        detail = (
-            "embedding model is not available locally"
-            if not self._dev_allow_autopull
-            else "embedding model is warming up"
-        )
-        raise EmbedderUnavailableError(
-            self._embed_model,
-            detail=detail,
-            autopull_started=autopull_started,
-        )
+                raise EmbedderUnavailableError(
+                    self._embed_model,
+                    detail=detail,
+                    autopull_started=autopull_started or self._autopull_started,
+                )
+            jitter = random.uniform(0.0, 0.25)
+            time.sleep(min(delay + jitter, 10.0))
+            delay = min(delay * 2.0, 10.0)
 
     def _embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
@@ -410,24 +445,26 @@ class VectorIndexService:
         attempts: int = 3,
         initial_delay: float = 0.75,
     ) -> list[list[float]]:
-        delay = float(initial_delay)
+        delay = max(0.1, float(initial_delay))
+        total_attempts = max(1, int(attempts))
         last_exc: EmbedderUnavailableError | None = None
-        for attempt in range(max(1, int(attempts))):
+        for attempt in range(total_attempts):
             try:
+                self._ensure_embedder_ready()
                 return self._embed_documents(texts)
             except EmbedderUnavailableError as exc:
                 last_exc = exc
-                if attempt == attempts - 1:
+                if attempt == total_attempts - 1:
                     break
                 LOGGER.info(
                     "embedding attempt %s/%s unavailable (%s); retrying in %.2fs",
                     attempt + 1,
-                    attempts,
+                    total_attempts,
                     exc,
                     delay,
                 )
-                time.sleep(min(delay, 5.0))
-                delay = min(delay * 2, 30.0)
+                time.sleep(min(delay, 10.0))
+                delay = min(delay * 2.0, 10.0)
         if last_exc is None:
             raise EmbedderUnavailableError(self._embed_model, detail="embedding retry exhausted")
         raise last_exc
@@ -442,6 +479,8 @@ class VectorIndexService:
         chunks: Sequence[Any],
         sim_signature: int,
         job_id: str | None = None,
+        *,
+        last_error: str | None = None,
     ) -> None:
         if self._state_db is None:
             raise EmbedderUnavailableError(self._embed_model, detail="pending queue unavailable")
@@ -469,6 +508,7 @@ class VectorIndexService:
             metadata=metadata or {},
             chunks=chunk_payload,
             initial_delay=5.0,
+            last_error=last_error,
         )
 
     def _persist_vectors(

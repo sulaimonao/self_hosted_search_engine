@@ -591,6 +591,27 @@ The default behaviour stays fully local: no external APIs are contacted unless
 Ollama is enabled. Set `SMART_USE_LLM=true` in `.env` if you want the toggle
 pre-enabled for every user.
 
+## Shadow mode & embedding queue
+
+- **Default OFF.** The browser shadow crawler now ships disabled on first boot
+  and the UI exposes an explicit toggle. The selection persists in the
+  `app_settings` table so restarts keep your preference.
+- **Progress tracking.** Every background job surfaces a structured payload via
+  `GET /api/jobs/<id>/status` (and `/progress`). Phases advance through
+  `fetching → extracted → embedding → warming_up/indexed` with step counts,
+  retry counters, and ETA estimates. The Next.js header mirrors this with a
+  progress bar and status badge.
+- **Warm-up awareness.** When the embedding model is still loading, documents
+  are stored immediately and appear under the “Pending embeds” card until the
+  background worker drains them. The UI highlights `Embedding model warming up`
+  instead of failing jobs.
+- **Heavier pages.** Playwright navigation now retries with
+  `wait_until="domcontentloaded"` and a 120s timeout when the initial
+  `networkidle` pass times out, improving reliability on script-heavy domains.
+- **Troubleshooting.** The backend keeps a small history of pending chunks with
+  retry counts and last errors (`GET /api/docs/pending`). Use it alongside the
+  job progress view when diagnosing cold starts or slow embeds.
+
 ### Planner LLM fallback
 
 - `models.llm_primary` in `config.yaml` selects the planner's primary Ollama

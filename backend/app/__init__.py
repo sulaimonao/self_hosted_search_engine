@@ -342,8 +342,8 @@ def create_app() -> Flask:
         app=app,
         runner=runner,
         vector_index=vector_index_service,
+        state_db=state_db,
         enabled=feature_shadow_mode,
-        state_path=config.shadow_state_path,
     )
     app.config.setdefault("SHADOW_INDEX_MANAGER", shadow_manager)
     app.config.setdefault("FEATURE_SHADOW_MODE", feature_shadow_mode)

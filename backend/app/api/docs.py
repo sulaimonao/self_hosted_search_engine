@@ -44,4 +44,11 @@ def document_detail(doc_id: str):
     return jsonify({"item": doc})
 
 
-__all__ = ["bp", "list_docs", "document_detail"]
+@bp.get("/docs/pending")
+def pending_docs():
+    state_db: AppStateDB = current_app.config["APP_STATE_DB"]
+    items = state_db.list_pending_documents(limit=200)
+    return jsonify({"items": items})
+
+
+__all__ = ["bp", "list_docs", "document_detail", "pending_docs"]

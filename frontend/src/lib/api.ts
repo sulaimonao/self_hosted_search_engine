@@ -26,6 +26,7 @@ import type {
   ShadowStatus,
   DiscoveryPreview,
   DiscoveryItem,
+  PendingDocument,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -122,6 +123,14 @@ function normalizeShadowStatus(
   const error = typeof payload.error === "string" ? payload.error : null;
   const errorKind = typeof payload.error_kind === "string" ? payload.error_kind : null;
   const updatedAt = coerceNumber(payload.updated_at ?? payload.updatedAt) ?? undefined;
+  const phase = typeof payload.phase === "string" ? payload.phase : undefined;
+  const statusMessageRaw =
+    typeof payload.status_message === "string"
+      ? payload.status_message
+      : typeof payload.message === "string"
+      ? payload.message
+      : null;
+  const pendingEmbedding = coerceBoolean(payload.pending_embedding ?? false);
 
   return {
     url,
@@ -134,6 +143,9 @@ function normalizeShadowStatus(
     error_kind: errorKind,
     updatedAt,
     updated_at: updatedAt,
+    phase: phase ?? null,
+    statusMessage: statusMessageRaw ?? null,
+    pendingEmbedding,
   };
 }
 
@@ -837,6 +849,10 @@ export interface JobStatusPayload {
   phase?: string;
   progress?: number;
   eta_seconds?: number;
+  steps_total?: number;
+  steps_completed?: number;
+  retries?: number;
+  url?: string;
   stats?: {
     pages_fetched?: number;
     normalized_docs?: number;
@@ -857,6 +873,14 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusPayload> {
   const response = await fetch(api(`/api/jobs/${jobId}/status`));
   if (!response.ok) {
     throw new Error(`Unable to fetch job status (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchJobProgress(jobId: string): Promise<JobStatusPayload> {
+  const response = await fetch(api(`/api/jobs/${jobId}/progress`));
+  if (!response.ok) {
+    throw new Error(`Unable to fetch job progress (${response.status})`);
   }
   return response.json();
 }
@@ -923,7 +947,14 @@ function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatus
     deduped: Number(statsPayload.deduped ?? 0) || 0,
     embedded: Number(statsPayload.embedded ?? 0) || 0,
   };
-  const progressFraction = typeof payload.progress === "number" && Number.isFinite(payload.progress) ? payload.progress : undefined;
+  const stepsTotal = Number(payload.steps_total ?? 0) || 0;
+  const stepsCompleted = Number(payload.steps_completed ?? 0) || 0;
+  const progressFraction =
+    stepsTotal > 0
+      ? Math.max(0, Math.min(1, stepsCompleted / stepsTotal))
+      : typeof payload.progress === "number" && Number.isFinite(payload.progress)
+      ? payload.progress
+      : undefined;
   const progress =
     progressFraction !== undefined
       ? Math.max(0, Math.min(100, Math.round(progressFraction * 100)))
@@ -934,6 +965,11 @@ function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatus
       : state === "queued"
       ? 15
       : 0;
+  const url = typeof payload.url === "string" && payload.url.trim().length > 0 ? payload.url.trim() : undefined;
+  const updatedAtSeconds = typeof payload.updated_at === "number" ? payload.updated_at : undefined;
+  const lastUpdated = updatedAtSeconds
+    ? new Date(updatedAtSeconds * 1000).toISOString()
+    : new Date().toISOString();
   return {
     jobId,
     state,
@@ -943,9 +979,40 @@ function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatus
     stats,
     error: typeof payload.error === "string" ? payload.error : undefined,
     message: typeof payload.message === "string" ? payload.message : undefined,
-    description: `Job ${jobId}`,
-    lastUpdated: new Date().toISOString(),
+    description: url ?? `Job ${jobId}`,
+    lastUpdated,
+    stepsTotal: stepsTotal || undefined,
+    stepsCompleted: stepsCompleted || undefined,
+    retries: Number(payload.retries ?? 0) || 0,
+    url,
   };
+}
+
+export async function fetchPendingDocuments(): Promise<PendingDocument[]> {
+  const response = await fetch(api("/api/docs/pending"));
+  if (!response.ok) {
+    throw new Error(`Unable to fetch pending documents (${response.status})`);
+  }
+  const payload = (await response.json()) as Record<string, unknown>;
+  const items = Array.isArray((payload.items as unknown[]))
+    ? (payload.items as Record<string, unknown>[])
+    : Array.isArray((payload.pending as unknown[]))
+    ? (payload.pending as Record<string, unknown>[])
+    : [];
+  const docs: PendingDocument[] = [];
+  for (const item of items) {
+    const docIdRaw = typeof item.doc_id === "string" ? item.doc_id : typeof item.docId === "string" ? item.docId : "";
+    if (!docIdRaw) continue;
+    docs.push({
+      docId: docIdRaw,
+      url: typeof item.url === "string" ? item.url : null,
+      title: typeof item.title === "string" ? item.title : null,
+      retryCount: Number(item.retry_count ?? item.retryCount ?? 0) || 0,
+      lastError: typeof item.last_error === "string" ? item.last_error : null,
+      updatedAt: coerceNumber(item.updated_at ?? item.updatedAt) ?? null,
+    });
+  }
+  return docs;
 }
 
 export interface ModelInventory {

@@ -65,6 +65,7 @@ def test_embed_with_retry_attempts(monkeypatch, vector_service):
         raise EmbedderUnavailableError(service._embed_model, detail="warming")
 
     monkeypatch.setattr(service, "_embed_documents", fake_embed)
+    monkeypatch.setattr(service, "_ensure_embedder_ready", lambda **_kwargs: None)
     monkeypatch.setattr(time, "sleep", lambda _: None)
 
     with pytest.raises(EmbedderUnavailableError):
@@ -80,6 +81,7 @@ def test_upsert_document_queues_pending(vector_service, monkeypatch):
         raise EmbedderUnavailableError(service._embed_model, detail="warming")
 
     monkeypatch.setattr(service, "_embed_documents", fake_embed)
+    monkeypatch.setattr(service, "_ensure_embedder_ready", lambda **_kwargs: None)
     monkeypatch.setattr(time, "sleep", lambda _: None)
 
     result = service.upsert_document(text="Example document body", url="https://example.com", title="Example")

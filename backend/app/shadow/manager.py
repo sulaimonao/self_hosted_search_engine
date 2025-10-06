@@ -6,8 +6,6 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-import json
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import trafilatura
@@ -16,13 +14,22 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
+from backend.app.db import AppStateDB
 from backend.app.jobs.runner import JobRunner
 from backend.app.services.vector_index import IndexResult, VectorIndexService
 from server.json_logger import log_event
 
 _DEFAULT_TIMEOUT_MS = 45_000
+_RETRY_TIMEOUT_MS = 90_000
 _SCROLL_DELAY_MS = 400
 _SCROLL_STEPS = 4
+_JOB_STEPS = 5
+_BLOCKED_PATTERNS = [
+    "*://*.doubleclick.net/*",
+    "*://*.googlesyndication.com/*",
+    "*://*.adservice.google.com/*",
+    "*://*.facebook.net/*",
+]
 
 
 @dataclass(slots=True)
@@ -32,6 +39,7 @@ class ShadowJobOutcome:
     url: str
     title: str
     chunks: int
+    pending_embedding: bool
 
 
 class ShadowIndexer:
@@ -43,18 +51,23 @@ class ShadowIndexer:
         app: Flask,
         runner: JobRunner,
         vector_index: VectorIndexService,
+        state_db: AppStateDB,
         enabled: bool = False,
-        state_path: Path | None = None,
     ) -> None:
         self._app = app
         self._runner = runner
         self._vector_index = vector_index
+        self._state_db = state_db
         self._lock = threading.RLock()
         self._states: Dict[str, Dict[str, Any]] = {}
-        self._enabled = bool(enabled)
-        self._state_path = state_path
+        stored_enabled = state_db.get_setting("shadow_enabled")
+        if stored_enabled is not None:
+            self._enabled = stored_enabled.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            self._enabled = bool(enabled)
         self._mode_updated_at = time.time()
-        self._restore_state()
+        if stored_enabled is None:
+            state_db.set_setting("shadow_enabled", "true" if self._enabled else "false")
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,12 +101,22 @@ class ShadowIndexer:
             "state": "queued",
             "job_id": job_id,
             "updated_at": time.time(),
+            "phase": "queued",
         }
         state["jobId"] = job_id
         state["updatedAt"] = state["updated_at"]
 
         with self._lock:
             self._states[normalized] = state
+
+        self._update_job_status(
+            job_id,
+            url=normalized,
+            phase="queued",
+            message="Queued for shadow indexing",
+            step=0,
+            started_at=state["updated_at"],
+        )
 
         return dict(state)
 
@@ -116,14 +139,18 @@ class ShadowIndexer:
         with self._lock:
             self._enabled = bool(enabled)
             self._mode_updated_at = time.time()
-            self._persist_state()
+            self._state_db.set_setting(
+                "shadow_enabled", "true" if self._enabled else "false"
+            )
         return self.get_config()
 
     def toggle(self) -> Dict[str, Any]:
         with self._lock:
             self._enabled = not self._enabled
             self._mode_updated_at = time.time()
-            self._persist_state()
+            self._state_db.set_setting(
+                "shadow_enabled", "true" if self._enabled else "false"
+            )
         return self.get_config()
 
     def get_config(self) -> Dict[str, Any]:
@@ -160,32 +187,9 @@ class ShadowIndexer:
                     payload["last_updated_at"] = latest.get("updated_at")
             return payload
 
-    def _restore_state(self) -> None:
-        if self._state_path is None:
-            return
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return
-        if not self._state_path.exists():
-            return
-        try:
-            raw = json.loads(self._state_path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        enabled = raw.get("enabled") if isinstance(raw, dict) else None
-        if isinstance(enabled, bool):
-            self._enabled = enabled
-
     def _persist_state(self) -> None:
-        if self._state_path is None:
-            return
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"enabled": self._enabled, "updated_at": time.time()}
-            self._state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        # retained for backwards compatibility; persistence handled in set_enabled
+        self._state_db.set_setting("shadow_enabled", "true" if self._enabled else "false")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -193,9 +197,16 @@ class ShadowIndexer:
     def _run_job(self, url: str, job_id: str) -> ShadowJobOutcome | None:
         with self._app.app_context():
             self._transition(url, {"state": "running", "job_id": job_id})
+            self._update_job_status(
+                job_id,
+                url=url,
+                phase="fetching",
+                message="Fetching URL",
+                step=1,
+            )
             log_event("INFO", "shadow.start", url=url, job_id=job_id)
             try:
-                outcome = self._fetch_and_index(url)
+                outcome = self._fetch_and_index(url, job_id)
             except (PlaywrightTimeout, PlaywrightError) as exc:
                 message = str(exc)
                 self._transition(
@@ -214,6 +225,14 @@ class ShadowIndexer:
                     job_id=job_id,
                     error=exc.__class__.__name__,
                     msg=message,
+                )
+                self._update_job_status(
+                    job_id,
+                    url=url,
+                    phase="failed",
+                    message=message,
+                    step=_JOB_STEPS,
+                    retries=1,
                 )
                 raise
             except Exception as exc:  # pragma: no cover - defensive fallback
@@ -235,6 +254,13 @@ class ShadowIndexer:
                     error=exc.__class__.__name__,
                     msg=message,
                 )
+                self._update_job_status(
+                    job_id,
+                    url=url,
+                    phase="failed",
+                    message=message,
+                    step=_JOB_STEPS,
+                )
                 raise
 
             payload = {
@@ -243,6 +269,7 @@ class ShadowIndexer:
                 "job_id": job_id,
                 "title": outcome.title,
                 "chunks": outcome.chunks,
+                "pending_embedding": outcome.pending_embedding,
                 "updated_at": time.time(),
             }
             payload["jobId"] = job_id
@@ -255,6 +282,7 @@ class ShadowIndexer:
                 job_id=job_id,
                 title=outcome.title,
                 chunks=outcome.chunks,
+                pending=outcome.pending_embedding,
             )
             return outcome
 
@@ -274,19 +302,84 @@ class ShadowIndexer:
             self._states[normalized] = state
             return dict(state)
 
-    def _fetch_and_index(self, url: str) -> ShadowJobOutcome:
+    def _update_job_status(
+        self,
+        job_id: str,
+        *,
+        url: str,
+        phase: str,
+        message: str,
+        step: int,
+        steps_total: int = _JOB_STEPS,
+        retries: int = 0,
+        eta_seconds: float | None = None,
+        started_at: float | None = None,
+    ) -> None:
+        steps_completed = max(0, min(int(step), int(steps_total)))
+        self._state_db.upsert_job_status(
+            job_id,
+            url=url,
+            phase=phase,
+            steps_total=int(steps_total),
+            steps_completed=steps_completed,
+            retries=int(retries),
+            eta_seconds=eta_seconds,
+            message=message,
+            started_at=started_at,
+        )
+        self._transition(url, {"phase": phase, "status_message": message, "job_id": job_id})
+
+    def _fetch_and_index(self, url: str, job_id: str) -> ShadowJobOutcome:
         title, text, metadata = self._fetch_with_playwright(url)
+        self._update_job_status(
+            job_id,
+            url=url,
+            phase="extracted",
+            message="Extracted page content",
+            step=2,
+        )
         cleaned_title = title.strip() if title.strip() else url
         metadata = dict(metadata)
         metadata.setdefault("source", "shadow_mode")
+        self._update_job_status(
+            job_id,
+            url=url,
+            phase="embedding",
+            message="Indexing document",
+            step=3,
+        )
         index_result: IndexResult = self._vector_index.upsert_document(
             text=text,
             url=url,
             title=cleaned_title,
             metadata=metadata,
         )
+        if index_result.pending_embedding:
+            self._update_job_status(
+                job_id,
+                url=url,
+                phase="warming_up",
+                message="Embedding model warming up",
+                step=4,
+            )
+        else:
+            message = (
+                f"Indexed {index_result.chunks} chunk(s)"
+                if index_result.chunks
+                else "No new chunks (duplicate or empty)"
+            )
+            self._update_job_status(
+                job_id,
+                url=url,
+                phase="indexed",
+                message=message,
+                step=_JOB_STEPS,
+            )
         return ShadowJobOutcome(
-            url=url, title=cleaned_title, chunks=index_result.chunks
+            url=url,
+            title=cleaned_title,
+            chunks=index_result.chunks,
+            pending_embedding=index_result.pending_embedding,
         )
 
     def _fetch_with_playwright(self, url: str) -> tuple[str, str, Dict[str, Any]]:
@@ -294,8 +387,10 @@ class ShadowIndexer:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(ignore_https_errors=True)
             page = context.new_page()
-            page.set_default_navigation_timeout(_DEFAULT_TIMEOUT_MS)
-            page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
+            page.set_default_navigation_timeout(_RETRY_TIMEOUT_MS)
+            page.set_default_timeout(_RETRY_TIMEOUT_MS)
+            for pattern in _BLOCKED_PATTERNS:
+                page.route(pattern, lambda route, _pattern=pattern: route.abort())
 
             page_title = url
             text = ""
@@ -303,7 +398,21 @@ class ShadowIndexer:
             lang_value: Any = None
 
             try:
-                page.goto(url, wait_until="networkidle")
+                navigation_attempts = [
+                    ("networkidle", _RETRY_TIMEOUT_MS),
+                    ("domcontentloaded", 120_000),
+                ]
+                last_error: Exception | None = None
+                for wait_until, timeout in navigation_attempts:
+                    try:
+                        page.goto(url, wait_until=wait_until, timeout=timeout)
+                        last_error = None
+                        break
+                    except PlaywrightTimeout as exc:
+                        last_error = exc
+                        continue
+                if last_error is not None:
+                    raise last_error
                 for _ in range(_SCROLL_STEPS):
                     page.wait_for_timeout(_SCROLL_DELAY_MS)
                     with suppress(Exception):

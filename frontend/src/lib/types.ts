@@ -69,6 +69,10 @@ export interface JobStatusSummary {
   message?: string;
   description?: string;
   lastUpdated: string;
+  stepsTotal?: number;
+  stepsCompleted?: number;
+  retries?: number;
+  url?: string;
 }
 
 export interface CrawlQueueItem {
@@ -209,6 +213,9 @@ export interface ShadowStatus {
   error_kind?: string | null;
   updatedAt?: number;
   updated_at?: number;
+  phase?: string | null;
+  statusMessage?: string | null;
+  pendingEmbedding?: boolean;
 }
 
 export interface ShadowConfig {
@@ -234,4 +241,13 @@ export interface DiscoveryPreview {
 
 export interface DiscoveryItem extends DiscoveryPreview {
   text: string;
+}
+
+export interface PendingDocument {
+  docId: string;
+  url?: string | null;
+  title?: string | null;
+  retryCount: number;
+  lastError?: string | null;
+  updatedAt?: number | null;
 }

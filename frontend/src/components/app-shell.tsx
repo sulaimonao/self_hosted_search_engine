@@ -63,6 +63,7 @@ import {
   upsertIndexDocument,
   createDomainSeed,
   triggerRefresh,
+  fetchPendingDocuments,
 } from "@/lib/api";
 import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
@@ -83,17 +84,16 @@ import type {
   PageExtractResponse,
   DiscoveryPreview,
   ShadowConfig,
+  PendingDocument,
 } from "@/lib/types";
+import { PendingEmbedsCard } from "@/components/pending-embeds-card";
+import { ShadowProgress } from "@/components/shadow-progress";
 import { devlog } from "@/lib/devlog";
 import { normalizeInput } from "@/lib/normalize-input";
 import { AGENT_ENABLED, IN_APP_BROWSER_ENABLED } from "@/lib/flags";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
-const FEATURE_SHADOW_MODE = String(process.env.NEXT_PUBLIC_FEATURE_SHADOW_MODE ?? "");
-const SHADOW_MODE_ENABLED = ["1", "true", "yes", "on"].includes(
-  FEATURE_SHADOW_MODE.trim().toLowerCase(),
-);
 const FEATURE_LOCAL_DISCOVERY = String(process.env.NEXT_PUBLIC_FEATURE_LOCAL_DISCOVERY ?? "");
 const LOCAL_DISCOVERY_ENABLED = ["1", "true", "yes", "on"].includes(
   FEATURE_LOCAL_DISCOVERY.trim().toLowerCase(),
@@ -480,11 +480,13 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const currentUrlIsHttp = isHttpUrl(currentUrl);
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
-  const [shadowModeEnabled, setShadowModeEnabled] = useState<boolean>(SHADOW_MODE_ENABLED);
+  const [shadowModeEnabled, setShadowModeEnabled] = useState<boolean>(false);
   const [shadowConfig, setShadowConfig] = useState<ShadowConfig | null>(null);
   const [shadowConfigLoading, setShadowConfigLoading] = useState(true);
   const [shadowConfigSaving, setShadowConfigSaving] = useState(false);
   const [shadowConfigError, setShadowConfigError] = useState<string | null>(null);
+  const [pendingDocs, setPendingDocs] = useState<PendingDocument[]>([]);
+  const [shadowJobId, setShadowJobId] = useState<string | null>(null);
 
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
@@ -2097,6 +2099,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     if (!shadowModeEnabled || shadowConfigSaving) {
       shadowWatcherRef.current?.cancel?.();
       shadowWatcherRef.current = null;
+      setShadowJobId(null);
       return;
     }
 
@@ -2124,7 +2127,14 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       }
 
       try {
-        await queueShadowIndex(targetUrl);
+        const queued = await queueShadowIndex(targetUrl);
+        const jobId = queued.jobId ?? queued.job_id;
+        if (jobId) {
+          setShadowJobId(jobId);
+          if (!jobSubscriptions.current.has(jobId)) {
+            registerJob(jobId, `Shadow index ${targetUrl}`);
+          }
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "Failed to queue shadow index job");
@@ -2147,6 +2157,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           return;
         }
 
+        if (!cancelled) {
+          const jobId = status.jobId ?? status.job_id;
+          if (jobId) {
+            setShadowJobId(jobId);
+            if (!jobSubscriptions.current.has(jobId)) {
+              registerJob(jobId, `Shadow index ${targetUrl}`);
+            }
+          }
+        }
+
         if (status.state === "done") {
           if (!shadowNotifiedRef.current.has(targetUrl)) {
             const title = status.title && status.title.trim().length > 0 ? status.title.trim() : targetUrl;
@@ -2158,6 +2178,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               title,
               chunks: typeof status.chunks === "number" ? status.chunks : null,
             });
+          }
+          const completedId = status.jobId ?? status.job_id;
+          if (completedId && completedId === shadowJobId) {
+            setShadowJobId(null);
           }
           return;
         }
@@ -2173,6 +2197,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               error_kind: status.error_kind ?? null,
             });
           }
+          const failedId = status.jobId ?? status.job_id;
+          if (failedId && failedId === shadowJobId) {
+            setShadowJobId(null);
+          }
           return;
         }
       }
@@ -2184,7 +2212,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       cancelled = true;
       shadowWatcherRef.current = null;
     };
-  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving]);
+  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving, registerJob, shadowJobId]);
 
   useEffect(() => {
     chatHistoryRef.current = chatMessages;
@@ -2193,6 +2221,33 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   useEffect(() => {
     crawlQueueRef.current = crawlQueue;
   }, [crawlQueue]);
+
+  useEffect(() => {
+    if (!shadowModeEnabled) {
+      setPendingDocs([]);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const docs = await fetchPendingDocuments();
+        if (!cancelled) {
+          setPendingDocs(docs);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Failed to fetch pending embeds");
+        devlog({ evt: "ui.shadow.pending_error", message });
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => {
+      void tick();
+    }, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [shadowModeEnabled]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2259,7 +2314,22 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const supportsVision = useMemo(() => modelSupportsVision(chatModel), [chatModel]);
 
+  const shadowJobSummary = useMemo(
+    () => (shadowJobId ? jobSummaries.find((job) => job.jobId === shadowJobId) ?? null : null),
+    [jobSummaries, shadowJobId],
+  );
+
   const shadowStatusText = useMemo(() => {
+    if (shadowJobSummary) {
+      const parts = [shadowJobSummary.phase];
+      if (typeof shadowJobSummary.progress === "number") {
+        parts.push(`${Math.max(0, Math.min(100, Math.round(shadowJobSummary.progress)))}%`);
+      }
+      if (shadowJobSummary.message) {
+        parts.push(shadowJobSummary.message);
+      }
+      return parts.filter(Boolean).join(" · ");
+    }
     if (shadowConfigError) {
       return shadowConfigError;
     }
@@ -2314,6 +2384,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               {shadowStatusText}
             </span>
           ) : null}
+          <Badge variant="outline">Pending {pendingDocs.length}</Badge>
         </div>
         <div className="flex items-center gap-2">
           <Switch
@@ -2324,6 +2395,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           />
         </div>
       </div>
+      {shadowJobSummary ? <ShadowProgress job={shadowJobSummary} /> : null}
       <div className="flex flex-1 flex-col lg:flex-row">
         <SearchResultsPanel
           className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
@@ -2429,6 +2501,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                 <AgentLog entries={agentLog} isStreaming={isChatLoading} />
                 <div className="flex flex-col gap-3">
                   <JobStatus jobs={jobSummaries} />
+                  <PendingEmbedsCard docs={pendingDocs} />
                   <CrawlManager
                     queue={crawlQueue}
                     defaultScope={defaultScope}
