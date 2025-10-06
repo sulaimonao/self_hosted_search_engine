@@ -1,3 +1,4 @@
+import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,7 +11,7 @@ type ChatMessageMarkdownProps = {
   className?: string;
 };
 
-const components: Components = {
+const components = {
   a: ({ className, ...props }) => (
     <a
       className={cn(
@@ -22,7 +23,7 @@ const components: Components = {
       rel="noopener noreferrer"
     />
   ),
-  code: ({ inline, className, children, ...props }) => {
+  code: ({ inline, className, children, ...props }: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) => {
     if (inline) {
       return (
         <code
@@ -80,7 +81,7 @@ const components: Components = {
       className={cn("font-semibold text-foreground", className)}
     />
   ),
-};
+} satisfies Components;
 
 export function ChatMessageMarkdown({ text, className }: ChatMessageMarkdownProps) {
   if (!text.trim()) {

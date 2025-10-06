@@ -928,8 +928,11 @@ export async function fetchModelInventory(): Promise<ModelInventory> {
         .filter((entry): entry is string => typeof entry === "string")
     : [];
 
-  const available = Array.isArray((modelsPayload as Record<string, unknown>).available)
-    ? ((modelsPayload as Record<string, unknown>).available as unknown[])
+  const availableSource = Array.isArray(modelsPayload.available)
+    ? modelsPayload.available
+    : [];
+  const available = availableSource.length > 0
+    ? availableSource
         .map((entry) => normalizeModelName(entry))
         .filter((entry): entry is string => typeof entry === "string")
     : [...chatModels];

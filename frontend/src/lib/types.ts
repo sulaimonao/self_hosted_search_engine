@@ -116,6 +116,7 @@ export interface LlmModelsResponse {
   ollama_host: string;
   reachable?: boolean;
   error?: string;
+  available?: string[] | null;
 }
 
 export interface LlmHealth {

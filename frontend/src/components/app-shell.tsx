@@ -120,6 +120,36 @@ function isHttpUrl(candidate: string | null | undefined) {
   }
 }
 
+function isSelectionActionPayload(payload: unknown): payload is SelectionActionPayload {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  const selection = (candidate as { selection?: unknown }).selection;
+  const url = (candidate as { url?: unknown }).url;
+  if (typeof selection !== "string" || typeof url !== "string") {
+    return false;
+  }
+  const context = (candidate as { context?: unknown }).context;
+  if (context !== undefined && typeof context !== "string") {
+    return false;
+  }
+  const boundingRect = (candidate as { boundingRect?: unknown }).boundingRect;
+  if (boundingRect === undefined || boundingRect === null) {
+    return true;
+  }
+  if (typeof boundingRect !== "object") {
+    return false;
+  }
+  const rect = boundingRect as Record<string, unknown>;
+  return (
+    typeof rect.x === "number" &&
+    typeof rect.y === "number" &&
+    typeof rect.width === "number" &&
+    typeof rect.height === "number"
+  );
+}
+
 const DEFAULT_AGENT_LOG: AgentLogEntry[] = [
   {
     id: uid(),
@@ -1478,8 +1508,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
             action.description ?? "Seed captured"
           );
         } else if (action.kind === "summarize" || action.kind === "extract") {
-          const payload = action.payload as SelectionActionPayload;
-          const selection = typeof payload?.selection === "string" ? payload.selection.trim() : "";
+          if (!isSelectionActionPayload(action.payload)) {
+            throw new Error("Selection payload is missing required fields");
+          }
+          const payload = action.payload;
+          const selection = payload.selection.trim();
           if (!selection) {
             throw new Error("Selection payload is empty");
           }

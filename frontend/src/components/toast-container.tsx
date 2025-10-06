@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 export interface ToastMessage {
   id: string;
   message: string;
-  variant?: "default" | "destructive";
+  variant?: "default" | "destructive" | "warning";
   traceId?: string | null;
 }
 
@@ -38,7 +38,9 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
             "pointer-events-auto rounded-md border px-4 py-3 text-sm shadow-md",
             toast.variant === "destructive"
               ? "border-destructive/60 bg-destructive/10 text-destructive"
-              : "border-foreground/20 bg-background/95 text-foreground",
+              : toast.variant === "warning"
+                ? "border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                : "border-foreground/20 bg-background/95 text-foreground",
           )}
         >
           <div className="flex items-start justify-between gap-3">
