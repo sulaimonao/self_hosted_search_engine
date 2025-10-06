@@ -201,6 +201,34 @@ class AppStateDB:
             )
 
     # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                (key,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return default
+        value = row["value"] if isinstance(row, Mapping) else row[0]
+        return str(value)
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES(?, ?, strftime('%s','now'))
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value),
+            )
+
+    # ------------------------------------------------------------------
     # Pending vectors
     # ------------------------------------------------------------------
     def enqueue_pending_document(
@@ -216,14 +244,27 @@ class AppStateDB:
         metadata: Mapping[str, Any] | None,
         chunks: Sequence[tuple[int, str, Mapping[str, Any] | None]],
         initial_delay: float = 0.0,
+        last_error: str | None = None,
     ) -> None:
         metadata_json = _serialize(metadata or {})
         now = time.time()
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO pending_documents(doc_id, job_id, url, title, resolved_title, doc_hash, sim_signature, metadata, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO pending_documents(
+                    doc_id,
+                    job_id,
+                    url,
+                    title,
+                    resolved_title,
+                    doc_hash,
+                    sim_signature,
+                    metadata,
+                    last_error,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     job_id = excluded.job_id,
                     url = excluded.url,
@@ -232,6 +273,11 @@ class AppStateDB:
                     doc_hash = excluded.doc_hash,
                     sim_signature = excluded.sim_signature,
                     metadata = excluded.metadata,
+                    last_error = COALESCE(excluded.last_error, pending_documents.last_error),
+                    retry_count = CASE
+                        WHEN excluded.last_error IS NOT NULL THEN COALESCE(pending_documents.retry_count, 0)
+                        ELSE pending_documents.retry_count
+                    END,
                     updated_at = ?
                 """,
                 (
@@ -243,6 +289,7 @@ class AppStateDB:
                     doc_hash,
                     int(sim_signature) if sim_signature is not None else None,
                     metadata_json,
+                    last_error,
                     now,
                     now,
                     now,
@@ -282,7 +329,8 @@ class AppStateDB:
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 """
-                SELECT q.doc_id, q.attempts, d.job_id, d.url, d.title, d.resolved_title, d.doc_hash, d.sim_signature, d.metadata
+                SELECT q.doc_id, q.attempts, d.job_id, d.url, d.title, d.resolved_title, d.doc_hash,
+                       d.sim_signature, d.metadata, d.last_error, d.retry_count
                   FROM pending_vectors_queue AS q
                   JOIN pending_documents AS d ON d.doc_id = q.doc_id
                  WHERE q.next_attempt_at <= ?
@@ -318,6 +366,8 @@ class AppStateDB:
                         "sim_signature": row["sim_signature"],
                         "metadata": _deserialize(row["metadata"], {}),
                         "chunks": chunks,
+                        "last_error": row["last_error"],
+                        "retry_count": row["retry_count"],
                     }
                 )
                 self._conn.execute(
@@ -326,7 +376,14 @@ class AppStateDB:
                 )
         return rows
 
-    def reschedule_pending_document(self, doc_id: str, *, delay: float, attempts: int) -> None:
+    def reschedule_pending_document(
+        self,
+        doc_id: str,
+        *,
+        delay: float,
+        attempts: int,
+        last_error: str | None = None,
+    ) -> None:
         now = time.time()
         next_attempt = now + max(1.0, float(delay))
         with self._lock, self._conn:
@@ -350,10 +407,133 @@ class AppStateDB:
                     now,
                 ),
             )
+            self._conn.execute(
+                """
+                UPDATE pending_documents
+                   SET retry_count = ?,
+                       last_error = COALESCE(?, last_error),
+                       updated_at = ?
+                 WHERE doc_id = ?
+                """,
+                (int(attempts), last_error, now, doc_id),
+            )
 
     def clear_pending_document(self, doc_id: str) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM pending_documents WHERE doc_id = ?", (doc_id,))
+
+    def list_pending_documents(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                SELECT doc_id, url, title, retry_count, last_error, updated_at
+                  FROM pending_documents
+              ORDER BY updated_at DESC
+                 LIMIT ?
+                """,
+                (int(limit),),
+            )
+            rows = cursor.fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            if isinstance(row, Mapping):
+                results.append(
+                    {
+                        "doc_id": row.get("doc_id"),
+                        "url": row.get("url"),
+                        "title": row.get("title"),
+                        "retry_count": row.get("retry_count"),
+                        "last_error": row.get("last_error"),
+                        "updated_at": row.get("updated_at"),
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "doc_id": row[0],
+                        "url": row[1],
+                        "title": row[2],
+                        "retry_count": row[3],
+                        "last_error": row[4],
+                        "updated_at": row[5],
+                    }
+                )
+        return results
+
+    # ------------------------------------------------------------------
+    # Job status
+    # ------------------------------------------------------------------
+    def upsert_job_status(
+        self,
+        job_id: str,
+        *,
+        url: str | None,
+        phase: str,
+        steps_total: int,
+        steps_completed: int,
+        retries: int,
+        eta_seconds: float | None,
+        message: str | None,
+        started_at: float | None = None,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO job_status(
+                    job_id, url, phase, steps_total, steps_completed, retries, eta_seconds, message, started_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%s','now')), strftime('%s','now'))
+                ON CONFLICT(job_id) DO UPDATE SET
+                    url = COALESCE(excluded.url, job_status.url),
+                    phase = excluded.phase,
+                    steps_total = excluded.steps_total,
+                    steps_completed = excluded.steps_completed,
+                    retries = excluded.retries,
+                    eta_seconds = excluded.eta_seconds,
+                    message = excluded.message,
+                    started_at = COALESCE(job_status.started_at, excluded.started_at),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_id,
+                    url,
+                    phase,
+                    int(steps_total),
+                    int(steps_completed),
+                    int(retries),
+                    eta_seconds,
+                    message,
+                    started_at,
+                ),
+            )
+
+    def get_job_status(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                SELECT job_id, url, phase, steps_total, steps_completed, retries, eta_seconds, message, started_at, updated_at
+                  FROM job_status
+                 WHERE job_id = ?
+                """,
+                (job_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        if isinstance(row, Mapping):
+            return dict(row)
+        keys = [
+            "job_id",
+            "url",
+            "phase",
+            "steps_total",
+            "steps_completed",
+            "retries",
+            "eta_seconds",
+            "message",
+            "started_at",
+            "updated_at",
+        ]
+        return {key: row[index] for index, key in enumerate(keys)}
 
     def list_documents(self, *, query: str | None = None, site: str | None = None, limit: int = 100) -> list[DocumentRecord]:
         conditions: list[str] = []

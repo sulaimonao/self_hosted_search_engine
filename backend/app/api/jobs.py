@@ -8,21 +8,57 @@ from typing import Any, Dict
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..config import AppConfig
+from ..db import AppStateDB
 from ..jobs.runner import JobRunner
 
 bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 
 
-@bp.get("/jobs/<job_id>/status")
-def job_status(job_id: str):
+def _compose_job_status(job_id: str) -> dict[str, Any]:
     worker = current_app.config.get("REFRESH_WORKER")
     if worker is not None:
         snapshot = worker.status(job_id=job_id).get("job")
         if snapshot:
             payload = _format_refresh_job(snapshot)
-            return jsonify(payload)
+            return payload
     runner: JobRunner = current_app.config["JOB_RUNNER"]
     payload = runner.status(job_id)
+    state_db: AppStateDB = current_app.config["APP_STATE_DB"]
+    db_status = state_db.get_job_status(job_id)
+    if db_status:
+        steps_total = int(db_status.get("steps_total") or 0)
+        steps_completed = int(db_status.get("steps_completed") or 0)
+        progress = payload.get("progress")
+        if steps_total > 0:
+            progress = max(0.0, min(1.0, steps_completed / steps_total))
+        merged = dict(payload)
+        merged.update(
+            {
+                "phase": db_status.get("phase") or merged.get("phase"),
+                "steps_total": steps_total,
+                "steps_completed": steps_completed,
+                "retries": int(db_status.get("retries") or 0),
+                "eta_seconds": db_status.get("eta_seconds"),
+                "message": db_status.get("message") or merged.get("message"),
+                "started_at": db_status.get("started_at"),
+                "updated_at": db_status.get("updated_at"),
+                "url": db_status.get("url") or merged.get("url"),
+                "progress": progress,
+            }
+        )
+        return merged
+    return payload
+
+
+@bp.get("/jobs/<job_id>/status")
+def job_status(job_id: str):
+    payload = _compose_job_status(job_id)
+    return jsonify(payload)
+
+
+@bp.get("/jobs/<job_id>/progress")
+def job_progress(job_id: str):
+    payload = _compose_job_status(job_id)
     return jsonify(payload)
 
 

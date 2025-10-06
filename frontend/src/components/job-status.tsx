@@ -53,11 +53,15 @@ export function JobStatus({ jobs }: JobStatusProps) {
         )}
         {jobs.map((job) => {
           const meta = STATUS_META[job.state];
+          const percent = Math.max(0, Math.min(100, Math.round(job.progress)));
           return (
             <div key={job.jobId} className="rounded border px-3 py-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">{job.description ?? job.jobId}</p>
+                  {job.url && (
+                    <p className="text-xs text-muted-foreground truncate">{job.url}</p>
+                  )}
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span className={cn("flex items-center gap-1", meta.tone)}>
                       {meta.icon}
@@ -68,6 +72,10 @@ export function JobStatus({ jobs }: JobStatusProps) {
                     </Badge>
                     {typeof job.etaSeconds === "number" && job.state === "running" && job.etaSeconds > 0 && (
                       <Badge variant="outline">eta {formatEta(job.etaSeconds)}</Badge>
+                    )}
+                    <Badge variant="outline">{percent}%</Badge>
+                    {typeof job.retries === "number" && job.retries > 0 && (
+                      <Badge variant="outline">retries {job.retries}</Badge>
                     )}
                     <span>Updated {new Date(job.lastUpdated).toLocaleTimeString()}</span>
                   </div>
@@ -86,7 +94,7 @@ export function JobStatus({ jobs }: JobStatusProps) {
                   </Badge>
                 )}
               </div>
-              <Progress value={job.progress} className="mt-2" />
+              <Progress value={percent} className="mt-2" />
             </div>
           );
         })}
