@@ -847,6 +847,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         entrypoints: seed.entrypoints,
         createdAt: seed.created_at,
         updatedAt: seed.updated_at,
+        extras: seed.extras,
       }));
     return items.sort((a, b) => Number(b.editable) - Number(a.editable));
   }, []);
@@ -2512,6 +2513,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                     onRefresh={refreshSeeds}
                     isLoading={isSeedsLoading}
                     errorMessage={seedError}
+                    currentUrl={currentUrl}
                   />
                 </div>
               </div>

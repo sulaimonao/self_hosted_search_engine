@@ -85,6 +85,7 @@ export interface CrawlQueueItem {
   entrypoints?: string[];
   createdAt?: string;
   updatedAt?: string;
+  extras?: Record<string, unknown>;
 }
 
 export type CrawlScope = "page" | "domain" | "allowed-list" | "custom";
