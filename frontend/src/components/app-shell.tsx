@@ -152,6 +152,58 @@ function isSelectionActionPayload(payload: unknown): payload is SelectionActionP
   );
 }
 
+type ChatLinkNavigationDecision =
+  | { action: "navigate"; url: string }
+  | { action: "external"; url: string }
+  | { action: "ignore" };
+
+export function resolveChatLinkNavigation(
+  currentPreviewUrl: string | null | undefined,
+  rawUrl: string,
+): ChatLinkNavigationDecision {
+  const candidate = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  if (!candidate) {
+    return { action: "ignore" };
+  }
+
+  const hasPreviewBase = Boolean(currentPreviewUrl && isHttpUrl(currentPreviewUrl));
+  const baseUrl = hasPreviewBase ? (currentPreviewUrl as string) : undefined;
+
+  let parsed: URL;
+  try {
+    parsed = baseUrl ? new URL(candidate, baseUrl) : new URL(candidate);
+  } catch {
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      return { action: "ignore" };
+    }
+  }
+
+  const normalized = parsed.toString();
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { action: "external", url: normalized };
+  }
+
+  if (!hasPreviewBase) {
+    return { action: "external", url: normalized };
+  }
+
+  let previewHost: string | null = null;
+  try {
+    previewHost = baseUrl ? new URL(baseUrl).host : null;
+  } catch {
+    previewHost = null;
+  }
+
+  if (previewHost && parsed.host === previewHost) {
+    return { action: "navigate", url: normalized };
+  }
+
+  return { action: "external", url: normalized };
+}
+
 const DEFAULT_AGENT_LOG: AgentLogEntry[] = [
   {
     id: uid(),
@@ -596,6 +648,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       window.open(target, "_blank", "noopener,noreferrer");
     }
   }, []);
+
+  const handleChatLink = useCallback(
+    (url: string) => {
+      const decision = resolveChatLinkNavigation(currentUrl, url);
+      if (decision.action === "navigate") {
+        handleNavigate(decision.url);
+      } else if (decision.action === "external") {
+        handleOpenInNewTab(decision.url);
+      }
+    },
+    [currentUrl, handleNavigate, handleOpenInNewTab],
+  );
 
   const handleBack = useCallback(() => {
     setPreviewState((state) => {
@@ -2256,6 +2320,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                   onEditAction={handleEditAction}
                   onDismissAction={handleDismissAction}
                   disableInput={chatModels.length === 0 || isAutopulling}
+                  onLinkClick={handleChatLink}
                 />
               </div>
             </TabsContent>
