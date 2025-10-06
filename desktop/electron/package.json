@@ -1,0 +1,25 @@
+{
+  "name": "omni-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development ts-node-esm src/dev.ts",
+    "dev:electron": "tsc -w",
+    "build": "tsc && electron-builder -m",
+    "pack": "tsc && electron-builder --dir"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^24.13.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}

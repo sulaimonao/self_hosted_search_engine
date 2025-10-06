@@ -1,0 +1,26 @@
+appId: com.omni.desktop
+productName: Omni Desktop
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - !**/*.map
+extraResources:
+  - from: ../../dist-backend/backend-server
+    to: backend-server
+  - from: ../../frontend/export
+    to: app-frontend
+mac:
+  target:
+    - dmg
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  gatekeeperAssess: false
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+asar: true

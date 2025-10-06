@@ -166,3 +166,12 @@ first-run: setup
 
 preflight:
 	@bash scripts/preflight.sh
+
+desktop-dev:
+	( cd frontend && pnpm dev ) & \
+	BACKEND_DEV=1 FRONTEND_URL=http://127.0.0.1:3100 pnpm --dir desktop/electron dev
+
+desktop-pack:
+	python3.11 scripts/pack_backend.py
+	cd frontend && pnpm build && pnpm export -o export
+	pnpm --dir desktop/electron build
