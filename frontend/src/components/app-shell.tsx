@@ -152,6 +152,79 @@ function isSelectionActionPayload(payload: unknown): payload is SelectionActionP
   );
 }
 
+export type CitationIndexStatus = "idle" | "loading" | "success" | "error";
+
+export interface CitationIndexRecord {
+  status: CitationIndexStatus;
+  error: string | null;
+}
+
+export function collectUniqueHttpCitations(citations: unknown): string[] {
+  if (!Array.isArray(citations)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  for (const entry of citations) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || !isHttpUrl(trimmed)) {
+      continue;
+    }
+    try {
+      const normalized = new URL(trimmed).toString();
+      unique.add(normalized);
+    } catch {
+      // Ignore malformed URLs.
+    }
+  }
+
+  return Array.from(unique);
+}
+
+interface CitationIndexingOptions {
+  shadowModeEnabled: boolean;
+  queueShadowIndex: (url: string) => Promise<unknown>;
+  handleQueueAdd: (url: string, scope: CrawlScope, notes?: string) => Promise<unknown>;
+  setStatus: (url: string, status: CitationIndexStatus, error?: string | null) => void;
+  appendLog: (entry: AgentLogEntry) => void;
+  pushToast: (
+    message: string,
+    options?: { variant?: ToastMessage["variant"]; traceId?: string | null },
+  ) => void;
+}
+
+export async function indexCitationUrls(
+  urls: readonly string[],
+  options: CitationIndexingOptions,
+): Promise<void> {
+  for (const url of urls) {
+    options.setStatus(url, "loading");
+    try {
+      if (options.shadowModeEnabled) {
+        await options.queueShadowIndex(url);
+      } else {
+        await options.handleQueueAdd(url, "page", "Auto-indexed from chat citation");
+      }
+      options.setStatus(url, "success");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "Failed to index citation");
+      options.setStatus(url, "error", message);
+      options.appendLog({
+        id: uid(),
+        label: "Citation indexing failed",
+        detail: `${url}: ${message}`,
+        status: "error",
+        timestamp: new Date().toISOString(),
+      });
+      options.pushToast(message, { variant: "destructive" });
+    }
+  }
+}
+
 type ChatLinkNavigationDecision =
   | { action: "navigate"; url: string }
   | { action: "external"; url: string }
@@ -329,6 +402,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [isExtractingContext, setIsExtractingContext] = useState(false);
   const [manualContextTrigger, setManualContextTrigger] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [citationIndexState, setCitationIndexState] = useState<Record<string, CitationIndexRecord>>({});
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
@@ -419,6 +493,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         ...items,
         { id, message, variant: options?.variant, traceId: options?.traceId ?? null },
       ]);
+    },
+    [],
+  );
+
+  const setCitationIndexStatus = useCallback(
+    (url: string, status: CitationIndexStatus, error?: string | null) => {
+      setCitationIndexState((state) => ({
+        ...state,
+        [url]: { status, error: error ?? null },
+      }));
     },
     [],
   );
@@ -1437,6 +1521,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           model: result.model ?? chatModel ?? null,
         }));
 
+        const citationUrls = collectUniqueHttpCitations(result.payload.citations);
+        if (citationUrls.length > 0) {
+          void indexCitationUrls(citationUrls, {
+            shadowModeEnabled,
+            queueShadowIndex,
+            handleQueueAdd,
+            setStatus: setCitationIndexStatus,
+            appendLog,
+            pushToast,
+          });
+        }
+
         devlog({
           evt: "ui.chat.ok",
           trace: result.traceId,
@@ -1522,6 +1618,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       pushToast,
       clientTimezone,
       timeMeta,
+      handleQueueAdd,
+      queueShadowIndex,
+      setCitationIndexStatus,
+      shadowModeEnabled,
     ]
   );
 
