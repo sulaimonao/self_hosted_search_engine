@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode, type MouseEvent } from "react";
 import { ChevronDown, Loader2, StopCircle } from "lucide-react";
 
 import { ActionCard } from "@/components/action-card";
@@ -25,6 +25,7 @@ interface ChatPanelProps {
   onDismissAction: (action: ProposedAction) => void;
   header?: ReactNode;
   disableInput?: boolean;
+  onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void;
 }
 
 function formatTimestamp(value: string) {
@@ -57,6 +58,7 @@ export function ChatPanel({
   onDismissAction,
   header,
   disableInput = false,
+  onLinkClick,
 }: ChatPanelProps) {
   const formRef = useRef<HTMLFormElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -123,7 +125,10 @@ export function ChatPanel({
                             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                               Answer
                             </p>
-                            <ChatMessageMarkdown text={displayAnswer} />
+                            <ChatMessageMarkdown
+                              text={displayAnswer}
+                              onLinkClick={onLinkClick}
+                            />
                           </section>
                           {message.citations && message.citations.length > 0 ? (
                             <div className="space-y-1 text-xs text-muted-foreground">
@@ -136,9 +141,16 @@ export function ChatPanel({
                                       {citation.startsWith("http") ? (
                                         <a
                                           href={citation}
-                                          target="_blank"
-                                          rel="noreferrer"
+                                          target={onLinkClick ? undefined : "_blank"}
+                                          rel={onLinkClick ? undefined : "noreferrer"}
                                           className="text-foreground/80 hover:underline"
+                                          onClick={(event) => {
+                                            if (!onLinkClick) {
+                                              return;
+                                            }
+                                            event.preventDefault();
+                                            onLinkClick(citation, event);
+                                          }}
                                         >
                                           {label}
                                         </a>
@@ -160,12 +172,16 @@ export function ChatPanel({
                               <ChatMessageMarkdown
                                 text={reasoningText}
                                 className="mt-2 text-xs text-foreground/90"
+                                onLinkClick={onLinkClick}
                               />
                             </details>
                           ) : null}
                         </div>
                       ) : (
-                        <ChatMessageMarkdown text={message.content ?? ""} />
+                        <ChatMessageMarkdown
+                          text={message.content ?? ""}
+                          onLinkClick={onLinkClick}
+                        />
                       )}
                     </div>
                   </div>

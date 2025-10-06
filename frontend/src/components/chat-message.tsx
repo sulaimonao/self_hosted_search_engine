@@ -1,4 +1,5 @@
-import type { ComponentPropsWithoutRef } from "react";
+import { useMemo } from "react";
+import type { ComponentPropsWithoutRef, MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,21 +10,51 @@ import { cn } from "@/lib/utils";
 type ChatMessageMarkdownProps = {
   text: string;
   className?: string;
+  onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void;
 };
 
-const components = {
-  a: ({ className, ...props }) => (
-    <a
-      className={cn(
-        "font-medium text-primary underline underline-offset-2",
-        className,
-      )}
-      {...props}
-      target="_blank"
-      rel="noopener noreferrer"
-    />
-  ),
-  code: ({ inline, className, children, ...props }: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) => {
+function createAnchor(
+  onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void,
+) {
+  const Anchor = ({ className, href, onClick, ...props }: ComponentPropsWithoutRef<"a">) => {
+    const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+      if (typeof onClick === "function") {
+        onClick(event);
+      }
+      if (!href || !onLinkClick) {
+        return;
+      }
+      event.preventDefault();
+      onLinkClick(href, event);
+    };
+
+    const targetProps = onLinkClick
+      ? {}
+      : { target: "_blank", rel: "noopener noreferrer" };
+
+    return (
+      <a
+        className={cn(
+          "font-medium text-primary underline underline-offset-2",
+          className,
+        )}
+        href={href}
+        {...targetProps}
+        {...props}
+        onClick={handleClick}
+      />
+    );
+  };
+
+  return Anchor;
+}
+
+function createComponents(
+  onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void,
+) {
+  return {
+    a: createAnchor(onLinkClick),
+    code: ({ inline, className, children, ...props }: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) => {
     if (inline) {
       return (
         <code
@@ -82,11 +113,14 @@ const components = {
     />
   ),
 } satisfies Components;
+}
 
-export function ChatMessageMarkdown({ text, className }: ChatMessageMarkdownProps) {
+export function ChatMessageMarkdown({ text, className, onLinkClick }: ChatMessageMarkdownProps) {
   if (!text.trim()) {
     return null;
   }
+
+  const components = useMemo(() => createComponents(onLinkClick), [onLinkClick]);
 
   return (
     <div
