@@ -478,6 +478,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const currentUrl = previewState.history[previewState.index];
   const currentUrlIsHttp = isHttpUrl(currentUrl);
+  const liveFallbackActive = Boolean(
+    liveFallbackUrl && currentUrl && liveFallbackUrl === currentUrl,
+  );
+  const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
   const [shadowModeEnabled, setShadowModeEnabled] = useState<boolean>(false);
@@ -487,6 +491,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [shadowConfigError, setShadowConfigError] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<PendingDocument[]>([]);
   const [shadowJobId, setShadowJobId] = useState<string | null>(null);
+  const [liveFallbackUrl, setLiveFallbackUrl] = useState<string | null>(null);
+  const liveFallbackRef = useRef<string | null>(null);
 
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
@@ -498,6 +504,46 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [],
   );
+
+  useEffect(() => {
+    liveFallbackRef.current = liveFallbackUrl;
+  }, [liveFallbackUrl]);
+
+  const openLiveUrl = useCallback(
+    async (value: string) => {
+      const target = value.trim();
+      if (!target || typeof window === "undefined" || !window.omni?.openUrl || !isHttpUrl(target)) {
+        return;
+      }
+      devlog({ evt: "ui.live.open", url: target });
+      setLiveFallbackUrl((existing) => (existing === target ? null : existing));
+      if (liveFallbackRef.current === target) {
+        liveFallbackRef.current = null;
+      }
+      try {
+        await window.omni.openUrl(target);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "Live preview unavailable");
+        devlog({ evt: "ui.live.open_error", url: target, message });
+        setIsPreviewLoading(false);
+        setLiveFallbackUrl(target);
+        liveFallbackRef.current = target;
+        pushToast(message, { variant: "destructive" });
+      }
+    },
+    [pushToast],
+  );
+
+  const fallbackContextRef = useRef<{
+    extract: () => Promise<void> | void;
+    toast: typeof pushToast;
+    currentUrl: string | null | undefined;
+  }>({
+    extract: async () => {},
+    toast: pushToast,
+    currentUrl,
+  });
 
   const setCitationIndexStatus = useCallback(
     (url: string, status: CitationIndexStatus, error?: string | null) => {
@@ -688,8 +734,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         };
       });
       pushWorkspaceRoute(value);
+      if (inAppBrowserEnabled) {
+        void openLiveUrl(value);
+      }
     },
-    [pushWorkspaceRoute]
+    [inAppBrowserEnabled, openLiveUrl, pushWorkspaceRoute]
   );
 
   const replaceUrl = useCallback(
@@ -708,8 +757,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         };
       });
       pushWorkspaceRoute(value, true);
+      if (inAppBrowserEnabled) {
+        void openLiveUrl(value);
+      }
     },
-    [pushWorkspaceRoute]
+    [inAppBrowserEnabled, openLiveUrl, pushWorkspaceRoute]
   );
 
   const handleNavigate = useCallback(
@@ -758,10 +810,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       setOmniboxValue(nextUrl);
       if (inAppBrowserEnabled && nextUrl) {
         pushWorkspaceRoute(nextUrl, true);
+        void openLiveUrl(nextUrl);
       }
       return { ...state, index: nextIndex };
     });
-  }, [inAppBrowserEnabled, pushWorkspaceRoute]);
+  }, [inAppBrowserEnabled, openLiveUrl, pushWorkspaceRoute]);
 
   const handleForward = useCallback(() => {
     setPreviewState((state) => {
@@ -774,15 +827,19 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       setOmniboxValue(nextUrl);
       if (inAppBrowserEnabled && nextUrl) {
         pushWorkspaceRoute(nextUrl, true);
+        void openLiveUrl(nextUrl);
       }
       return { ...state, index: nextIndex };
     });
-  }, [inAppBrowserEnabled, pushWorkspaceRoute]);
+  }, [inAppBrowserEnabled, openLiveUrl, pushWorkspaceRoute]);
 
   const handleReload = useCallback(() => {
     setIsPreviewLoading(true);
     setReloadKey((key) => key + 1);
-  }, []);
+    if (currentUrl && inAppBrowserEnabled) {
+      void openLiveUrl(currentUrl);
+    }
+  }, [currentUrl, inAppBrowserEnabled, openLiveUrl]);
 
   const appendMessage = useCallback((message: ChatMessage) => {
     setChatMessages((prev) => [...prev, message]);
@@ -1069,6 +1126,14 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     setIncludeContext(false);
     devlog({ evt: "ui.context.clear" });
   }, []);
+
+  useEffect(() => {
+    fallbackContextRef.current = {
+      extract: handleExtractContext,
+      toast: pushToast,
+      currentUrl,
+    };
+  }, [currentUrl, handleExtractContext, pushToast]);
 
   const handleQueueAdd = useCallback(
     async (url: string, scope: CrawlScope, notes?: string) => {
@@ -2058,6 +2123,59 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [currentUrl]);
 
   useEffect(() => {
+    setLiveFallbackUrl((existing) => {
+      if (!existing) {
+        return existing;
+      }
+      if (!currentUrl || existing !== currentUrl) {
+        return null;
+      }
+      return existing;
+    });
+  }, [currentUrl]);
+
+  useEffect(() => {
+    if (!currentUrl || !inAppBrowserEnabled) {
+      return;
+    }
+    if (liveFallbackRef.current && liveFallbackRef.current === currentUrl) {
+      return;
+    }
+    void openLiveUrl(currentUrl);
+  }, [currentUrl, inAppBrowserEnabled, openLiveUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.omni?.onViewerFallback) {
+      return;
+    }
+    const unsubscribe = window.omni.onViewerFallback(({ url }) => {
+      const normalized = typeof url === "string" ? url.trim() : "";
+      const previous = liveFallbackRef.current;
+      setIsPreviewLoading(false);
+      setLiveFallbackUrl(normalized || null);
+      liveFallbackRef.current = normalized || null;
+      devlog({ evt: "ui.live.fallback", url: normalized });
+      const context = fallbackContextRef.current;
+      if (context) {
+        const targetUrl = normalized || context.currentUrl || "";
+        if (targetUrl && context.currentUrl === targetUrl) {
+          void context.extract();
+        }
+        if (previous !== normalized) {
+          context.toast("Live preview blocked by site policies. Showing Reader instead.", {
+            variant: "destructive",
+          });
+        }
+      }
+    });
+    return () => {
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!LOCAL_DISCOVERY_ENABLED) {
       return;
     }
@@ -2424,7 +2542,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           candidates={searchState.candidates}
         />
         <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
-          {inAppBrowserEnabled ? (
+          {livePreviewEnabled ? (
             <WebPreview
               url={currentUrl}
               history={previewState.history}
@@ -2441,6 +2559,25 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               crawlStatus={crawlMonitor}
               crawlLabel={crawlButtonLabel}
             />
+          ) : inAppBrowserEnabled && liveFallbackActive ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+              <p className="max-w-md">
+                Live preview is unavailable for this site due to content security restrictions. Reader
+                mode has been activated automatically.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  if (currentUrl) {
+                    void openLiveUrl(currentUrl);
+                  }
+                }}
+              >
+                Retry live preview
+              </Button>
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">
               In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.

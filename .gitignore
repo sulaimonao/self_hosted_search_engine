@@ -59,6 +59,9 @@ _MAIN_0.toc
 !backend/app/shadow/__init__.py
 !backend/app/shadow/manager.py
 !observability/__init__.py
+!desktop/electron/package.json
+!desktop/electron/tsconfig.json
+!scripts/pack_backend.py
 !tests/api/test_index_api.py
 !tests/api/test_shadow_api.py
 !tests/api/test_progress_api.py
