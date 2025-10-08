@@ -263,8 +263,13 @@ class LocalDiscoveryService:
 
         with self._lock:
             confirmation = self._confirmations.get(path_str)
-            if confirmation and float(confirmation.get("mtime", 0)) >= mtime:
-                return False
+            if confirmation:
+                action = str(confirmation.get("action", "included")).strip().lower()
+                if action != "retry":
+                    self._seen_mtimes[path_str] = mtime
+                    return False
+                if float(confirmation.get("mtime", 0)) >= mtime:
+                    return False
             seen = self._seen_mtimes.get(path_str)
             if seen and seen >= mtime:
                 return False
