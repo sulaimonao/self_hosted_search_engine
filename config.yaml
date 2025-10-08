@@ -17,6 +17,10 @@ crawl:
   read_timeout: 30
   max_pages: 5
   sleep_seconds: 1.0
+planner:
+  enable_critique: false
+  max_steps: 6
+  max_retries_per_step: 2
 agent:
   max_fetch_per_turn: 3
   coverage_threshold: 0.6

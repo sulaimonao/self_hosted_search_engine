@@ -178,11 +178,17 @@ class FakeLLM:
 
 
 def test_planner_agent_runs_tool_loop(dispatcher):
-    agent = PlannerAgent(llm=FakeLLM(), tools=dispatcher, max_iterations=3)
+    agent = PlannerAgent(
+        llm=FakeLLM(),
+        tools=dispatcher,
+        max_iterations=3,
+        enable_critique=False,
+    )
     final = agent.run("Find widgets")
     assert final["type"] == "final"
     assert final["answer"] == "done"
     assert final["steps"]
+    assert final.get("stop_reason") == "finalized"
 
 
 class LoopLLM:
@@ -191,8 +197,14 @@ class LoopLLM:
 
 
 def test_planner_agent_enforces_iteration_limit(dispatcher):
-    agent = PlannerAgent(llm=LoopLLM(), tools=dispatcher, max_iterations=2)
+    agent = PlannerAgent(
+        llm=LoopLLM(),
+        tools=dispatcher,
+        max_iterations=2,
+        enable_critique=False,
+    )
     final = agent.run("Loop forever")
     assert final["type"] == "final"
     assert final.get("error") == "iteration limit reached"
     assert len(final["steps"]) == 2
+    assert final.get("stop_reason") == "max_steps"

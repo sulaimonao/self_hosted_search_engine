@@ -112,7 +112,9 @@ planner_agent = PlannerAgent(
     tools=tool_dispatcher,
     default_model=ENGINE_CONFIG.models.llm_primary,
     fallback_model=fallback_model_name,
-    max_iterations=6,
+    max_iterations=ENGINE_CONFIG.planner.max_steps,
+    enable_critique=ENGINE_CONFIG.planner.enable_critique,
+    max_retries_per_step=ENGINE_CONFIG.planner.max_retries_per_step,
 )
 
 app = create_app()
