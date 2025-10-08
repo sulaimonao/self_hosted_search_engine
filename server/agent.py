@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from logging import Logger
@@ -80,6 +81,15 @@ CRITIQUE_PROMPT = (
 )
 
 
+class PlannerStop(RuntimeError):
+    """Signal that the planner terminated early with a controlled stop."""
+
+    def __init__(self, reason: str, state: MutableMapping[str, Any]):
+        super().__init__(reason)
+        self.reason = reason
+        self.state = state
+
+
 @dataclass
 class PlannerAgent:
     llm: OllamaJSONClient
@@ -92,6 +102,10 @@ class PlannerAgent:
     llm_initial_backoff: float = 1.0
     logger: Logger = field(default=LOGGER)
     langsmith_project: str | None = None
+    enable_critique: bool = False
+    max_retries_per_step: int = 2
+    cycle_detection_window: int = 8
+    cycle_detection_threshold: int = 3
 
     def __post_init__(self) -> None:
         self.langsmith_project = (
@@ -124,23 +138,39 @@ class PlannerAgent:
             "context": dict(context or {}),
             "messages": list(self._bootstrap_messages(query, context)),
             "steps": [],
-            "loop_count": 0,
+            "steps_used": 0,
+            "retries_used": 0,
+            "current_step_has_effect": False,
+            "final_step_recorded": False,
+            "cycle_signatures": [],
             "graph_events": [],
             "model_override": model,
             "start_time": time.perf_counter(),
+            "stop_reason": None,
         }
         run_id = self._start_langsmith_run(query, initial_state["context"])
         try:
             final_state: MutableMapping[str, Any] = self._graph.invoke(
                 initial_state,
                 config={
-                    "recursion_limit": max(self.max_iterations * 2, 8),
+                    "recursion_limit": max(self.max_iterations * 4, 32),
                     "metadata": {
                         "query": query,
                         "max_iterations": self.max_iterations,
                     },
                 },
             )
+        except PlannerStop as stop:
+            self.logger.info(
+                "planner stopped early", extra={"reason": stop.reason, "query": query}
+            )
+            final_state = stop.state if isinstance(stop.state, MutableMapping) else initial_state
+            final_payload = self._finalize_payload(final_state)
+            if run_id:
+                self._finish_langsmith_run(run_id, outputs=final_payload)
+                final_payload["langsmith_run_id"] = str(run_id)
+            add_run_log_line(f"planner stopped: {stop.reason}")
+            return final_payload
         except GraphRecursionError as exc:
             self.logger.warning("planner graph recursion limit reached; using fallback", exc_info=True)
             fallback = self._fallback_run(query, context or {}, model)
@@ -215,7 +245,6 @@ class PlannerAgent:
         graph.add_node("tool_run", self._node_tool_run)
         graph.add_node("retrieve_context", self._node_retrieve_context)
         graph.add_node("respond", self._node_respond)
-        graph.add_node("critique", self._node_critique)
         graph.add_node("decide_retry", self._node_decide_retry)
 
         graph.set_entry_point("plan")
@@ -231,8 +260,12 @@ class PlannerAgent:
         graph.add_edge("tool_select", "tool_run")
         graph.add_edge("tool_run", "retrieve_context")
         graph.add_edge("retrieve_context", "decide_retry")
-        graph.add_edge("respond", "critique")
-        graph.add_edge("critique", "decide_retry")
+        if self.enable_critique:
+            graph.add_node("critique", self._node_critique)
+            graph.add_edge("respond", "critique")
+            graph.add_edge("critique", "decide_retry")
+        else:
+            graph.add_edge("respond", "decide_retry")
         graph.add_conditional_edges(
             "decide_retry",
             self._route_decision,
@@ -247,8 +280,10 @@ class PlannerAgent:
     # Node helpers
     # ------------------------------------------------------------------
     def _node_plan(self, state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
-        iteration = state.get("loop_count", 0) + 1
-        state["loop_count"] = iteration
+        iteration = len(state.get("steps", [])) + 1
+        state.setdefault("steps_used", 0)
+        state.setdefault("retries_used", 0)
+        state.setdefault("current_step_has_effect", False)
         start_time = time.perf_counter()
         try:
             response, model_used = self._call_llm_json(
@@ -273,6 +308,9 @@ class PlannerAgent:
                 duration=duration,
                 model=model_used,
             )
+            self._update_cycle_history(state, payload)
+        except PlannerStop:
+            raise
         except Exception as exc:  # pragma: no cover - defensive branch
             duration = time.perf_counter() - start_time
             state["current_action"] = None
@@ -414,6 +452,11 @@ class PlannerAgent:
             duration=duration,
             tool=str(tool) if tool else None,
         )
+        action = state.get("current_action")
+        if isinstance(action, Mapping) and str(action.get("type")) == "tool":
+            state["steps_used"] = int(state.get("steps_used", 0)) + 1
+            state["current_step_has_effect"] = True
+            state["retries_used"] = 0
         state.pop("selected_tool", None)
         state.pop("tool_params", None)
         return state
@@ -477,17 +520,22 @@ class PlannerAgent:
     def _node_decide_retry(self, state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
         pending_error = state.pop("pending_error", None)
         critique = state.get("critique") if isinstance(state.get("critique"), Mapping) else {}
-        loop_count = state.get("loop_count", 0)
+        steps_used = int(state.get("steps_used", 0))
         decision: dict[str, Any] = {"action": "continue", "reason": ""}
-        if loop_count >= self.max_iterations:
-            decision = {"action": "stop", "reason": "max_loops"}
-            state["final"] = {
+        if steps_used >= self.max_iterations and not state.get("final_candidate"):
+            decision = {"action": "stop", "reason": "max_steps"}
+            final_payload = {
                 "type": "final",
                 "answer": "",
                 "sources": [],
                 "error": "iteration limit reached",
                 "steps": state.get("steps", []),
+                "stop_reason": "max_steps",
             }
+            if state.get("last_model_used"):
+                final_payload.setdefault("planner_model_used", state["last_model_used"])
+            state["final"] = final_payload
+            state["stop_reason"] = "max_steps"
         elif pending_error:
             decision["reason"] = pending_error.get("error")
         elif critique and critique.get("should_retry"):
@@ -498,6 +546,14 @@ class PlannerAgent:
             final.setdefault("steps", state.get("steps", []))
             if state.get("last_model_used"):
                 final.setdefault("planner_model_used", state["last_model_used"])
+            if not state.get("final_step_recorded", False):
+                state["steps_used"] = steps_used + 1
+                state["final_step_recorded"] = True
+            state["retries_used"] = 0
+            state["current_step_has_effect"] = True
+            stop_reason = state.get("stop_reason") or "finalized"
+            state["stop_reason"] = stop_reason
+            final.setdefault("stop_reason", stop_reason)
             state["final"] = final
         state["decision"] = decision
         if (
@@ -506,13 +562,34 @@ class PlannerAgent:
             and str(state["current_action"].get("type")) == "final"
         ):
             decision = {"action": "stop", "reason": "finalized"}
-            state["final"] = self._normalize_final(
+            final = self._normalize_final(
                 state["current_action"],
                 state.get("steps", []),
                 state.get("last_model_used"),
             )
+            if not state.get("final_step_recorded", False):
+                state["steps_used"] = steps_used + 1
+                state["final_step_recorded"] = True
+            stop_reason = state.get("stop_reason") or "finalized"
+            state["stop_reason"] = stop_reason
+            final.setdefault("stop_reason", stop_reason)
+            state["retries_used"] = 0
+            state["current_step_has_effect"] = True
+            state["final"] = final
             state["decision"] = decision
         if decision["action"] == "continue":
+            if state.get("current_step_has_effect"):
+                state["current_step_has_effect"] = False
+                state["retries_used"] = 0
+            else:
+                retries = int(state.get("retries_used", 0)) + 1
+                state["retries_used"] = retries
+                if retries > self.max_retries_per_step:
+                    self._raise_stop(
+                        state,
+                        reason="retry_limit",
+                        error="planner retry limit reached",
+                    )
             state.pop("final_candidate", None)
             state.pop("tool_result", None)
             state.pop("current_action", None)
@@ -566,6 +643,60 @@ class PlannerAgent:
         if model_used:
             final["planner_model_used"] = model_used
         return final
+
+    def _raise_stop(self, state: MutableMapping[str, Any], *, reason: str, error: str) -> None:
+        final_payload = {
+            "type": "final",
+            "answer": "",
+            "sources": [],
+            "error": error,
+            "steps": state.get("steps", []),
+            "stop_reason": reason,
+        }
+        if state.get("last_model_used"):
+            final_payload.setdefault("planner_model_used", state["last_model_used"])
+        state["final"] = final_payload
+        state["stop_reason"] = reason
+        state["decision"] = {"action": "stop", "reason": reason}
+        raise PlannerStop(reason, state)
+
+    def _update_cycle_history(
+        self, state: MutableMapping[str, Any], action: Mapping[str, Any]
+    ) -> None:
+        signature = self._action_signature(action)
+        history = deque(state.get("cycle_signatures", []), maxlen=max(self.cycle_detection_window, 1))
+        history.append(signature)
+        state["cycle_signatures"] = list(history)
+        repeat = 0
+        for entry in reversed(history):
+            if entry == signature:
+                repeat += 1
+            else:
+                break
+        if repeat >= max(self.cycle_detection_threshold, 1):
+            self._raise_stop(
+                state,
+                reason="cycle_detected",
+                error="planner detected repeating actions",
+            )
+
+    def _action_signature(self, action: Mapping[str, Any]) -> str:
+        intent = str(action.get("type") or "")
+        tool = str(action.get("tool") or "") if intent == "tool" else ""
+        if intent == "tool":
+            params = action.get("params", {})
+        elif intent == "final":
+            params = {
+                "answer": action.get("answer"),
+                "sources": action.get("sources"),
+            }
+        else:
+            params = action
+        try:
+            params_text = json.dumps(params, sort_keys=True, default=str)
+        except TypeError:
+            params_text = json.dumps(self._jsonable(params), sort_keys=True, default=str)
+        return f"{intent}:{tool}:{params_text}"
 
     def _record_event(
         self,
@@ -714,7 +845,10 @@ class PlannerAgent:
         payload["events"] = list(events)
         if state.get("last_model_used"):
             payload.setdefault("planner_model_used", state.get("last_model_used"))
+        stop_reason = state.get("stop_reason")
+        if stop_reason and "stop_reason" not in payload:
+            payload["stop_reason"] = stop_reason
         return payload
 
 
-__all__ = ["PlannerAgent", "SYSTEM_PROMPT", "FEW_SHOT_MESSAGES"]
+__all__ = ["PlannerAgent", "PlannerStop", "SYSTEM_PROMPT", "FEW_SHOT_MESSAGES"]

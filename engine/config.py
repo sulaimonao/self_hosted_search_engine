@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -52,6 +52,13 @@ class BootstrapConfig:
 
 
 @dataclass(frozen=True)
+class PlannerConfig:
+    enable_critique: bool = False
+    max_steps: int = 6
+    max_retries_per_step: int = 2
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     models: ModelConfig
     ollama: OllamaConfig
@@ -59,6 +66,7 @@ class EngineConfig:
     index: IndexConfig
     crawl: CrawlConfig
     bootstrap: BootstrapConfig | None = None
+    planner: PlannerConfig = field(default_factory=PlannerConfig)
 
     @staticmethod
     def _resolve_path(path_value: str | Path, base_dir: Path) -> Path:
@@ -79,6 +87,8 @@ class EngineConfig:
         index = data.get("index", {})
         crawl = data.get("crawl", {})
         bootstrap = data.get("bootstrap")
+        planner_section = data.get("planner")
+        planner_cfg_raw = planner_section if isinstance(planner_section, dict) else {}
 
         primary_value = models.get("llm_primary", "gpt-oss")
         fallback_value = models.get("llm_fallback", "gemma3")
@@ -153,6 +163,12 @@ class EngineConfig:
                     llm_model=llm_model,
                 )
 
+        planner_cfg = PlannerConfig(
+            enable_critique=bool(planner_cfg_raw.get("enable_critique", False)),
+            max_steps=int(planner_cfg_raw.get("max_steps", 6)),
+            max_retries_per_step=int(planner_cfg_raw.get("max_retries_per_step", 2)),
+        )
+
         return cls(
             models=model_cfg,
             ollama=ollama_cfg,
@@ -160,11 +176,13 @@ class EngineConfig:
             index=index_cfg,
             crawl=crawl_cfg,
             bootstrap=bootstrap_cfg,
+            planner=planner_cfg,
         )
 
 
 __all__ = [
     "EngineConfig",
+    "PlannerConfig",
     "ModelConfig",
     "OllamaConfig",
     "RetrievalConfig",

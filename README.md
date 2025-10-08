@@ -646,6 +646,21 @@ pre-enabled for every user.
   `{ "type": "final", "answer": "Planner LLM is unavailable." }` so the UI can
   degrade gracefully.
 
+### Planner loop controls
+
+- `planner.enable_critique` gates the optional critique-and-retry stage. Leave it
+  `false` to preserve the classic step semantics in automated tests, and enable
+  it when you want the planner to request structured feedback before
+  finalizing.
+- `planner.max_steps` caps the number of tool executions or final responses in a
+  single run. Hitting the limit now returns a structured
+  `stop_reason="max_steps"` response instead of throwing a graph recursion
+  error.
+- `planner.max_retries_per_step` bounds how many planner-only retries (LLM
+  replans, critique revisions, validation failures) are allowed between tool
+  calls. When exceeded, the planner exits cleanly with
+  `stop_reason="retry_limit"` so callers can surface a useful error.
+
 ### Debug traces
 
 - Every backend request now emits single-line JSON logs containing
