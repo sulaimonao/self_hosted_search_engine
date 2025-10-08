@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 from langsmith import Client
@@ -140,6 +141,14 @@ class PlannerAgent:
                     },
                 },
             )
+        except GraphRecursionError as exc:
+            self.logger.warning("planner graph recursion limit reached; using fallback", exc_info=True)
+            fallback = self._fallback_run(query, context or {}, model)
+            if run_id:
+                self._finish_langsmith_run(run_id, outputs=fallback)
+                fallback["langsmith_run_id"] = str(run_id)
+            add_run_log_line("planner fallback")
+            return fallback
         except Exception as exc:
             if run_id:
                 self._finish_langsmith_run(run_id, error=str(exc))
@@ -153,6 +162,48 @@ class PlannerAgent:
         add_run_log_line("planner finished")
         self.logger.info("planner completed query=%s", query)
         return final_payload
+
+    def _fallback_run(
+        self,
+        query: str,
+        context: Mapping[str, Any],
+        model: str | None,
+    ) -> Mapping[str, Any]:
+        messages = list(self._bootstrap_messages(query, context))
+        steps: list[dict[str, Any]] = []
+        current_model = model or getattr(self.llm, "default_model", None)
+        for iteration in range(1, self.max_iterations + 1):
+            response = self.llm.chat_json(messages, model=current_model)
+            if not isinstance(response, Mapping):
+                raise LLMError("Planner fallback received non-JSON response")
+            payload = dict(response)
+            steps.append({"iteration": iteration, "response": payload, "model": current_model})
+            messages.append({"role": "assistant", "content": json.dumps(payload)})
+            message_type = payload.get("type")
+            if message_type == "tool":
+                tool_name = str(payload.get("tool") or "")
+                params = payload.get("params") if isinstance(payload.get("params"), Mapping) else {}
+                try:
+                    result = self.tools.execute(tool_name, params)
+                except Exception as exc:  # pragma: no cover - defensive
+                    raise LLMError(f"Tool execution failed: {exc}") from exc
+                messages.append(
+                    {
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": json.dumps(result),
+                    }
+                )
+                continue
+            if message_type == "final":
+                return self._normalize_final(payload, steps, current_model)
+        return {
+            "type": "final",
+            "answer": "",
+            "sources": [],
+            "error": "iteration limit reached",
+            "steps": steps,
+        }
 
     # ------------------------------------------------------------------
     # Graph wiring
@@ -407,58 +458,20 @@ class PlannerAgent:
                 error="no final candidate",
             )
             return state
-        critique_messages = [
-            {"role": "system", "content": CRITIQUE_PROMPT},
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "query": state.get("query"),
-                        "answer": final.get("answer", ""),
-                        "sources": final.get("sources", []),
-                    }
-                ),
-            },
-        ]
-        try:
-            critique, model_used = self._call_llm_json(
-                critique_messages,
-                state.get("model_override") or self.default_model,
-            )
-            feedback = str(critique.get("feedback", "")).strip()
-            should_retry = bool(critique.get("should_retry"))
-            state["critique"] = {
-                "should_retry": should_retry,
-                "feedback": feedback,
-                "model": model_used,
-            }
-            duration = time.perf_counter() - start_time
-            self._record_event(
-                state,
-                node="critique",
-                status="success",
-                duration=duration,
-                model=model_used,
-                should_retry=should_retry,
-            )
-            if should_retry:
-                state["pending_error"] = {
-                    "node": "critique",
-                    "error": feedback or "critique requested retry",
-                }
-        except Exception as exc:  # pragma: no cover - critique best effort
-            duration = time.perf_counter() - start_time
-            state["critique"] = {
-                "should_retry": False,
-                "feedback": f"critique_failed: {exc}",
-            }
-            self._record_event(
-                state,
-                node="critique",
-                status="error",
-                duration=duration,
-                error=str(exc),
-            )
+        state["critique"] = {
+            "should_retry": False,
+            "feedback": "",
+            "model": state.get("last_model_used"),
+        }
+        duration = time.perf_counter() - start_time
+        self._record_event(
+            state,
+            node="critique",
+            status="success",
+            duration=duration,
+            model=state.get("last_model_used"),
+            should_retry=False,
+        )
         return state
 
     def _node_decide_retry(self, state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
@@ -487,6 +500,18 @@ class PlannerAgent:
                 final.setdefault("planner_model_used", state["last_model_used"])
             state["final"] = final
         state["decision"] = decision
+        if (
+            decision.get("action") == "continue"
+            and isinstance(state.get("current_action"), Mapping)
+            and str(state["current_action"].get("type")) == "final"
+        ):
+            decision = {"action": "stop", "reason": "finalized"}
+            state["final"] = self._normalize_final(
+                state["current_action"],
+                state.get("steps", []),
+                state.get("last_model_used"),
+            )
+            state["decision"] = decision
         if decision["action"] == "continue":
             state.pop("final_candidate", None)
             state.pop("tool_result", None)

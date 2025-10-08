@@ -335,6 +335,28 @@ when the embedding model is still warming up. Pending chunks land in the
 reports the embedder as ready, keeping partial crawl results searchable via the
 BM25 index until vectors become available.
 
+## Migrations & diagnostics
+
+SQLite migrations live in `backend/app/db/migrations/`. Run them and confirm the
+schema guardrails with:
+
+```bash
+scripts/check_migrations.sh
+```
+
+The script provisions a throwaway data directory, initialises the Flask app, and
+asserts that `/api/diag/db` reports `ok: true`. The same endpoint powers runtime
+checks—hit it manually when debugging deployments:
+
+```bash
+curl -s http://localhost:8000/api/diag/db | jq
+```
+
+If the response contains `"error": "schema_mismatch"`, the logged `errors`
+array explains which column types are out of compliance (e.g. when
+`pending_documents.sim_signature` still uses an `INTEGER` type). Apply the
+latest migrations and restart the service to recover.
+
 Every Flask request emits `req.start` / `req.end` events with request, session,
 and user correlation IDs. Tool invocations emit
 `tool.start` / `tool.end` / `tool.error` events with redacted inputs and result

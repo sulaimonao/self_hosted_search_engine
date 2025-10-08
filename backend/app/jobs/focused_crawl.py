@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence
 from crawler.run import FocusedCrawler
 from server.discover import DiscoveryEngine
 
@@ -542,7 +543,32 @@ class FocusedCrawlManager:
                 if unique:
                     seeds = unique
 
+            seed_urls: list[str] = list(seeds or [])
+
             job_id_holder: Dict[str, str] = {}
+
+            accepts_any_kwargs = False
+            supported_kwargs: set[str] = set()
+            try:
+                crawl_signature = inspect.signature(run_focused_crawl)
+            except (TypeError, ValueError):  # pragma: no cover - builtins/cython may skip
+                accepts_any_kwargs = True
+            else:
+                parameters = list(crawl_signature.parameters.values())
+                accepts_any_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters
+                )
+                supported_kwargs = {
+                    param.name
+                    for param in parameters
+                    if param.kind in (
+                        inspect.Parameter.KEYWORD_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                }
+
+            def _supports_kwarg(name: str) -> bool:
+                return accepts_any_kwargs or name in supported_kwargs
 
             def _job() -> dict:
                 job_ref = job_id_holder.get("id")
@@ -566,33 +592,28 @@ class FocusedCrawlManager:
                     if progress_bus is not None and job_ref:
                         progress_bus.publish(job_ref, event)
 
+                kwargs: dict[str, Any] = {}
+                if _supports_kwarg("config"):
+                    kwargs["config"] = self.config
+                if _supports_kwarg("extra_seeds"):
+                    kwargs["extra_seeds"] = seeds
+                if _supports_kwarg("query_embedding"):
+                    kwargs["query_embedding"] = query_embedding
+                if _supports_kwarg("progress_callback"):
+                    kwargs["progress_callback"] = _progress
+                if _supports_kwarg("db"):
+                    kwargs["db"] = self.db
+                if _supports_kwarg("state_db"):
+                    kwargs["state_db"] = state_db
+                if _supports_kwarg("job_id"):
+                    kwargs["job_id"] = job_ref
                 try:
                     result = run_focused_crawl(
                         q,
                         self.config.focused_budget,
                         use_llm,
                         model,
-                        config=self.config,
-                        extra_seeds=seeds,
-                        query_embedding=query_embedding,
-                        progress_callback=_progress,
-                        db=self.db,
-                        state_db=self.state_db,
-                        job_id=job_ref,
-                    )
-                except TypeError as exc:
-                    if "unexpected keyword argument" not in str(exc):
-                        raise
-                    result = run_focused_crawl(
-                        q,
-                        self.config.focused_budget,
-                        use_llm,
-                        model,
-                        config=self.config,
-                        progress_callback=_progress,
-                        db=self.db,
-                        state_db=self.state_db,
-                        job_id=job_ref,
+                        **kwargs,
                     )
                 except Exception as exc:
                     if state_db is not None and job_ref:

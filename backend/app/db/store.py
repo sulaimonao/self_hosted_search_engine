@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import threading
 import time
 import uuid
@@ -12,6 +14,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .schema import connect, migrate
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _serialize(data: Any) -> str:
@@ -35,6 +40,15 @@ def _ensure_list(value: Any) -> list[str]:
     return []
 
 
+def _parse_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(slots=True)
 class DocumentRecord:
     id: str
@@ -51,6 +65,15 @@ class DocumentRecord:
     tokens: int | None
 
 
+@dataclass(slots=True)
+class SchemaValidation:
+    """Schema validation snapshot used for diagnostics."""
+
+    ok: bool
+    tables: dict[str, dict[str, str]]
+    errors: list[str]
+
+
 class AppStateDB:
     """Thin wrapper around SQLite providing typed helpers."""
 
@@ -60,6 +83,7 @@ class AppStateDB:
         self._conn = connect(path)
         migrate(self._conn)
         self._lock = threading.RLock()
+        self._schema_validation: SchemaValidation = self._validate_schema()
 
     # ------------------------------------------------------------------
     # Crawl jobs
@@ -179,7 +203,7 @@ class AppStateDB:
                     job_id = excluded.job_id,
                     verification = excluded.verification
                 """,
-                ( 
+                (
                     document_id,
                     url,
                     canonical_url,
@@ -199,6 +223,68 @@ class AppStateDB:
                     verification_json,
                 ),
             )
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+    def schema_diagnostics(self, *, refresh: bool = False) -> dict[str, Any]:
+        """Return the schema validation snapshot used for diagnostics."""
+
+        if refresh or self._schema_validation is None:
+            self._schema_validation = self._validate_schema()
+        snapshot = self._schema_validation
+        return {
+            "ok": snapshot.ok,
+            "tables": {table: dict(columns) for table, columns in snapshot.tables.items()},
+            "errors": list(snapshot.errors),
+        }
+
+    def _validate_schema(self) -> SchemaValidation:
+        expected: dict[str, dict[str, str]] = {
+            "pending_documents": {
+                "job_id": "TEXT",
+                "doc_hash": "TEXT",
+                "sim_signature": "TEXT",
+                "created_at": "INTEGER",
+                "updated_at": "INTEGER",
+            },
+            "pending_chunks": {
+                "created_at": "INTEGER",
+                "updated_at": "INTEGER",
+            },
+            "pending_vectors_queue": {
+                "created_at": "INTEGER",
+                "updated_at": "INTEGER",
+                "next_attempt_at": "INTEGER",
+            },
+        }
+        tables: dict[str, dict[str, str]] = {}
+        errors: list[str] = []
+        ok = True
+
+        for table, columns in expected.items():
+            info = self._conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+            table_columns: dict[str, str] = {}
+            for row in info:
+                name = row["name"] if isinstance(row, Mapping) else row[1]
+                declared = row["type"] if isinstance(row, Mapping) else row[2]
+                table_columns[str(name)] = str(declared or "").upper()
+            tables[table] = table_columns
+            for column, expected_type in columns.items():
+                actual = table_columns.get(column, "")
+                if actual != expected_type:
+                    ok = False
+                    errors.append(
+                        f"{table}.{column} expected {expected_type} got {actual or 'missing'}"
+                    )
+
+        if not ok:
+            LOGGER.error(
+                "app state schema validation failed: %s",
+                "; ".join(errors) if errors else "unknown mismatch",
+            )
+
+        return SchemaValidation(ok=ok, tables=tables, errors=errors)
 
     # ------------------------------------------------------------------
     # Settings
@@ -247,7 +333,19 @@ class AppStateDB:
         last_error: str | None = None,
     ) -> None:
         metadata_json = _serialize(metadata or {})
-        now = time.time()
+        job_id_str = str(job_id) if job_id is not None else None
+        doc_hash_str = str(doc_hash or "")
+        if not doc_hash_str:
+            raise ValueError("doc_hash must be a non-empty string")
+        sim_signature_str: str | None
+        if sim_signature is None:
+            sim_signature_str = None
+        else:
+            try:
+                sim_signature_str = str(int(sim_signature))
+            except (TypeError, ValueError):
+                sim_signature_str = str(sim_signature)
+        now = int(time.time())
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -282,12 +380,12 @@ class AppStateDB:
                 """,
                 (
                     doc_id,
-                    job_id,
+                    job_id_str,
                     url,
                     title,
                     resolved_title,
-                    doc_hash,
-                    int(sim_signature) if sim_signature is not None else None,
+                    doc_hash_str,
+                    sim_signature_str,
                     metadata_json,
                     last_error,
                     now,
@@ -309,9 +407,20 @@ class AppStateDB:
                         metadata = excluded.metadata,
                         updated_at = ?
                     """,
-                    (doc_id, index, text, _serialize(chunk_metadata or {}), now, now, now),
+                    (
+                        doc_id,
+                        int(index),
+                        text,
+                        _serialize(chunk_metadata or {}),
+                        now,
+                        now,
+                        now,
+                    ),
                 )
-            next_attempt = max(now + float(initial_delay), now)
+            next_attempt = max(
+                int(math.ceil(now + max(0.0, float(initial_delay)))),
+                now,
+            )
             self._conn.execute(
                 """
                 INSERT INTO pending_vectors_queue(doc_id, attempts, next_attempt_at, created_at, updated_at)
@@ -324,7 +433,7 @@ class AppStateDB:
             )
 
     def pop_pending_documents(self, limit: int = 5) -> list[dict[str, Any]]:
-        now = time.time()
+        now = int(time.time())
         rows: list[dict[str, Any]] = []
         with self._lock, self._conn:
             cursor = self._conn.execute(
@@ -357,17 +466,17 @@ class AppStateDB:
                 rows.append(
                     {
                         "doc_id": doc_id,
-                        "attempts": row["attempts"],
+                        "attempts": _parse_int(row["attempts"]) or 0,
                         "job_id": row["job_id"],
                         "url": row["url"],
                         "title": row["title"],
                         "resolved_title": row["resolved_title"],
                         "doc_hash": row["doc_hash"],
-                        "sim_signature": row["sim_signature"],
+                        "sim_signature": _parse_int(row["sim_signature"]),
                         "metadata": _deserialize(row["metadata"], {}),
                         "chunks": chunks,
                         "last_error": row["last_error"],
-                        "retry_count": row["retry_count"],
+                        "retry_count": _parse_int(row["retry_count"]) or 0,
                     }
                 )
                 self._conn.execute(
@@ -384,8 +493,10 @@ class AppStateDB:
         attempts: int,
         last_error: str | None = None,
     ) -> None:
-        now = time.time()
-        next_attempt = now + max(1.0, float(delay))
+        now = int(time.time())
+        next_attempt = int(
+            math.ceil(now + max(1.0, float(delay)))
+        )
         with self._lock, self._conn:
             self._conn.execute(
                 """

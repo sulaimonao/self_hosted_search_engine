@@ -7,6 +7,7 @@ from typing import Any
 from flask import Blueprint, current_app, jsonify, request
 
 from ._shipit_jobs import SimulatedJobStore, SimulatedPhase
+from ..db import AppStateDB
 
 bp = Blueprint("shipit_diag", __name__, url_prefix="/api/diag")
 
@@ -74,6 +75,26 @@ def diag_e2e_start() -> Any:
     return jsonify(payload), 202
 
 
+@bp.get("/db")
+def diag_db() -> Any:
+    state_db = current_app.config.get("APP_STATE_DB")
+    if not isinstance(state_db, AppStateDB):
+        return jsonify({"ok": False, "error": "app_state_db_unavailable"}), 503
+    refresh = request.args.get("refresh", "0").lower() in {"1", "true", "yes", "on"}
+    snapshot = state_db.schema_diagnostics(refresh=refresh)
+    status = 200 if snapshot.get("ok") else 503
+    payload = {
+        "ok": bool(snapshot.get("ok")),
+        "data": {
+            "tables": snapshot.get("tables", {}),
+            "errors": snapshot.get("errors", []),
+        },
+    }
+    if not payload["ok"]:
+        payload["error"] = "schema_mismatch"
+    return jsonify(payload), status
+
+
 @bp.get("/e2e/status")
 def diag_e2e_status() -> Any:
     job_id = (request.args.get("job_id") or "").strip()
@@ -99,4 +120,4 @@ def diag_e2e_status() -> Any:
     return jsonify(payload)
 
 
-__all__ = ["bp", "diag_models", "diag_e2e_start", "diag_e2e_status"]
+__all__ = ["bp", "diag_models", "diag_e2e_start", "diag_e2e_status", "diag_db"]
