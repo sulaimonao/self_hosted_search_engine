@@ -122,6 +122,24 @@ function isHttpUrl(candidate: string | null | undefined) {
   }
 }
 
+function resolveLiveFallbackUrl(candidate: unknown): string | null {
+  if (typeof candidate !== "string") {
+    return null;
+  }
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!isHttpUrl(trimmed)) {
+    return null;
+  }
+  try {
+    return new URL(trimmed).toString();
+  } catch {
+    return null;
+  }
+}
+
 function isSelectionActionPayload(payload: unknown): payload is SelectionActionPayload {
   if (!payload || typeof payload !== "object") {
     return false;
@@ -459,6 +477,9 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const agentEnabled = AGENT_ENABLED;
   const inAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
 
+  const [liveFallbackUrl, setLiveFallbackUrl] = useState<string | null>(null);
+  const liveFallbackRef = useRef<string | null>(null);
+
   const buildWorkspaceHref = useCallback((url: string) => {
     const params = new URLSearchParams({ url });
     return `/workspace?${params.toString()}`;
@@ -477,9 +498,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   );
 
   const currentUrl = previewState.history[previewState.index];
+  const normalizedCurrentUrl = resolveLiveFallbackUrl(currentUrl);
   const currentUrlIsHttp = isHttpUrl(currentUrl);
   const liveFallbackActive = Boolean(
-    liveFallbackUrl && currentUrl && liveFallbackUrl === currentUrl,
+    liveFallbackUrl && normalizedCurrentUrl && liveFallbackUrl === normalizedCurrentUrl,
   );
   const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
@@ -491,9 +513,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [shadowConfigError, setShadowConfigError] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<PendingDocument[]>([]);
   const [shadowJobId, setShadowJobId] = useState<string | null>(null);
-  const [liveFallbackUrl, setLiveFallbackUrl] = useState<string | null>(null);
-  const liveFallbackRef = useRef<string | null>(null);
-
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
       const id = uid();
@@ -511,24 +530,33 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const openLiveUrl = useCallback(
     async (value: string) => {
-      const target = value.trim();
-      if (!target || typeof window === "undefined" || !window.omni?.openUrl || !isHttpUrl(target)) {
+      const trimmed = value.trim();
+      if (
+        !trimmed ||
+        typeof window === "undefined" ||
+        !window.omni?.openUrl ||
+        !isHttpUrl(trimmed)
+      ) {
         return;
       }
-      devlog({ evt: "ui.live.open", url: target });
-      setLiveFallbackUrl((existing) => (existing === target ? null : existing));
-      if (liveFallbackRef.current === target) {
+      const normalizedTarget = resolveLiveFallbackUrl(trimmed);
+      if (!normalizedTarget) {
+        return;
+      }
+      devlog({ evt: "ui.live.open", url: normalizedTarget });
+      setLiveFallbackUrl((existing) => (existing === normalizedTarget ? null : existing));
+      if (liveFallbackRef.current === normalizedTarget) {
         liveFallbackRef.current = null;
       }
       try {
-        await window.omni.openUrl(target);
+        await window.omni.openUrl(normalizedTarget);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "Live preview unavailable");
-        devlog({ evt: "ui.live.open_error", url: target, message });
+        devlog({ evt: "ui.live.open_error", url: normalizedTarget, message });
         setIsPreviewLoading(false);
-        setLiveFallbackUrl(target);
-        liveFallbackRef.current = target;
+        setLiveFallbackUrl(normalizedTarget);
+        liveFallbackRef.current = normalizedTarget;
         pushToast(message, { variant: "destructive" });
       }
     },
@@ -2123,45 +2151,54 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [currentUrl]);
 
   useEffect(() => {
+    if (!normalizedCurrentUrl) {
+      setLiveFallbackUrl((existing) => (existing === null ? existing : null));
+      return;
+    }
     setLiveFallbackUrl((existing) => {
       if (!existing) {
         return existing;
       }
-      if (!currentUrl || existing !== currentUrl) {
+      if (existing !== normalizedCurrentUrl) {
         return null;
       }
-      return existing;
+      return normalizedCurrentUrl;
     });
-  }, [currentUrl]);
+  }, [normalizedCurrentUrl]);
 
   useEffect(() => {
-    if (!currentUrl || !inAppBrowserEnabled) {
+    if (!normalizedCurrentUrl || !inAppBrowserEnabled) {
       return;
     }
-    if (liveFallbackRef.current && liveFallbackRef.current === currentUrl) {
+    if (liveFallbackRef.current && liveFallbackRef.current === normalizedCurrentUrl) {
       return;
     }
-    void openLiveUrl(currentUrl);
-  }, [currentUrl, inAppBrowserEnabled, openLiveUrl]);
+    void openLiveUrl(normalizedCurrentUrl);
+  }, [normalizedCurrentUrl, inAppBrowserEnabled, openLiveUrl]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.omni?.onViewerFallback) {
       return;
     }
     const unsubscribe = window.omni.onViewerFallback(({ url }) => {
-      const normalized = typeof url === "string" ? url.trim() : "";
+      const normalizedUrl = resolveLiveFallbackUrl(url);
+      const fallbackUrl = normalizedUrl ?? null;
       const previous = liveFallbackRef.current;
       setIsPreviewLoading(false);
-      setLiveFallbackUrl(normalized || null);
-      liveFallbackRef.current = normalized || null;
-      devlog({ evt: "ui.live.fallback", url: normalized });
+      setLiveFallbackUrl(fallbackUrl);
+      liveFallbackRef.current = fallbackUrl;
+      const loggedUrl = fallbackUrl ?? (typeof url === "string" ? url.trim() : "");
+      devlog({ evt: "ui.live.fallback", url: loggedUrl });
       const context = fallbackContextRef.current;
       if (context) {
-        const targetUrl = normalized || context.currentUrl || "";
-        if (targetUrl && context.currentUrl === targetUrl) {
+        const contextUrlForComparison =
+          resolveLiveFallbackUrl(context.currentUrl) ??
+          (typeof context.currentUrl === "string" ? context.currentUrl.trim() || "" : "");
+        const targetUrl = fallbackUrl ?? (contextUrlForComparison || null);
+        if (targetUrl && contextUrlForComparison && contextUrlForComparison === targetUrl) {
           void context.extract();
         }
-        if (previous !== normalized) {
+        if (previous !== fallbackUrl) {
           context.toast("Live preview blocked by site policies. Showing Reader instead.", {
             variant: "destructive",
           });
