@@ -9,5 +9,11 @@ declare global {
       onViewerFallback: (fn: (payload: { url: string }) => void) => void | (() => void);
       quit: () => Promise<void>;
     };
+    appBridge?: {
+      onNavProgress?: (
+        callback: (event: { stage?: string; url?: string; status?: number; tabId?: number }) => void,
+      ) => (() => void) | void;
+      setShadowMode?: (enabled: boolean) => void;
+    };
   }
 }

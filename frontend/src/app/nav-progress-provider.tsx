@@ -16,11 +16,7 @@ export function NavProgressProvider({ children }: NavProgressProviderProps) {
     if (typeof window === 'undefined') {
       return;
     }
-    const bridge = (window as unknown as {
-      appBridge?: {
-        onNavProgress?: (callback: (event: unknown) => void) => () => void;
-      };
-    }).appBridge;
+    const bridge = window.appBridge;
     if (!bridge?.onNavProgress) {
       return;
     }
@@ -45,9 +41,11 @@ export function NavProgressProvider({ children }: NavProgressProviderProps) {
     });
 
     return () => {
-      unsubscribe?.();
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
     };
-  }, [setEvent]);
+  }, [clear, setEvent]);
 
   return <>{children}</>;
 }
