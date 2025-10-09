@@ -77,3 +77,4 @@ _MAIN_0.toc
 .venv/
 logs/backend.pid
 logs/frontend.pid
+codex_task_shadow_desktop.md
