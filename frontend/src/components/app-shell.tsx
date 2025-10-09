@@ -667,6 +667,13 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.appBridge?.setShadowMode?.(shadowModeEnabled);
+  }, [shadowModeEnabled]);
+
+  useEffect(() => {
     setPreviewState((state) => {
       const current = state.history[state.index];
       if (current === sanitizedInitialUrl) {

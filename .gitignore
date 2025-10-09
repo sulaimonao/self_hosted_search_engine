@@ -58,6 +58,8 @@ _MAIN_0.toc
 !backend/app/__main__.py
 !backend/app/shadow/__init__.py
 !backend/app/shadow/manager.py
+!backend/app/shadow/policy_store.py
+!backend/app/shadow/capture.py
 !observability/__init__.py
 !desktop/package.json
 !desktop/tsconfig.json

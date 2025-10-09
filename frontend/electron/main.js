@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, session, webContents } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -6,6 +6,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow;
+const shadowModeByWindow = new Map();
+
+function isShadowModeEnabled(win) {
+  if (!win) {
+    return false;
+  }
+  return Boolean(shadowModeByWindow.get(win.id));
+}
 
 function resolveAppUrl() {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -23,6 +31,9 @@ function loadAppUrl(win) {
 }
 
 function postShadowCrawl(win, targetUrl, reason) {
+  if (!isShadowModeEnabled(win)) {
+    return;
+  }
   if (!targetUrl || typeof targetUrl !== 'string') {
     return;
   }
@@ -60,6 +71,11 @@ function createBrowserWindow() {
 
   loadAppUrl(window);
 
+  shadowModeByWindow.set(window.id, false);
+  window.on('closed', () => {
+    shadowModeByWindow.delete(window.id);
+  });
+
   window.webContents.on('did-fail-load', (_event, _code, _desc, _url, isMainFrame) => {
     if (isMainFrame) {
       setTimeout(() => loadAppUrl(window), 800);
@@ -89,6 +105,10 @@ function createBrowserWindow() {
     });
     child.loadURL(url);
     postShadowCrawl(child, url, 'new-window');
+    shadowModeByWindow.set(child.id, isShadowModeEnabled(window));
+    child.on('closed', () => {
+      shadowModeByWindow.delete(child.id);
+    });
     return { action: 'deny' };
   });
 
@@ -126,6 +146,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ipcMain.on('shadow-mode:update', (event, payload) => {
+    const sender = event?.sender;
+    const win = sender ? BrowserWindow.fromWebContents(sender) : null;
+    if (!win) {
+      return;
+    }
+    shadowModeByWindow.set(win.id, Boolean(payload?.enabled));
+  });
+
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

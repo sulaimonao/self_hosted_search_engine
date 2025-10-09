@@ -15,4 +15,11 @@ contextBridge.exposeInMainWorld('appBridge', {
     ipcRenderer.on('nav-progress', listener);
     return () => ipcRenderer.removeListener('nav-progress', listener);
   },
+  setShadowMode: (enabled) => {
+    try {
+      ipcRenderer.send('shadow-mode:update', { enabled: Boolean(enabled) });
+    } catch (error) {
+      console.warn('shadow-mode bridge failed', error);
+    }
+  },
 });
