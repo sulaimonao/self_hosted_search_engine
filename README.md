@@ -17,6 +17,7 @@ required.
 - [Requirements](#requirements)
 - [Initial setup](#initial-setup)
 - [Running the application](#running-the-application)
+- [Researcher browser & shadow mode](#researcher-browser--shadow-mode)
 - [Command quick reference](#command-quick-reference)
 - [Data & storage layout](#data--storage-layout)
 - [Testing & quality gates](#testing--quality-gates)
@@ -210,6 +211,37 @@ make search Q="example setup guide"      # BM25 + vector blended retrieval
 Set `SEEDS_FILE=/path/to/seeds.txt` when seeding the crawler from a curated URL
 list instead of a single entrypoint.
 
+## Researcher browser & shadow mode
+
+The `/shipit` workspace now ships with a researcher-focused browser loop that
+keeps capture, organisation, and curation entirely local:
+
+- **Multi-tab navigation** with automatic restore. Each tab preserves its
+  history, downloads, and last snapshot.
+- **Global and per-domain policies** are exposed via `/api/shadow/policy`.
+  Toggle the global default from the header or override specific domains from
+  the tab strip. Policies persist under
+  `data/agent/documents/shadow/policies.json`.
+- **Shadow capture** posts to `/api/shadow/snapshot` on navigation. The backend
+  fetches HTML (respecting `robots.txt` unless the policy overrides it),
+  normalises the page, chunks + embeds it for RAG, and stages JSONL records for
+  downstream training. Raw HTML, metadata, and screenshots are stored under
+  `data/agent/documents/shadow/{policy}/{domain}/{sha256}/`.
+- **Downloads, history, bookmarks, and page info** live in dedicated drawers.
+  Artifacts surface byte sizes, direct download links, and “Open in Finder”
+  actions. Bookmarks capture folders + tags and can be promoted to the
+  allowed-list seed registry via `/api/seeds`.
+
+Export staged snapshots with the new CLI helper:
+
+```bash
+# Filters: --domain, --policy, --since, --until, --limit
+make export-dataset OUT=/tmp/shadow.jsonl ARGS="--domain example.com --since 2025-01-01"
+```
+
+Pass `--format=parquet` (or use a `.parquet` extension) to write Parquet files
+when `pandas`/`pyarrow` are available in the virtualenv.
+
 ## Command quick reference
 
 | Command | Purpose |
@@ -226,6 +258,7 @@ list instead of a single entrypoint.
 | `make llm-status` | Check Ollama reachability via the Flask API |
 | `make llm-models` | List chat-capable models reported by Ollama |
 | `make tail JOB=focused` | Tail `data/logs/<JOB>.log` (e.g. focused crawl logs) |
+| `make export-dataset OUT=... ARGS="..."` | Export staged shadow snapshots to JSONL or Parquet |
 | `make check` | Run linting, typing, tests, security, and performance smoke |
 | `make clean` | Remove `.venv` and cached data stores |
 

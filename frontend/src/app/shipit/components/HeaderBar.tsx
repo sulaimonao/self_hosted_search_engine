@@ -1,11 +1,36 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import ModelPicker from "./ModelPicker";
 import SystemStatusButton from "./SystemStatusButton";
 import { useApp } from "@/app/shipit/store/useApp";
+import { fetchShadowGlobalPolicy, updateShadowGlobalPolicy } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
 
 export default function HeaderBar(): JSX.Element {
-  const { mode, shadow, setMode, toggleShadow } = useApp();
+  const { mode, shadow, setMode, setShadow } = useApp();
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchShadowGlobalPolicy()
+      .then((policy) => setShadow(Boolean(policy.enabled)))
+      .catch((error) => console.warn("Unable to load shadow policy", error));
+  }, [setShadow]);
+
+  const handleToggle = async (next: boolean) => {
+    setShadow(next);
+    setBusy(true);
+    try {
+      await updateShadowGlobalPolicy({ enabled: next });
+    } catch (error) {
+      console.warn("Failed to update global shadow policy", error);
+      setShadow(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="w-full flex items-center justify-between p-4 border-b">
       <div className="flex items-center gap-3">
@@ -25,8 +50,8 @@ export default function HeaderBar(): JSX.Element {
         </button>
         {mode === "browser" && (
           <label className="ml-3 inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={shadow} onChange={toggleShadow} />
-            <span>Shadow crawl</span>
+            <Switch checked={shadow} disabled={busy} onCheckedChange={handleToggle} />
+            <span>Shadow global default</span>
           </label>
         )}
       </div>

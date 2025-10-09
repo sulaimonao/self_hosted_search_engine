@@ -94,4 +94,95 @@ def search_index() -> tuple[Any, int]:
     return jsonify({"results": results}), 200
 
 
+@bp.get("/search")
+def hybrid_search() -> tuple[Any, int]:
+    query = _coerce_str(request.args.get("q") or request.args.get("query"))
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    try:
+        k = max(1, int(request.args.get("k", 10)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "k must be an integer"}), 400
+
+    filters: dict[str, Any] = {}
+    domain = _coerce_str(request.args.get("domain"))
+    if domain:
+        filters["domain"] = domain
+    policy_id = _coerce_str(request.args.get("policy_id") or request.args.get("policyId"))
+    if policy_id:
+        filters["policy_id"] = policy_id
+    hash_filter = _coerce_str(request.args.get("hash"))
+    if hash_filter:
+        filters["hash"] = hash_filter
+
+    vector_hits = _service().search(query, k=k, filters=filters or None)
+    top_score = 0.0
+    for hit in vector_hits:
+        try:
+            score = float(hit.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        if score > top_score:
+            top_score = score
+
+    keyword_hits: list[dict[str, Any]] = []
+    keyword_used = False
+    search_service = current_app.config.get("SEARCH_SERVICE")
+    if (not vector_hits or top_score < 0.3) and search_service is not None:
+        try:
+            whoosh_results, _job_id, _context = search_service.run_query(
+                query,
+                limit=k,
+                use_llm=False,
+                model=None,
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            whoosh_results = []
+        if whoosh_results:
+            keyword_used = True
+            for item in whoosh_results:
+                keyword_hits.append(
+                    {
+                        "url": item.get("url"),
+                        "title": item.get("title"),
+                        "snippet": item.get("snippet"),
+                        "score": item.get("score"),
+                        "source": "keyword",
+                    }
+                )
+
+    combined: list[dict[str, Any]] = []
+    seen: set[str | None] = set()
+    for hit in vector_hits:
+        url = hit.get("url")
+        seen.add(url)
+        combined.append(
+            {
+                "url": url,
+                "title": hit.get("title"),
+                "snippet": hit.get("chunk"),
+                "score": hit.get("score"),
+                "source": "vector",
+            }
+        )
+    for hit in keyword_hits:
+        url = hit.get("url")
+        if url in seen:
+            continue
+        seen.add(url)
+        combined.append(hit)
+
+    payload = {
+        "query": query,
+        "vector": vector_hits,
+        "keyword": keyword_hits,
+        "combined": combined,
+        "filters": filters,
+        "vector_top_score": top_score,
+        "keyword_fallback": keyword_used,
+    }
+    return jsonify(payload), 200
+
+
 __all__ = ["bp"]

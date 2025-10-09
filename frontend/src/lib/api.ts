@@ -27,6 +27,9 @@ import type {
   DiscoveryPreview,
   DiscoveryItem,
   PendingDocument,
+  ShadowPolicy,
+  ShadowPolicyResponse,
+  ShadowSnapshotResponse,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -102,6 +105,15 @@ export interface IndexUpsertOptions {
   url?: string | null;
   title?: string | null;
   meta?: Record<string, unknown>;
+}
+
+export interface ShadowSnapshotRequest {
+  url: string;
+  tabId: string;
+  sessionId: string;
+  policyId?: string | null;
+  renderJs?: boolean;
+  outlinks?: Array<{ url: string; same_site?: boolean }>;
 }
 
 function normalizeShadowStatus(
@@ -231,6 +243,191 @@ export async function fetchShadowConfig(): Promise<ShadowConfig> {
 
   const payload = tryParseJson(text) ?? {};
   return normalizeShadowConfig(payload);
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : String(item ?? "")))
+      .filter((item) => item.length > 0);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function normalizeShadowPolicy(payload: Record<string, unknown>): ShadowPolicy {
+  const rateLimitRaw = (payload.rate_limit ?? payload.rateLimit) as Record<string, unknown> | undefined;
+  const concurrency = coerceNumber(rateLimitRaw?.concurrency) ?? 2;
+  const delayMs = coerceNumber(rateLimitRaw?.delay_ms ?? rateLimitRaw?.delayMs) ?? 250;
+  return {
+    policy_id: typeof payload.policy_id === "string" && payload.policy_id.trim().length > 0 ? payload.policy_id.trim() : "global",
+    enabled: coerceBoolean(payload.enabled),
+    obey_robots: coerceBoolean(payload.obey_robots ?? payload.obeyRobots ?? true),
+    include_patterns: coerceStringArray(payload.include_patterns ?? payload.includePatterns),
+    exclude_patterns: coerceStringArray(payload.exclude_patterns ?? payload.excludePatterns),
+    js_render: coerceBoolean(payload.js_render ?? payload.jsRender ?? false),
+    rag: coerceBoolean(payload.rag ?? true),
+    training: coerceBoolean(payload.training ?? true),
+    ttl_days: coerceNumber(payload.ttl_days ?? payload.ttlDays) ?? 7,
+    ttl_seconds: coerceNumber(payload.ttl_seconds ?? payload.ttlSeconds) ?? undefined,
+    rate_limit: {
+      concurrency: Math.max(1, Math.trunc(concurrency)),
+      delay_ms: Math.max(0, Math.trunc(delayMs)),
+    },
+  };
+}
+
+export async function fetchShadowGlobalPolicy(): Promise<ShadowPolicy> {
+  const response = await fetch(api("/api/shadow/policy"), { cache: "no-store" });
+  const text = await response.text();
+  if (!response.ok) {
+    const payload = tryParseJson(text);
+    throw new Error((payload?.error as string) || text || `Policy request failed (${response.status})`);
+  }
+  const payload = tryParseJson(text) ?? {};
+  const policyRaw = (payload.policy ?? {}) as Record<string, unknown>;
+  return normalizeShadowPolicy(policyRaw);
+}
+
+export async function updateShadowGlobalPolicy(patch: Partial<ShadowPolicy>): Promise<ShadowPolicy> {
+  const response = await fetch(api("/api/shadow/policy"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(patch),
+  });
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+  if (!response.ok) {
+    throw new Error((payload.error as string) || text || `Policy update failed (${response.status})`);
+  }
+  return normalizeShadowPolicy((payload.policy ?? {}) as Record<string, unknown>);
+}
+
+export async function fetchShadowDomainPolicy(domain: string): Promise<ShadowPolicyResponse> {
+  const trimmed = domain.trim();
+  if (!trimmed) {
+    throw new Error("domain is required");
+  }
+  const response = await fetch(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
+    cache: "no-store",
+  });
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+  if (!response.ok) {
+    throw new Error((payload.error as string) || text || `Policy fetch failed (${response.status})`);
+  }
+  const policy = normalizeShadowPolicy((payload.policy ?? {}) as Record<string, unknown>);
+  return {
+    policy,
+    inherited: coerceBoolean(payload.inherited),
+  };
+}
+
+export async function updateShadowDomainPolicy(domain: string, patch: Partial<ShadowPolicy>): Promise<ShadowPolicyResponse> {
+  const trimmed = domain.trim();
+  if (!trimmed) {
+    throw new Error("domain is required");
+  }
+  const response = await fetch(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(patch),
+  });
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+  if (!response.ok) {
+    throw new Error((payload.error as string) || text || `Policy update failed (${response.status})`);
+  }
+  return {
+    policy: normalizeShadowPolicy((payload.policy ?? {}) as Record<string, unknown>),
+    inherited: coerceBoolean(payload.inherited),
+  };
+}
+
+export async function listShadowDomainPolicies(): Promise<Record<string, ShadowPolicy>> {
+  const response = await fetch(api("/api/shadow/policy/domains"), { cache: "no-store" });
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+  if (!response.ok) {
+    throw new Error((payload.error as string) || text || `Policy list failed (${response.status})`);
+  }
+  const result: Record<string, ShadowPolicy> = {};
+  const policies = payload.policies as Record<string, unknown> | undefined;
+  if (policies) {
+    for (const [key, value] of Object.entries(policies)) {
+      if (value && typeof value === "object") {
+        result[key] = normalizeShadowPolicy(value as Record<string, unknown>);
+      }
+    }
+  }
+  return result;
+}
+
+export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Promise<ShadowSnapshotResponse> {
+  const body: Record<string, unknown> = {
+    url: request.url,
+    tab_id: request.tabId,
+    session_id: request.sessionId,
+  };
+  if (request.policyId) {
+    body.policy_id = request.policyId;
+  }
+  if (typeof request.renderJs === "boolean") {
+    body.render_js = request.renderJs;
+  }
+  if (Array.isArray(request.outlinks) && request.outlinks.length > 0) {
+    body.outlinks = request.outlinks.map((item) => ({
+      url: item.url,
+      same_site: Boolean(item.same_site),
+    }));
+  }
+
+  const response = await fetch(api("/api/shadow/snapshot"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  const payload = tryParseJson(text) ?? {};
+  if (!response.ok) {
+    throw new Error((payload.error as string) || text || `Snapshot failed (${response.status})`);
+  }
+  const artifacts = Array.isArray(payload.artifacts) ? (payload.artifacts as Record<string, unknown>[]) : [];
+  const normalizedArtifacts = artifacts.map((artifact) => ({
+    kind: typeof artifact.kind === "string" ? artifact.kind : "artifact",
+    path: typeof artifact.path === "string" ? artifact.path : null,
+    bytes: coerceNumber(artifact.bytes) ?? 0,
+    mime: typeof artifact.mime === "string" ? artifact.mime : null,
+    download_url: typeof artifact.download_url === "string" ? artifact.download_url : null,
+    local_path: typeof artifact.local_path === "string" ? artifact.local_path : null,
+  }));
+
+  return {
+    ok: coerceBoolean(payload.ok ?? true),
+    policy: normalizeShadowPolicy((payload.policy ?? {}) as Record<string, unknown>),
+    document: {
+      id: String((payload.document ?? {}).id ?? ""),
+      url: String((payload.document ?? {}).url ?? request.url),
+      canonical_url: String((payload.document ?? {}).canonical_url ?? request.url),
+      domain: String((payload.document ?? {}).domain ?? ""),
+      observed_at: String((payload.document ?? {}).observed_at ?? new Date().toISOString()),
+    },
+    artifacts: normalizedArtifacts,
+    rag_indexed: coerceBoolean(payload.rag_indexed),
+    pending_embedding: coerceBoolean(payload.pending_embedding),
+    token_count: coerceNumber(payload.token_count) ?? undefined,
+    bytes: coerceNumber(payload.bytes) ?? undefined,
+    training_record:
+      payload.training_record && typeof payload.training_record === "object"
+        ? {
+            path: String((payload.training_record as Record<string, unknown>).path ?? ""),
+          }
+        : null,
+    rag_error: typeof payload.rag_error === "string" ? payload.rag_error : undefined,
+  };
 }
 
 export async function updateShadowConfig(input: { enabled: boolean }): Promise<ShadowConfig> {

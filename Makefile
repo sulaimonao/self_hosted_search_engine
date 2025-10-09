@@ -1,7 +1,7 @@
 
 .DEFAULT_GOAL := start
 
-.PHONY: start bootstrap dev stop logs verify first-run preflight setup
+.PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
@@ -175,3 +175,10 @@ desktop-pack:
 	python3.11 scripts/pack_backend.py
 	cd frontend && pnpm build && pnpm export -o export
 	pnpm --dir desktop/electron build
+
+export-dataset: setup
+	@if [ -z "$(OUT)" ]; then \
+	  echo "Usage: make export-dataset OUT=/tmp/data.jsonl [ARGS='--domain example.com']"; \
+	  exit 1; \
+	fi
+	@$(VENV_PY) scripts/export_dataset.py --out "$(OUT)" $(ARGS)

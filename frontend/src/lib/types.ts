@@ -229,6 +229,60 @@ export interface ShadowConfig {
   lastUpdatedAt?: number | null;
 }
 
+export interface ShadowRateLimit {
+  concurrency: number;
+  delay_ms: number;
+}
+
+export interface ShadowPolicy {
+  policy_id: string;
+  enabled: boolean;
+  obey_robots: boolean;
+  include_patterns: string[];
+  exclude_patterns: string[];
+  js_render: boolean;
+  rag: boolean;
+  training: boolean;
+  ttl_days: number;
+  ttl_seconds?: number;
+  rate_limit: ShadowRateLimit;
+}
+
+export interface ShadowArtifact {
+  kind: string;
+  path: string | null;
+  bytes: number;
+  mime?: string | null;
+  download_url?: string | null;
+  local_path?: string | null;
+}
+
+export interface ShadowSnapshotDocument {
+  id: string;
+  url: string;
+  canonical_url: string;
+  domain: string;
+  observed_at: string;
+}
+
+export interface ShadowSnapshotResponse {
+  ok: boolean;
+  policy: ShadowPolicy;
+  document: ShadowSnapshotDocument;
+  artifacts: ShadowArtifact[];
+  rag_indexed: boolean;
+  pending_embedding: boolean;
+  token_count?: number;
+  bytes?: number;
+  training_record?: { path: string } | null;
+  rag_error?: string;
+}
+
+export interface ShadowPolicyResponse {
+  policy: ShadowPolicy;
+  inherited?: boolean;
+}
+
 export interface DiscoveryPreview {
   id: string;
   path: string;

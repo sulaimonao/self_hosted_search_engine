@@ -75,7 +75,7 @@ def create_app() -> Flask:
     from .config import AppConfig
     from .jobs.focused_crawl import FocusedCrawlManager
     from .jobs.runner import JobRunner
-    from .shadow import ShadowIndexer
+    from .shadow import ShadowCaptureService, ShadowIndexer, ShadowPolicyStore
     from .metrics import metrics as metrics_module
     from .search.service import SearchService
     from .db import AppStateDB
@@ -338,6 +338,16 @@ def create_app() -> Flask:
         "yes",
         "on",
     }
+    shadow_policy_store = ShadowPolicyStore(config.shadow_state_path)
+
+    shadow_capture_service = ShadowCaptureService(
+        app=app,
+        policy_store=shadow_policy_store,
+        vector_index=vector_index_service,
+        config=config,
+        state_db=state_db,
+    )
+
     shadow_manager = ShadowIndexer(
         app=app,
         runner=runner,
@@ -345,6 +355,8 @@ def create_app() -> Flask:
         state_db=state_db,
         enabled=feature_shadow_mode,
     )
+    app.config.setdefault("SHADOW_POLICY_STORE", shadow_policy_store)
+    app.config.setdefault("SHADOW_CAPTURE_SERVICE", shadow_capture_service)
     app.config.setdefault("SHADOW_INDEX_MANAGER", shadow_manager)
     app.config.setdefault("FEATURE_SHADOW_MODE", feature_shadow_mode)
     app.config.setdefault(

@@ -477,7 +477,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const agentEnabled = AGENT_ENABLED;
   const inAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
 
-  const [liveFallbackUrl, setLiveFallbackUrl] = useState<string | null>(null);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const liveFallbackRef = useRef<string | null>(null);
 
   const buildWorkspaceHref = useCallback((url: string) => {
@@ -501,7 +501,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const normalizedCurrentUrl = resolveLiveFallbackUrl(currentUrl);
   const currentUrlIsHttp = isHttpUrl(currentUrl);
   const liveFallbackActive = Boolean(
-    liveFallbackUrl && normalizedCurrentUrl && liveFallbackUrl === normalizedCurrentUrl,
+    fallbackUrl && normalizedCurrentUrl && fallbackUrl === normalizedCurrentUrl,
   );
   const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
@@ -525,8 +525,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   );
 
   useEffect(() => {
-    liveFallbackRef.current = liveFallbackUrl;
-  }, [liveFallbackUrl]);
+    liveFallbackRef.current = fallbackUrl;
+  }, [fallbackUrl]);
 
   const openLiveUrl = useCallback(
     async (value: string) => {
@@ -544,7 +544,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         return;
       }
       devlog({ evt: "ui.live.open", url: normalizedTarget });
-      setLiveFallbackUrl((existing) => (existing === normalizedTarget ? null : existing));
+      setFallbackUrl((existing) => (existing === normalizedTarget ? null : existing));
       if (liveFallbackRef.current === normalizedTarget) {
         liveFallbackRef.current = null;
       }
@@ -555,7 +555,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           error instanceof Error ? error.message : String(error ?? "Live preview unavailable");
         devlog({ evt: "ui.live.open_error", url: normalizedTarget, message });
         setIsPreviewLoading(false);
-        setLiveFallbackUrl(normalizedTarget);
+        setFallbackUrl(normalizedTarget);
         liveFallbackRef.current = normalizedTarget;
         pushToast(message, { variant: "destructive" });
       }
@@ -2152,10 +2152,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   useEffect(() => {
     if (!normalizedCurrentUrl) {
-      setLiveFallbackUrl((existing) => (existing === null ? existing : null));
+      setFallbackUrl((existing) => (existing === null ? existing : null));
       return;
     }
-    setLiveFallbackUrl((existing) => {
+    setFallbackUrl((existing) => {
       if (!existing) {
         return existing;
       }
@@ -2185,7 +2185,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       const fallbackUrl = normalizedUrl ?? null;
       const previous = liveFallbackRef.current;
       setIsPreviewLoading(false);
-      setLiveFallbackUrl(fallbackUrl);
+      setFallbackUrl(fallbackUrl);
       liveFallbackRef.current = fallbackUrl;
       const loggedUrl = fallbackUrl ?? (typeof url === "string" ? url.trim() : "");
       devlog({ evt: "ui.live.fallback", url: loggedUrl });
