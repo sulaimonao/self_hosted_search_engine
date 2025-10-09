@@ -69,6 +69,7 @@ import {
 import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import { recordVisit, requestShadowCrawl } from "@/lib/shadow";
+import { desktop } from "@/lib/desktop";
 import type {
   AgentLogEntry,
   ChatMessage,
@@ -380,6 +381,11 @@ interface AppShellProps {
 
 export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const router = useRouter();
+  const liveFallbackUrl =
+    (typeof process !== "undefined"
+      ? process.env.NEXT_PUBLIC_LIVE_FALLBACK_URL?.trim()
+      : "") || null;
+  const browserHref = typeof window !== "undefined" ? window.location.href : null;
   const sanitizedInitialUrl = useMemo(() => {
     if (typeof initialUrl === "string") {
       const trimmed = initialUrl.trim();
@@ -481,10 +487,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const discoveryErrorNotifiedRef = useRef(false);
 
   const agentEnabled = AGENT_ENABLED;
-  const inAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
-
-  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
-  const liveFallbackRef = useRef<string | null>(null);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(() => liveFallbackUrl);
+  const liveFallbackRef = useRef<string | null>(liveFallbackUrl);
 
   const buildWorkspaceHref = useCallback((url: string) => {
     const params = new URLSearchParams({ url });
@@ -506,9 +510,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const currentUrl = previewState.history[previewState.index];
   const normalizedCurrentUrl = resolveLiveFallbackUrl(currentUrl);
   const currentUrlIsHttp = isHttpUrl(currentUrl);
+  const normalizedBrowserUrl = resolveLiveFallbackUrl(browserHref);
   const liveFallbackActive = Boolean(
-    fallbackUrl && normalizedCurrentUrl && fallbackUrl === normalizedCurrentUrl,
+    fallbackUrl &&
+      ((normalizedCurrentUrl && fallbackUrl === normalizedCurrentUrl) ||
+        (normalizedBrowserUrl && fallbackUrl === normalizedBrowserUrl)),
   );
+  const envInAppBrowserEnabled =
+    typeof process !== "undefined" && process.env.NEXT_PUBLIC_IN_APP_BROWSER_ENABLED === "true";
+  const baseInAppBrowserEnabled = IN_APP_BROWSER_ENABLED;
+  const inAppBrowserEnabled = (envInAppBrowserEnabled || baseInAppBrowserEnabled) && !liveFallbackActive;
   const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
@@ -519,6 +530,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [shadowConfigError, setShadowConfigError] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<PendingDocument[]>([]);
   const [shadowJobId, setShadowJobId] = useState<string | null>(null);
+  const shadowModeEnabledRef = useRef(shadowModeEnabled);
   const pushToast = useCallback(
     (message: string, options?: { variant?: ToastMessage["variant"]; traceId?: string | null }) => {
       const id = uid();
@@ -1031,6 +1043,25 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [pushToast, shadowModeEnabled],
   );
+
+  useEffect(() => {
+    shadowModeEnabledRef.current = shadowModeEnabled;
+  }, [shadowModeEnabled]);
+
+  useEffect(() => {
+    if (!desktop || typeof desktop.onShadowToggle !== "function") {
+      return;
+    }
+    const off = desktop.onShadowToggle(() => {
+      const next = !shadowModeEnabledRef.current;
+      void handleShadowToggle(next);
+    });
+    return () => {
+      if (typeof off === "function") {
+        off();
+      }
+    };
+  }, [handleShadowToggle]);
 
   const refreshModels = useCallback(async () => {
     try {
@@ -2466,6 +2497,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     lastNavEventRef.current = { url: navEvent.url, tabId: navEvent.tabId ?? null };
     if (shadowModeEnabled) {
       requestShadowCrawl(navEvent.tabId ?? null, navEvent.url, 'did-navigate');
+    }
+    if (desktop && typeof desktop.shadowCapture === 'function') {
+      void (async () => {
+        try {
+          await desktop.shadowCapture({
+            url: navEvent.url,
+            tab_id: typeof navEvent.tabId === 'number' ? navEvent.tabId : undefined,
+          });
+        } catch (error) {
+          console.warn('Desktop shadow capture failed', error);
+        }
+      })();
     }
   }, [navEvent, shadowModeEnabled]);
 
