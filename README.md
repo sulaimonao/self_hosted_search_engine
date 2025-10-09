@@ -368,6 +368,28 @@ when the embedding model is still warming up. Pending chunks land in the
 reports the embedder as ready, keeping partial crawl results searchable via the
 BM25 index until vectors become available.
 
+## Migrations & diagnostics
+
+SQLite migrations live in `backend/app/db/migrations/`. Run them and confirm the
+schema guardrails with:
+
+```bash
+scripts/check_migrations.sh
+```
+
+The script provisions a throwaway data directory, initialises the Flask app, and
+asserts that `/api/diag/db` reports `ok: true`. The same endpoint powers runtime
+checks—hit it manually when debugging deployments:
+
+```bash
+curl -s http://localhost:8000/api/diag/db | jq
+```
+
+If the response contains `"error": "schema_mismatch"`, the logged `errors`
+array explains which column types are out of compliance (e.g. when
+`pending_documents.sim_signature` still uses an `INTEGER` type). Apply the
+latest migrations and restart the service to recover.
+
 Every Flask request emits `req.start` / `req.end` events with request, session,
 and user correlation IDs. Tool invocations emit
 `tool.start` / `tool.end` / `tool.error` events with redacted inputs and result
@@ -656,6 +678,21 @@ pre-enabled for every user.
 - When both models are missing the planner responds with
   `{ "type": "final", "answer": "Planner LLM is unavailable." }` so the UI can
   degrade gracefully.
+
+### Planner loop controls
+
+- `planner.enable_critique` gates the optional critique-and-retry stage. Leave it
+  `false` to preserve the classic step semantics in automated tests, and enable
+  it when you want the planner to request structured feedback before
+  finalizing.
+- `planner.max_steps` caps the number of tool executions or final responses in a
+  single run. Hitting the limit now returns a structured
+  `stop_reason="max_steps"` response instead of throwing a graph recursion
+  error.
+- `planner.max_retries_per_step` bounds how many planner-only retries (LLM
+  replans, critique revisions, validation failures) are allowed between tool
+  calls. When exceeded, the planner exits cleanly with
+  `stop_reason="retry_limit"` so callers can surface a useful error.
 
 ### Debug traces
 
