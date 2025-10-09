@@ -59,6 +59,8 @@ _MAIN_0.toc
 !backend/app/shadow/__init__.py
 !backend/app/shadow/manager.py
 !observability/__init__.py
+!desktop/package.json
+!desktop/tsconfig.json
 !desktop/electron/package.json
 !desktop/electron/tsconfig.json
 !scripts/pack_backend.py

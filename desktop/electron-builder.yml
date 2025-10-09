@@ -1,0 +1,19 @@
+appId: com.selfhosted.researcherbrowser
+productName: Researcher Browser
+directories:
+  output: dist/build
+files:
+  - dist/**
+  - resources/**
+  - "!**/*.map"
+asar: true
+mac:
+  category: public.app-category.productivity
+  target: [dmg, zip]
+  hardenedRuntime: true
+win:
+  target: [nsis]
+linux:
+  target: [AppImage, deb]
+extraMetadata:
+  main: dist/main.js

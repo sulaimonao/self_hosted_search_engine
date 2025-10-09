@@ -2,6 +2,7 @@
 .DEFAULT_GOAL := start
 
 .PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
+.PHONY: desktop desktop-build dev-desktop
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
@@ -175,6 +176,21 @@ desktop-pack:
 	python3.11 scripts/pack_backend.py
 	cd frontend && pnpm build && pnpm export -o export
 	pnpm --dir desktop/electron build
+
+desktop:
+	cd desktop && npm install && npm run start
+
+dev-desktop:
+	cd desktop && npm install && npm run dev
+
+desktop-build:
+	# 1) Build Next.js to static export
+	cd frontend && npm install && npm run build && npm run export
+	# 2) Stage exports into Electron resources
+	mkdir -p desktop/resources/frontend
+	rsync -a --delete frontend/out/ desktop/resources/frontend/
+	# 3) Build Electron
+	cd desktop && npm install && npm run build
 
 export-dataset: setup
 	@if [ -z "$(OUT)" ]; then \
