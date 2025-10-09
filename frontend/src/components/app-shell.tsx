@@ -54,6 +54,7 @@ import {
   ChatRequestError,
   queueShadowIndex,
   fetchShadowStatus,
+  ShadowQueueOptions,
   fetchShadowConfig,
   updateShadowConfig,
   subscribeDiscoveryEvents,
@@ -67,7 +68,7 @@ import {
 } from "@/lib/api";
 import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
-import { recordVisit } from "@/lib/shadow";
+import { recordVisit, requestShadowCrawl } from "@/lib/shadow";
 import type {
   AgentLogEntry,
   ChatMessage,
@@ -84,11 +85,14 @@ import type {
   PageExtractResponse,
   DiscoveryPreview,
   ShadowConfig,
+  ShadowStatus,
   PendingDocument,
 } from "@/lib/types";
 import { PendingEmbedsCard } from "@/components/pending-embeds-card";
 import { ShadowProgress } from "@/components/shadow-progress";
+import { NavProgressHud } from "@/components/nav-progress-hud";
 import { devlog } from "@/lib/devlog";
+import { useNavProgress } from "@/hooks/use-nav-progress";
 import { normalizeInput } from "@/lib/normalize-input";
 import { AGENT_ENABLED, IN_APP_BROWSER_ENABLED } from "@/lib/flags";
 
@@ -204,7 +208,7 @@ export function collectUniqueHttpCitations(citations: unknown): string[] {
 
 interface CitationIndexingOptions {
   shadowModeEnabled: boolean;
-  queueShadowIndex: (url: string) => Promise<unknown>;
+  queueShadowIndex: (url: string, options?: ShadowQueueOptions) => Promise<ShadowStatus>;
   handleQueueAdd: (url: string, scope: CrawlScope, notes?: string) => Promise<unknown>;
   setStatus: (url: string, status: CitationIndexStatus, error?: string | null) => void;
   appendLog: (entry: AgentLogEntry) => void;
@@ -222,7 +226,7 @@ export async function indexCitationUrls(
     options.setStatus(url, "loading");
     try {
       if (options.shadowModeEnabled) {
-        await options.queueShadowIndex(url);
+        await options.queueShadowIndex(url, { reason: 'manual' });
       } else {
         await options.handleQueueAdd(url, "page", "Auto-indexed from chat citation");
       }
@@ -440,6 +444,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     [],
   );
   const [timeMeta, setTimeMeta] = useState<MetaTimeResponse | null>(null);
+  const navEvent = useNavProgress((state) => state.current);
   const timeSummary = useMemo(() => {
     if (!timeMeta) return null;
     let serverLocal = timeMeta.server_time;
@@ -471,6 +476,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const lastSuccessfulModelRef = useRef<string | null>(null);
   const autopullAttemptedRef = useRef(false);
   const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
+  const lastNavEventRef = useRef<{ url: string; tabId: number | null } | null>(null);
   const shadowNotifiedRef = useRef(new Set<string>());
   const discoveryErrorNotifiedRef = useRef(false);
 
@@ -993,6 +999,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     [refreshSeeds]
   );
 
+
   const handleShadowToggle = useCallback(
     async (next: boolean) => {
       const previous = shadowModeEnabled;
@@ -1277,6 +1284,30 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [appendLog]
   );
+
+  const handleManualShadowCrawl = useCallback(async () => {
+    const targetUrl = (currentUrl ?? '').trim();
+    if (!isHttpUrl(targetUrl)) {
+      pushToast('Open a valid http(s) page before crawling.', { variant: 'warning' });
+      return;
+    }
+    try {
+      const result = await queueShadowIndex(targetUrl, { reason: 'manual' });
+      const jobId = result.jobId ?? null;
+      if (jobId) {
+        setShadowJobId(jobId);
+        if (!jobSubscriptions.current.has(jobId)) {
+          registerJob(jobId, `Shadow index ${targetUrl}`);
+        }
+      }
+      pushToast('Shadow crawl queued');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? 'Failed to queue shadow crawl');
+      pushToast(message, { variant: 'destructive' });
+      devlog({ evt: 'ui.shadow.manual_error', url: targetUrl, message });
+    }
+  }, [currentUrl, pushToast, queueShadowIndex, registerJob]);
 
   const handleCrawlDomain = useCallback(async () => {
     const targetUrl = (currentUrl ?? "").trim();
@@ -2278,13 +2309,26 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         await recordVisit({ url: targetUrl });
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : String(error ?? "Failed to record visit");
-        devlog({ evt: "ui.shadow.visit_error", url: targetUrl, message });
+          error instanceof Error ? error.message : String(error ?? 'Failed to record visit');
+        devlog({ evt: 'ui.shadow.visit_error', url: targetUrl, message });
       }
 
+      const navContext = lastNavEventRef.current;
+      const queueOptions: ShadowQueueOptions = {};
+      if (navContext && navContext.url === targetUrl) {
+        if (typeof navContext.tabId === 'number') {
+          queueOptions.tabId = navContext.tabId;
+        }
+        queueOptions.reason = 'did-navigate';
+      } else {
+        queueOptions.reason = 'manual';
+      }
+
+      let jobId: string | null = null;
+
       try {
-        const queued = await queueShadowIndex(targetUrl);
-        const jobId = queued.jobId ?? queued.job_id;
+        const queued = await queueShadowIndex(targetUrl, queueOptions);
+        jobId = queued.jobId ?? null;
         if (jobId) {
           setShadowJobId(jobId);
           if (!jobSubscriptions.current.has(jobId)) {
@@ -2293,8 +2337,13 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         }
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : String(error ?? "Failed to queue shadow index job");
-        devlog({ evt: "ui.shadow.queue_error", url: targetUrl, message });
+          error instanceof Error ? error.message : String(error ?? 'Failed to queue shadow index job');
+        devlog({ evt: 'ui.shadow.queue_error', url: targetUrl, message });
+        return;
+      }
+
+      if (!jobId) {
+        devlog({ evt: 'ui.shadow.queue_missing_job', url: targetUrl });
         return;
       }
 
@@ -2302,10 +2351,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         if (cancelled) return;
 
-        const status = await fetchShadowStatus(targetUrl).catch((error) => {
+        const status = await fetchShadowStatus(jobId).catch((error) => {
           const message =
-            error instanceof Error ? error.message : String(error ?? "Failed to fetch shadow status");
-          devlog({ evt: "ui.shadow.status_error", url: targetUrl, message });
+            error instanceof Error ? error.message : String(error ?? 'Failed to fetch shadow status');
+          devlog({ evt: 'ui.shadow.status_error', url: targetUrl, jobId, message });
           return null;
         });
 
@@ -2314,61 +2363,57 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         }
 
         if (!cancelled) {
-          const jobId = status.jobId ?? status.job_id;
-          if (jobId) {
-            setShadowJobId(jobId);
-            if (!jobSubscriptions.current.has(jobId)) {
-              registerJob(jobId, `Shadow index ${targetUrl}`);
-            }
+          if (!jobSubscriptions.current.has(jobId)) {
+            registerJob(jobId, `Shadow index ${targetUrl}`);
           }
+          setShadowJobId(jobId);
         }
 
-        if (status.state === "done") {
+        if (status.state === 'done') {
           if (!shadowNotifiedRef.current.has(targetUrl)) {
             const title = status.title && status.title.trim().length > 0 ? status.title.trim() : targetUrl;
             pushToast(`Indexed: ${title}`);
             shadowNotifiedRef.current.add(targetUrl);
             devlog({
-              evt: "ui.shadow.indexed",
+              evt: 'ui.shadow.indexed',
               url: targetUrl,
               title,
-              chunks: typeof status.chunks === "number" ? status.chunks : null,
+              chunks: typeof status.chunks === 'number' ? status.chunks : null,
+              docs: status.docs ?? [],
             });
           }
-          const completedId = status.jobId ?? status.job_id;
-          if (completedId && completedId === shadowJobId) {
+          if (jobId === shadowJobId) {
             setShadowJobId(null);
           }
           return;
         }
 
-        if (status.state === "error") {
+        if (status.state === 'error') {
           const key = `${targetUrl}:error`;
           if (!shadowNotifiedRef.current.has(key)) {
             shadowNotifiedRef.current.add(key);
             devlog({
-              evt: "ui.shadow.error",
+              evt: 'ui.shadow.error',
               url: targetUrl,
+              jobId,
               error: status.error ?? null,
-              error_kind: status.error_kind ?? null,
+              error_kind: status.errorKind ?? null,
             });
           }
-          const failedId = status.jobId ?? status.job_id;
-          if (failedId && failedId === shadowJobId) {
+          if (jobId === shadowJobId) {
             setShadowJobId(null);
           }
           return;
         }
       }
     };
-
     void run();
 
     return () => {
       cancelled = true;
       shadowWatcherRef.current = null;
     };
-  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving, registerJob, shadowJobId]);
+  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving, registerJob, shadowJobId, queueShadowIndex]);
 
   useEffect(() => {
     chatHistoryRef.current = chatMessages;
@@ -2413,6 +2458,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       window.localStorage.removeItem(MODEL_STORAGE_KEY);
     }
   }, [chatModel]);
+
+  useEffect(() => {
+    if (!navEvent || navEvent.stage !== 'navigated' || !navEvent.url) {
+      return;
+    }
+    lastNavEventRef.current = { url: navEvent.url, tabId: navEvent.tabId ?? null };
+    if (shadowModeEnabled) {
+      requestShadowCrawl(navEvent.tabId ?? null, navEvent.url, 'did-navigate');
+    }
+  }, [navEvent, shadowModeEnabled]);
 
   useEffect(() => {
     void refreshModels();
@@ -2521,6 +2576,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         onOpenCommand={() => setCommandOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
+      <NavProgressHud />
       <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="font-semibold text-foreground">Shadow mode</span>
@@ -2543,6 +2599,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           <Badge variant="outline">Pending {pendingDocs.length}</Badge>
         </div>
         <div className="flex items-center gap-2">
+          {!shadowModeEnabled ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleManualShadowCrawl}
+              disabled={shadowConfigLoading || shadowConfigSaving}
+            >
+              Crawl this page
+            </Button>
+          ) : null}
           <Switch
             checked={shadowModeEnabled}
             onCheckedChange={handleShadowToggle}

@@ -1,13 +1,11 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
 import { AppShell } from "@/components/app-shell";
-import { extractPage } from "@/lib/api";
-import type { PageExtractResponse } from "@/lib/types";
 
-interface WorkspacePageProps {
-  searchParams?: Record<string, string | string[] | undefined>;
-}
-
-function sanitizeUrl(raw: string | null | undefined): string | null {
-  if (typeof raw !== "string") {
+function sanitizeUrl(raw: string | null): string | null {
+  if (!raw) {
     return null;
   }
   const trimmed = raw.trim();
@@ -29,21 +27,13 @@ function sanitizeUrl(raw: string | null | undefined): string | null {
   return null;
 }
 
-async function fetchInitialContext(url: string | null): Promise<PageExtractResponse | null> {
-  if (!url) {
-    return null;
-  }
-  try {
-    return await extractPage(url, { vision: false });
-  } catch {
-    return null;
-  }
-}
+export default function WorkspacePage() {
+  const [initialUrl, setInitialUrl] = useState<string | null>(null);
 
-export default async function WorkspacePage({ searchParams }: WorkspacePageProps) {
-  const rawUrl = Array.isArray(searchParams?.url) ? searchParams?.url[0] : searchParams?.url;
-  const initialUrl = sanitizeUrl(rawUrl);
-  const initialContext = await fetchInitialContext(initialUrl);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setInitialUrl(sanitizeUrl(params.get("url")));
+  }, []);
 
-  return <AppShell initialUrl={initialUrl ?? undefined} initialContext={initialContext} />;
+  return <AppShell initialUrl={initialUrl ?? undefined} initialContext={null} />;
 }

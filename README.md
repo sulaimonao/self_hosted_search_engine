@@ -187,14 +187,36 @@ watchdog behaviour:
 BACKEND_RELOAD=1 make run
 ```
 
-Launch the frontend in a separate terminal (remember to export
-`NEXT_PUBLIC_API_BASE_URL` when pointing at a remote API — omit it to follow
-`BACKEND_PORT` locally):
+### Desktop app (Electron + Next.js)
+
+Shadow mode can now run inside a chromium shell without relying on Safari or Chrome.
+Start the API in one terminal, then launch the desktop wrapper from another:
+
+```bash
+make run  # or: BACKEND_PORT=5050 make run
+
+cd frontend
+npm run app:dev
+```
+
+The command waits for the Next.js dev server and opens an Electron window that
+proxies `http://localhost:3100`. Navigation events trigger shadow crawls when
+the in-app toggle is enabled, and progress updates are surfaced via the HUD on
+the desktop chrome. The renderer still proxies all `/api/*` calls to the Flask
+backend, so keep the API running in the background.
+
+### Build desktop installers
+
+To generate production-ready installers for macOS, Windows, and Linux, run:
 
 ```bash
 cd frontend
-npm run dev -- --hostname 0.0.0.0 --port 3100
+npm run build:desktop
 ```
+
+The script performs a static export (`next export`) and then packages the
+Electron app with `electron-builder`. Artifacts are written to `frontend/dist/`
+and include DMG (macOS), NSIS (Windows), and AppImage/deb (Linux) targets.
 
 ### Crawling, indexing, and searching
 

@@ -42,13 +42,17 @@ Remember to export `NEXT_PUBLIC_API_BASE_URL` when running standalone.
 ## Available scripts
 
 ```bash
-npm run dev        # start Next.js dev server
-npm run build      # production build
-npm run start      # serve the production build
-npm run lint       # ESLint (includes TypeScript checks)
+npm run dev           # start Next.js dev server
+npm run app:dev       # Next.js dev server + Electron wrapper
+npm run electron      # only the Electron shell (expects dev server on :3100)
+npm run build         # production Next.js build
+npm run build:web     # Next.js static export (used by the desktop build)
+npm run build:desktop # package Electron app via electron-builder
+npm run start         # serve the production build
+npm run lint          # ESLint (includes TypeScript checks)
 ```
 
-> The dev UI listens on `http://localhost:3100` (or `http://127.0.0.1:3100`). Use either host as needed when proxying requests to the backend.
+> The dev UI listens on `http://localhost:3100` (or `http://127.0.0.1:3100`). Use either host as needed when proxying requests to the backend. The desktop shell reads the same port via `APP_URL` and defaults to `http://localhost:3100` in development.
 
 ## Environment variables
 

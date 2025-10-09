@@ -24,6 +24,8 @@ import type {
   PageExtractResponse,
   ShadowConfig,
   ShadowStatus,
+  ShadowStatusDoc,
+  ShadowStatusError,
   DiscoveryPreview,
   DiscoveryItem,
   PendingDocument,
@@ -95,7 +97,7 @@ function tryParseJson(text: string): Record<string, unknown> | null {
   return null;
 }
 
-const SHADOW_STATES = new Set(["idle", "queued", "running", "done", "error"]);
+const SHADOW_STATES = new Set(['queued', 'running', 'done', 'error']);
 
 export interface DiscoverySubscription {
   close: () => void;
@@ -118,45 +120,151 @@ export interface ShadowSnapshotRequest {
 
 function normalizeShadowStatus(
   payload: Record<string, unknown>,
-  fallbackUrl: string,
+  fallback: { url?: string; jobId?: string } = {},
 ): ShadowStatus {
-  const url = typeof payload.url === "string" && payload.url.trim().length > 0 ? payload.url.trim() : fallbackUrl;
-  const rawState = typeof payload.state === "string" ? payload.state.trim().toLowerCase() : "idle";
-  const state = SHADOW_STATES.has(rawState) ? (rawState as ShadowStatus["state"]) : "idle";
+  const fallbackUrl = typeof fallback.url === 'string' ? fallback.url : '';
+  const fallbackJobId = typeof fallback.jobId === 'string' ? fallback.jobId : '';
+  const urlRaw =
+    typeof payload.url === 'string' && payload.url.trim().length > 0
+      ? payload.url.trim()
+      : fallbackUrl;
   const jobIdRaw =
-    typeof payload.job_id === "string"
-      ? payload.job_id.trim()
-      : typeof payload.jobId === "string"
+    typeof payload.jobId === 'string' && payload.jobId.trim().length > 0
       ? payload.jobId.trim()
-      : "";
-  const jobId = jobIdRaw.length > 0 ? jobIdRaw : undefined;
-  const title = typeof payload.title === "string" ? payload.title : null;
-  const chunks = coerceNumber(payload.chunks);
-  const error = typeof payload.error === "string" ? payload.error : null;
-  const errorKind = typeof payload.error_kind === "string" ? payload.error_kind : null;
-  const updatedAt = coerceNumber(payload.updated_at ?? payload.updatedAt) ?? undefined;
-  const phase = typeof payload.phase === "string" ? payload.phase : undefined;
-  const statusMessageRaw =
-    typeof payload.status_message === "string"
-      ? payload.status_message
-      : typeof payload.message === "string"
-      ? payload.message
+      : typeof payload.job_id === 'string' && payload.job_id.trim().length > 0
+      ? payload.job_id.trim()
+      : fallbackJobId;
+  if (!jobIdRaw) {
+    throw new Error('shadow status missing jobId');
+  }
+  const phaseRaw = typeof payload.phase === 'string' ? payload.phase.trim() : '';
+  const phase = phaseRaw || 'queued';
+  const stateRaw = typeof payload.state === 'string' ? payload.state.trim().toLowerCase() : '';
+  const state: ShadowStatus['state'] = (() => {
+    if (SHADOW_STATES.has(stateRaw)) {
+      return stateRaw as ShadowStatus['state'];
+    }
+    if (phase === 'queued') return 'queued';
+    if (phase === 'done' || phase === 'indexed') return 'done';
+    if (phase === 'error' || phase === 'failed') return 'error';
+    return 'running';
+  })();
+  let message: string | null = null;
+  const details = payload.details;
+  if (typeof details === 'string' && details.trim().length > 0) {
+    message = details.trim();
+  } else if (details && typeof details === 'object') {
+    const candidate = (details as Record<string, unknown>).message;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      message = candidate.trim();
+    }
+  }
+  if (!message) {
+    const messageRaw =
+      typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.status_message === 'string'
+        ? payload.status_message
+        : null;
+    if (messageRaw && messageRaw.trim().length > 0) {
+      message = messageRaw.trim();
+    }
+  }
+  let progressFraction: number | null = null;
+  const progressValue =
+    typeof payload.progress === 'number'
+      ? payload.progress
+      : details && typeof details === 'object' && typeof (details as Record<string, unknown>).progress === 'number'
+      ? ((details as Record<string, unknown>).progress as number)
       : null;
-  const pendingEmbedding = coerceBoolean(payload.pending_embedding ?? false);
-
+  if (typeof progressValue === 'number') {
+    progressFraction = progressValue > 1 ? Math.min(1, progressValue / 100) : Math.max(0, progressValue);
+  }
+  const eta = coerceNumber(payload.eta ?? payload.eta_seconds ?? payload.etaSeconds);
+  const updatedAt = coerceNumber(payload.updated_at ?? payload.updatedAt) ?? null;
+  const docsSource = Array.isArray(payload.docs) ? (payload.docs as Record<string, unknown>[]) : [];
+  const docs = docsSource
+    .map((doc, index) => {
+      const id = typeof doc.id === 'string' && doc.id.trim().length > 0 ? doc.id.trim() : `${jobIdRaw}-doc-${index}`;
+      const title =
+        typeof doc.title === 'string' && doc.title.trim().length > 0
+          ? doc.title.trim()
+          : typeof doc.name === 'string' && doc.name.trim().length > 0
+          ? doc.name.trim()
+          : typeof doc.url === 'string' && doc.url.trim().length > 0
+          ? doc.url.trim()
+          : 'Captured document';
+      const tokens = coerceNumber(doc.tokens ?? doc.length ?? doc.size) ?? 0;
+      return { id, title, tokens } as ShadowStatusDoc;
+    })
+    .filter(Boolean);
+  const errorsSource = Array.isArray(payload.errors) ? (payload.errors as Record<string, unknown>[]) : [];
+  const errors = errorsSource
+    .map((item) => {
+      const stage = typeof item.stage === 'string' && item.stage.trim().length > 0 ? item.stage.trim() : phase;
+      const text = typeof item.message === 'string' && item.message.trim().length > 0 ? item.message.trim() : stage;
+      return { stage, message: text } as ShadowStatusError;
+    })
+    .filter(Boolean);
+  if (errors.length === 0) {
+    const fallbackError =
+      typeof payload.error === 'string'
+        ? payload.error
+        : typeof payload.error_message === 'string'
+        ? payload.error_message
+        : null;
+    if (fallbackError && fallbackError.trim()) {
+      errors.push({ stage: phase, message: fallbackError.trim() });
+    }
+  }
+  const metricsRaw =
+    payload.metrics && typeof payload.metrics === 'object'
+      ? (payload.metrics as Record<string, unknown>)
+      : undefined;
+  const metrics = metricsRaw
+    ? {
+        fetch_ms: coerceNumber(metricsRaw.fetch_ms ?? metricsRaw.fetchMs) ?? undefined,
+        extract_ms: coerceNumber(metricsRaw.extract_ms ?? metricsRaw.extractMs) ?? undefined,
+        embed_ms: coerceNumber(metricsRaw.embed_ms ?? metricsRaw.embedMs) ?? undefined,
+        index_ms: coerceNumber(metricsRaw.index_ms ?? metricsRaw.indexMs) ?? undefined,
+      }
+    : null;
+  const title =
+    typeof payload.title === 'string' && payload.title.trim().length > 0
+      ? payload.title.trim()
+      : docs.length > 0
+      ? docs[0].title
+      : urlRaw || null;
+  const chunks = coerceNumber(payload.chunks) ?? (docs.length > 0 ? docs.length : null);
+  const errorKind =
+    typeof payload.errorKind === 'string' && payload.errorKind.trim().length > 0
+      ? payload.errorKind.trim()
+      : typeof payload.error_kind === 'string' && payload.error_kind.trim().length > 0
+      ? payload.error_kind.trim()
+      : null;
+  const errorText =
+    typeof payload.error === 'string' && payload.error.trim().length > 0
+      ? payload.error.trim()
+      : errors.length > 0
+      ? errors[0].message
+      : null;
+  const pendingEmbedding = coerceBoolean(payload.pending_embedding ?? payload.pendingEmbedding ?? false);
   return {
-    url,
+    jobId: jobIdRaw,
+    url: urlRaw || undefined,
     state,
-    jobId,
-    job_id: jobId,
-    title,
-    chunks: typeof chunks === "number" ? chunks : null,
-    error,
-    error_kind: errorKind,
+    phase,
+    message,
+    etaSeconds: typeof eta === 'number' ? eta : null,
+    docs,
+    errors,
+    metrics,
     updatedAt,
-    updated_at: updatedAt,
-    phase: phase ?? null,
-    statusMessage: statusMessageRaw ?? null,
+    progress: progressFraction,
+    title,
+    chunks,
+    error: errorText,
+    errorKind,
     pendingEmbedding,
   };
 }
@@ -191,34 +299,55 @@ function normalizeShadowConfig(payload: Record<string, unknown>): ShadowConfig {
   };
 }
 
-export async function queueShadowIndex(url: string): Promise<ShadowStatus> {
+export interface ShadowQueueOptions {
+  tabId?: number | null;
+  reason?: string;
+}
+
+export async function queueShadowIndex(url: string, options: ShadowQueueOptions = {}): Promise<ShadowStatus> {
   const normalized = url.trim();
   if (!normalized) {
-    throw new Error("URL is required");
+    throw new Error('URL is required');
+  }
+  const body: Record<string, unknown> = { url: normalized };
+  if (typeof options.tabId === 'number') {
+    body.tabId = options.tabId;
+  }
+  if (typeof options.reason === 'string' && options.reason.trim().length > 0) {
+    body.reason = options.reason.trim();
   }
 
-  const response = await fetch(api("/api/shadow/queue"), {
-    method: "POST",
+  const response = await fetch(api('/api/shadow/crawl'), {
+    method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ url: normalized }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Shadow queue failed (${response.status})`);
+    throw new Error(message || `Shadow crawl failed (${response.status})`);
   }
 
   const payload = (await response.json()) as Record<string, unknown>;
-  return normalizeShadowStatus(payload, normalized);
+  const jobIdValue =
+    typeof payload.jobId === 'string' && payload.jobId.trim().length > 0
+      ? payload.jobId.trim()
+      : typeof payload.job_id === 'string' && payload.job_id.trim().length > 0
+      ? payload.job_id.trim()
+      : undefined;
+  return normalizeShadowStatus(
+    { ...payload, jobId: jobIdValue ?? payload.jobId ?? payload.job_id, url: payload.url ?? normalized },
+    { url: normalized, jobId: jobIdValue },
+  );
 }
 
-export async function fetchShadowStatus(url: string): Promise<ShadowStatus> {
-  const normalized = url.trim();
-  if (!normalized) {
-    throw new Error("URL is required");
+export async function fetchShadowStatus(jobId: string): Promise<ShadowStatus> {
+  const trimmed = jobId.trim();
+  if (!trimmed) {
+    throw new Error('jobId is required');
   }
 
-  const params = new URLSearchParams({ url: normalized });
+  const params = new URLSearchParams({ jobId: trimmed });
   const response = await fetch(api(`/api/shadow/status?${params.toString()}`));
   if (!response.ok) {
     const message = await response.text();
@@ -226,7 +355,7 @@ export async function fetchShadowStatus(url: string): Promise<ShadowStatus> {
   }
 
   const payload = (await response.json()) as Record<string, unknown>;
-  return normalizeShadowStatus(payload, normalized);
+  return normalizeShadowStatus(payload, { jobId: trimmed });
 }
 
 export async function fetchShadowConfig(): Promise<ShadowConfig> {
@@ -395,6 +524,7 @@ export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Pro
   if (!response.ok) {
     throw new Error((payload.error as string) || text || `Snapshot failed (${response.status})`);
   }
+  const documentPayload = (payload.document ?? {}) as Record<string, unknown>;
   const artifacts = Array.isArray(payload.artifacts) ? (payload.artifacts as Record<string, unknown>[]) : [];
   const normalizedArtifacts = artifacts.map((artifact) => ({
     kind: typeof artifact.kind === "string" ? artifact.kind : "artifact",
@@ -409,11 +539,11 @@ export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Pro
     ok: coerceBoolean(payload.ok ?? true),
     policy: normalizeShadowPolicy((payload.policy ?? {}) as Record<string, unknown>),
     document: {
-      id: String((payload.document ?? {}).id ?? ""),
-      url: String((payload.document ?? {}).url ?? request.url),
-      canonical_url: String((payload.document ?? {}).canonical_url ?? request.url),
-      domain: String((payload.document ?? {}).domain ?? ""),
-      observed_at: String((payload.document ?? {}).observed_at ?? new Date().toISOString()),
+      id: String(documentPayload.id ?? ""),
+      url: String(documentPayload.url ?? request.url),
+      canonical_url: String(documentPayload.canonical_url ?? request.url),
+      domain: String(documentPayload.domain ?? ""),
+      observed_at: String(documentPayload.observed_at ?? new Date().toISOString()),
     },
     artifacts: normalizedArtifacts,
     rag_indexed: coerceBoolean(payload.rag_indexed),

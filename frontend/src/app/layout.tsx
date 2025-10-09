@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
+
+import { NavProgressProvider } from "@/app/nav-progress-provider";
+
 import "./globals.css";
 
 const inter = Inter({
@@ -25,7 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} ${robotoMono.variable} antialiased`}>
-        {children}
+        <NavProgressProvider>{children}</NavProgressProvider>
       </body>
     </html>
   );

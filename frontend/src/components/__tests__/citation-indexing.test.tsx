@@ -5,6 +5,7 @@ import {
   indexCitationUrls,
   type CitationIndexStatus,
 } from "@/components/app-shell";
+import type { ShadowStatus } from "@/lib/types";
 
 describe("collectUniqueHttpCitations", () => {
   it("filters to unique HTTP(S) URLs", () => {
@@ -28,7 +29,24 @@ describe("collectUniqueHttpCitations", () => {
 
 describe("indexCitationUrls", () => {
   const createOptions = () => {
-    const queueShadowIndex = vi.fn().mockResolvedValue(undefined);
+    const queueShadowIndex = vi.fn(async (url: string): Promise<ShadowStatus> => ({
+      jobId: `job-${url}`,
+      state: 'queued',
+      phase: 'queued',
+      docs: [],
+      errors: [],
+      metrics: null,
+      url,
+      etaSeconds: null,
+      progress: null,
+      title: null,
+      chunks: null,
+      error: null,
+      errorKind: null,
+      pendingEmbedding: false,
+      message: null,
+      updatedAt: null,
+    }));
     const handleQueueAdd = vi.fn().mockResolvedValue(undefined);
     const setStatus = vi.fn<
       (url: string, status: CitationIndexStatus, error?: string | null) => void
