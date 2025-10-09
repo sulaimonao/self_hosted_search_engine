@@ -203,19 +203,40 @@ export interface JobLogEvent {
   timestamp: string;
 }
 
+export interface ShadowStatusDoc {
+  id: string;
+  title: string;
+  tokens: number;
+}
+
+export interface ShadowStatusError {
+  stage: string;
+  message: string;
+}
+
+export interface ShadowStatusMetrics {
+  fetch_ms?: number;
+  extract_ms?: number;
+  embed_ms?: number;
+  index_ms?: number;
+}
+
 export interface ShadowStatus {
-  url: string;
-  state: "idle" | "queued" | "running" | "done" | "error";
-  jobId?: string;
-  job_id?: string;
+  jobId: string;
+  url?: string | null;
+  state: "queued" | "running" | "done" | "error";
+  phase: string;
+  message?: string | null;
+  etaSeconds?: number | null;
+  docs: ShadowStatusDoc[];
+  errors: ShadowStatusError[];
+  metrics?: ShadowStatusMetrics | null;
+  updatedAt?: number | null;
+  progress?: number | null;
   title?: string | null;
   chunks?: number | null;
   error?: string | null;
-  error_kind?: string | null;
-  updatedAt?: number;
-  updated_at?: number;
-  phase?: string | null;
-  statusMessage?: string | null;
+  errorKind?: string | null;
   pendingEmbedding?: boolean;
 }
 

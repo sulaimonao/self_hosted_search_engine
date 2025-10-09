@@ -6,7 +6,7 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import trafilatura
 from flask import Flask
@@ -40,6 +40,9 @@ class ShadowJobOutcome:
     title: str
     chunks: int
     pending_embedding: bool
+    doc_id: str | None = None
+    tokens: int | None = None
+    metrics: Dict[str, float] | None = None
 
 
 class ShadowIndexer:
@@ -60,19 +63,148 @@ class ShadowIndexer:
         self._state_db = state_db
         self._lock = threading.RLock()
         self._states: Dict[str, Dict[str, Any]] = {}
+        self._job_registry: Dict[str, Dict[str, Any]] = {}
+        self._recent_requests: Dict[str, tuple[str, float]] = {}
+        self._url_jobs: Dict[str, str] = {}
+        self._dedupe_window = 5.0
         stored_enabled = state_db.get_setting("shadow_enabled")
         if stored_enabled is not None:
             self._enabled = stored_enabled.strip().lower() in {"1", "true", "yes", "on"}
         else:
             self._enabled = bool(enabled)
         self._mode_updated_at = time.time()
+
+    def _dedupe_key(self, url: str, tab_id: int | None) -> str:
+        return f"{tab_id if tab_id is not None else 'global'}|{url}"
+
+    def _prune_recent(self, now: float) -> None:
+        expired = [key for key, (_, ts) in self._recent_requests.items() if now - ts > self._dedupe_window]
+        for key in expired:
+            self._recent_requests.pop(key, None)
+
+    def _set_job_status(self, job_id: str, **patch: Any) -> Dict[str, Any]:
+        with self._lock:
+            current = self._job_registry.get(job_id)
+            if current is None:
+                current = {
+                    "jobId": job_id,
+                    "state": "queued",
+                    "phase": "queued",
+                    "message": None,
+                    "etaSeconds": None,
+                    "docs": [],
+                    "errors": [],
+                    "metrics": {},
+                    "progress": None,
+                }
+            else:
+                current = dict(current)
+            metrics_patch = patch.pop("metrics", None)
+            docs_patch = patch.pop("docs", None)
+            errors_patch = patch.pop("errors", None)
+            for key, value in patch.items():
+                if value is not None or key in {"message", "etaSeconds", "reason", "pendingEmbedding"}:
+                    current[key] = value
+            if metrics_patch is not None:
+                base_metrics = dict(current.get("metrics") or {})
+                for key, value in metrics_patch.items():
+                    if value is not None:
+                        base_metrics[key] = value
+                current["metrics"] = base_metrics
+            if docs_patch is not None:
+                current["docs"] = docs_patch
+            if errors_patch is not None:
+                current["errors"] = errors_patch
+            current["updatedAt"] = time.time()
+            self._job_registry[job_id] = current
+            return dict(current)
+
+    def _status_from_db(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        job_id = str(record.get("job_id") or record.get("jobId") or "")
+        if not job_id:
+            raise ValueError("job_id_required")
+        phase = str(record.get("phase") or "queued")
+        steps_total = int(record.get("steps_total") or record.get("stepsTotal") or 0)
+        steps_completed = int(record.get("steps_completed") or record.get("stepsCompleted") or 0)
+        progress = None
+        if steps_total > 0:
+            progress = max(0.0, min(1.0, steps_completed / float(steps_total)))
+        eta_seconds = record.get("eta_seconds") or record.get("etaSeconds")
+        message = record.get("message")
+        state = record.get("state")
+        if not state:
+            if phase in {"done", "indexed"}:
+                state = "done"
+            elif phase in {"error", "failed"}:
+                state = "error"
+            elif phase == "queued":
+                state = "queued"
+            else:
+                state = "running"
+        payload = {
+            "jobId": job_id,
+            "url": record.get("url"),
+            "state": state,
+            "phase": phase,
+            "message": message,
+            "etaSeconds": eta_seconds,
+            "docs": [],
+            "errors": [],
+            "metrics": {},
+            "progress": progress,
+            "updatedAt": record.get("updated_at") or record.get("updatedAt"),
+        }
+        return payload
+
+    def job_status(self, job_id: str) -> Dict[str, Any] | None:
+        normalized = (job_id or "").strip()
+        if not normalized:
+            raise ValueError("job_id_required")
+        with self._lock:
+            snapshot = self._job_registry.get(normalized)
+            if snapshot is not None:
+                return dict(snapshot)
+        record = self._state_db.get_job_status(normalized)
+        if record:
+            status = self._status_from_db(record)
+            filtered = {k: v for k, v in status.items() if k != "jobId"}
+            self._set_job_status(normalized, **filtered)
+            status.setdefault("jobId", normalized)
+            return status
+        return None
+
+    def status_by_url(self, url: str) -> Dict[str, Any]:
+        normalized = self._normalize_url(url)
+        if not normalized:
+            raise ValueError("url_required")
+        with self._lock:
+            job_id = self._url_jobs.get(normalized)
+        if job_id:
+            status = self.job_status(job_id)
+            if status is not None:
+                return status
+        return {
+            "url": normalized,
+            "state": "idle",
+            "phase": "idle",
+            "docs": [],
+            "errors": [],
+            "metrics": {},
+            "jobId": None,
+        }
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
         if stored_enabled is None:
             state_db.set_setting("shadow_enabled", "true" if self._enabled else "false")
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def enqueue(self, url: str) -> Dict[str, Any]:
+    def enqueue(
+        self, url: str, *, tab_id: int | None = None, reason: str | None = None
+    ) -> Dict[str, Any]:
         normalized = self._normalize_url(url)
         if not normalized:
             raise ValueError("url_required")
@@ -80,9 +212,25 @@ class ShadowIndexer:
         if not self.enabled:
             raise RuntimeError("shadow_disabled")
 
+        now = time.time()
+        key = self._dedupe_key(normalized, tab_id)
         with self._lock:
+            self._prune_recent(now)
+            existing_recent = self._recent_requests.get(key)
+            if existing_recent:
+                job_id, ts = existing_recent
+                if now - ts < self._dedupe_window:
+                    snapshot = self._job_registry.get(job_id)
+                    if snapshot is not None:
+                        return dict(snapshot)
             existing = self._states.get(normalized)
             if existing and existing.get("state") in {"queued", "running"}:
+                job_id = existing.get("job_id") or existing.get("jobId")
+                if job_id:
+                    snapshot = self._job_registry.get(str(job_id))
+                    if snapshot is not None:
+                        self._recent_requests[key] = (str(job_id), now)
+                        return dict(snapshot)
                 return dict(existing)
 
         job_id_holder: Dict[str, str] = {}
@@ -96,18 +244,34 @@ class ShadowIndexer:
         job_id = self._runner.submit(task)
         job_id_holder["id"] = job_id
 
-        state = {
-            "url": normalized,
-            "state": "queued",
-            "job_id": job_id,
-            "updated_at": time.time(),
-            "phase": "queued",
-        }
-        state["jobId"] = job_id
-        state["updatedAt"] = state["updated_at"]
+        queued_state = self._set_job_status(
+            job_id,
+            url=normalized,
+            state="queued",
+            phase="queued",
+            message="Queued for shadow indexing",
+            etaSeconds=None,
+            docs=[],
+            errors=[],
+            metrics={},
+            progress=0.0,
+            reason=reason,
+        )
+        queued_state["tabId"] = tab_id
 
         with self._lock:
-            self._states[normalized] = state
+            self._states[normalized] = {
+                "url": normalized,
+                "state": "queued",
+                "job_id": job_id,
+                "jobId": job_id,
+                "updated_at": queued_state.get("updatedAt"),
+                "updatedAt": queued_state.get("updatedAt"),
+                "phase": "queued",
+                "tabId": tab_id,
+            }
+            self._url_jobs[normalized] = job_id
+            self._recent_requests[key] = (job_id, now)
 
         self._update_job_status(
             job_id,
@@ -115,20 +279,13 @@ class ShadowIndexer:
             phase="queued",
             message="Queued for shadow indexing",
             step=0,
-            started_at=state["updated_at"],
+            started_at=queued_state.get("updatedAt"),
         )
 
-        return dict(state)
+        return dict(queued_state)
 
     def status(self, url: str) -> Dict[str, Any]:
-        normalized = self._normalize_url(url)
-        if not normalized:
-            raise ValueError("url_required")
-        with self._lock:
-            state = self._states.get(normalized)
-            if state:
-                return dict(state)
-        return {"url": normalized, "state": "idle"}
+        return self.status_by_url(url)
 
     @property
     def enabled(self) -> bool:
@@ -294,11 +451,24 @@ class ShadowIndexer:
             state = dict(self._states.get(normalized, {"url": normalized}))
             state.update(patch)
             timestamp = time.time()
-            state.setdefault("updated_at", timestamp)
             state["updated_at"] = timestamp
-            state["updatedAt"] = state["updated_at"]
-            if "job_id" in state:
-                state["jobId"] = state["job_id"]
+            state["updatedAt"] = timestamp
+            job_identifier = state.get("job_id") or state.get("jobId")
+            if job_identifier:
+                job_id = str(job_identifier)
+                state["jobId"] = job_id
+                self._url_jobs[normalized] = job_id
+                message = state.get("status_message") or state.get("message")
+                job_patch = {
+                    "url": normalized,
+                    "state": state.get("state"),
+                    "phase": state.get("phase"),
+                    "message": message,
+                    "pendingEmbedding": state.get("pending_embedding"),
+                }
+                filtered = {k: v for k, v in job_patch.items() if v is not None}
+                if filtered:
+                    self._set_job_status(job_id, **filtered)
             self._states[normalized] = state
             return dict(state)
 
@@ -327,10 +497,38 @@ class ShadowIndexer:
             message=message,
             started_at=started_at,
         )
+        progress = None
+        if steps_total > 0:
+            progress = max(0.0, min(1.0, steps_completed / float(steps_total)))
+        if phase in {"queued"}:
+            state = "queued"
+        elif phase in {"indexed", "done"}:
+            state = "done"
+        elif phase in {"failed", "error"}:
+            state = "error"
+        else:
+            state = "running"
+        self._set_job_status(
+            job_id,
+            url=url,
+            phase=phase,
+            message=message,
+            state=state,
+            etaSeconds=eta_seconds,
+            progress=progress,
+            retries=retries,
+        )
         self._transition(url, {"phase": phase, "status_message": message, "job_id": job_id})
 
     def _fetch_and_index(self, url: str, job_id: str) -> ShadowJobOutcome:
-        title, text, metadata = self._fetch_with_playwright(url)
+        title, text, metadata, timing = self._fetch_with_playwright(url)
+        self._set_job_status(
+            job_id,
+            metrics={
+                "fetch_ms": timing.get("fetch_ms"),
+                "extract_ms": timing.get("extract_ms"),
+            },
+        )
         self._update_job_status(
             job_id,
             url=url,
@@ -348,11 +546,31 @@ class ShadowIndexer:
             message="Indexing document",
             step=3,
         )
+        embed_start = time.time()
         index_result: IndexResult = self._vector_index.upsert_document(
             text=text,
             url=url,
             title=cleaned_title,
             metadata=metadata,
+        )
+        embed_ms = (time.time() - embed_start) * 1000.0
+        tokens = len(text.split()) if text else 0
+        metrics = {
+            "fetch_ms": timing.get("fetch_ms"),
+            "extract_ms": timing.get("extract_ms"),
+            "embed_ms": embed_ms,
+            "index_ms": embed_ms,
+        }
+        docs_payload = [
+            {"id": index_result.doc_id, "title": cleaned_title, "tokens": tokens}
+        ]
+        self._set_job_status(
+            job_id,
+            metrics=metrics,
+            docs=docs_payload,
+            title=cleaned_title,
+            chunks=index_result.chunks,
+            pendingEmbedding=index_result.pending_embedding,
         )
         if index_result.pending_embedding:
             self._update_job_status(
@@ -380,9 +598,12 @@ class ShadowIndexer:
             title=cleaned_title,
             chunks=index_result.chunks,
             pending_embedding=index_result.pending_embedding,
+            doc_id=index_result.doc_id,
+            tokens=tokens,
+            metrics=metrics,
         )
 
-    def _fetch_with_playwright(self, url: str) -> tuple[str, str, Dict[str, Any]]:
+    def _fetch_with_playwright(self, url: str) -> tuple[str, str, Dict[str, Any], Dict[str, float]]:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(ignore_https_errors=True)
@@ -396,6 +617,9 @@ class ShadowIndexer:
             text = ""
             metadata: Dict[str, Any] = {}
             lang_value: Any = None
+            fetch_start = time.time()
+            fetch_ms = 0.0
+            extract_ms = 0.0
 
             try:
                 navigation_attempts = [
@@ -419,13 +643,14 @@ class ShadowIndexer:
                         page.mouse.wheel(0, 800)
                 page.wait_for_timeout(_SCROLL_DELAY_MS)
                 html = page.content()
+                fetch_ms = (time.time() - fetch_start) * 1000.0
                 page_title = page.title() or url
                 lang_value = page.evaluate("document.documentElement?.lang || null")
+                extract_start = time.time()
                 text, metadata = self._extract_text(html)
+                extract_ms = (time.time() - extract_start) * 1000.0
                 if not text.strip():
-                    fallback = page.evaluate(
-                        "document.body ? document.body.innerText : ''"
-                    )
+                    fallback = page.evaluate("document.body ? document.body.innerText : ''")
                     if isinstance(fallback, str):
                         text = fallback
             finally:
@@ -441,7 +666,8 @@ class ShadowIndexer:
             normalized_metadata.setdefault("lang", lang_value.strip())
         if not text.strip():
             raise RuntimeError("shadow_empty_text")
-        return page_title, text, normalized_metadata
+        metrics = {"fetch_ms": fetch_ms, "extract_ms": extract_ms}
+        return page_title, text, normalized_metadata, metrics
 
     def _extract_text(self, html: str) -> tuple[str, Dict[str, Any]]:
         metadata: Dict[str, Any] = {}

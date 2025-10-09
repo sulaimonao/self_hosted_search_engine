@@ -65,6 +65,22 @@ def _coerce_enabled(value) -> bool | None:
     return None
 
 
+def _parse_tab_id(value) -> int | None:
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed:
+            try:
+                return int(float(trimmed))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _policy_to_payload(policy: ShadowPolicy) -> dict[str, Any]:
     data = policy.to_dict()
     data["ttl_seconds"] = int(policy.ttl_days * 86400)
@@ -123,12 +139,41 @@ def queue_shadow():
     url = (payload.get("url") or "").strip()
     if not url:
         return jsonify({"error": "url_required"}), 400
+    tab_id = _parse_tab_id(payload.get("tabId"))
+    reason = payload.get("reason")
+    if isinstance(reason, str):
+        reason = reason.strip() or None
 
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
         return error_response
     try:
-        state = manager.enqueue(url)
+        state = manager.enqueue(url, tab_id=tab_id, reason=reason)
+    except ValueError:
+        return jsonify({"error": "url_required"}), 400
+    except RuntimeError as exc:
+        if str(exc) == "shadow_disabled":
+            return jsonify({"error": "shadow_disabled"}), 409
+        raise
+    return jsonify(state), 202
+
+
+@bp.post("/crawl")
+def crawl_shadow():
+    payload = request.get_json(silent=True) or {}
+    url = (payload.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url_required"}), 400
+    tab_id = _parse_tab_id(payload.get("tabId"))
+    reason = payload.get("reason")
+    if isinstance(reason, str):
+        reason = reason.strip() or None
+
+    manager, error_response = _manager_or_unavailable()
+    if error_response is not None:
+        return error_response
+    try:
+        state = manager.enqueue(url, tab_id=tab_id, reason=reason)
     except ValueError:
         return jsonify({"error": "url_required"}), 400
     except RuntimeError as exc:
@@ -140,14 +185,23 @@ def queue_shadow():
 
 @bp.get("/status")
 def shadow_status():
-    url = (request.args.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "url_required"}), 400
+    job_id = (request.args.get("jobId") or "").strip()
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
         return error_response
-    state = manager.status(url)
-    return jsonify(state), 200
+    if job_id:
+        try:
+            status = manager.job_status(job_id)
+        except ValueError:
+            return jsonify({"error": "job_id_required"}), 400
+        if status is None:
+            return jsonify({"error": "not_found"}), 404
+        return jsonify(status), 200
+    url = (request.args.get("url") or "").strip()
+    if url:
+        status = manager.status_by_url(url)
+        return jsonify(status), 200
+    return jsonify({"error": "job_id_required"}), 400
 
 
 @bp.get("/policy")

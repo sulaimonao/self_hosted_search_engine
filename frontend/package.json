@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3100",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "electron": "wait-on http://localhost:3100 && cross-env NODE_ENV=development APP_URL=http://localhost:3100 electron electron/main.js",
+    "app:dev": "npm-run-all -p dev electron",
+    "build:web": "next build",
+    "build:desktop": "npm run build:web && electron-builder"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",
@@ -48,6 +52,33 @@
     "lucide-react": "^0.379.0",
     "tailwind-merge": "^3.3.1",
     "typescript": "^5.4.5",
-    "vitest": "^1.5.3"
+    "vitest": "^1.5.3",
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3",
+    "cross-env": "^7.0.3",
+    "npm-run-all": "^4.1.5",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.personal.searchengine",
+    "files": [
+      "electron/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
   }
 }
