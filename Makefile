@@ -3,6 +3,7 @@
 
 .PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
 .PHONY: desktop desktop-build dev-desktop
+.PHONY: api web
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
@@ -120,6 +121,24 @@ stop:
 		BACKEND_CMD_PATTERN="$(BACKEND_CMD_PATTERN)" \
 		FRONTEND_CMD_PATTERN="$(FRONTEND_CMD_PATTERN)" \
 		bash scripts/stop_all.sh
+
+api:
+	@echo "▶ Starting API (Flask)…"
+	@if [ -x "$(VENV_PY)" ]; then \
+	  BACKEND_PORT="$(BACKEND_PORT)" PYTHONPATH="$(CURDIR)" "$(VENV_PY)" -m backend.app; \
+	else \
+	  echo "⚠️  Using system python (virtualenv missing)"; \
+	  BACKEND_PORT="$(BACKEND_PORT)" PYTHONPATH="$(CURDIR)" python3 -m backend.app; \
+	fi
+
+web:
+	@echo "▶ Starting Frontend (Next.js)…"
+	@NEXT_PUBLIC_API_BASE_URL="$$NEXT_PUBLIC_API_BASE_URL"; \
+	if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
+	  NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:$(BACKEND_PORT)"; \
+	fi; \
+	NEXT_PUBLIC_API_BASE_URL="$$NEXT_PUBLIC_API_BASE_URL" \
+		npm --prefix frontend run dev -- --hostname localhost --port $(FRONTEND_PORT)
 
 logs:
 	@echo "— Flask —"; pgrep -fl "$(BACKEND_CMD_PATTERN)" || echo "(no backend process)"
