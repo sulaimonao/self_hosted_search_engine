@@ -19,6 +19,8 @@ _MAIN_0.toc
 /data/telemetry/
 *.py
 *.json
+!package.json
+!package-lock.json
 !server/json_logger.py
 !backend/app/api/llm.py
 !backend/app/api/extract.py

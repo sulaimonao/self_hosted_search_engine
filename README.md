@@ -152,6 +152,31 @@ make stop || true
 BACKEND_PORT=5050 make dev
 ```
 
+### Run as Desktop App
+
+Electron support lets you work in a native window without opening Safari/Chrome.
+
+```bash
+npm install
+npm run desktop
+```
+
+The `desktop` script boots the Flask API on port `5050`, the Next.js renderer on
+port `3100`, waits for the UI to become reachable, and then launches Electron
+with live reload (`electronmon`) enabled. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to
+shut everything down.
+
+Build a distributable macOS app bundle with:
+
+```bash
+npm run build:desktop
+```
+
+Electron Builder drops the packaged app under `dist/`. The build stage runs the
+Next.js production build first, then reuses those assets when assembling the
+binary. Override `FRONTEND_URL` or `BACKEND_PORT` while running the desktop
+script if you need alternative endpoints.
+
 Open the browser at `http://localhost:3100` (not `127.0.0.1`) to use the UI and
 avoid dev-only cross-origin warnings. Make sure `ollama` is listening on
 `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
