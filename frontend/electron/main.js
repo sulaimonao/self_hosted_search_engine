@@ -16,13 +16,11 @@ function isShadowModeEnabled(win) {
 }
 
 function resolveAppUrl() {
-  const isDev = process.env.NODE_ENV !== 'production';
-  if (process.env.APP_URL) {
-    return process.env.APP_URL;
-  }
-  return isDev
-    ? 'http://localhost:3100'
-    : `file://${path.join(__dirname, '../out/index.html')}`;
+  const defaultUrl = 'http://localhost:3100';
+  const envUrl = [process.env.APP_URL, process.env.ELECTRON_START_URL].find(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
+  return envUrl ?? defaultUrl;
 }
 
 function loadAppUrl(win) {

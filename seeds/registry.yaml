@@ -186,6 +186,13 @@ directories:
       strategy: crawl
       trust: medium
     sources:
+    - id: workspace-bbc-com
+      entrypoints:
+      - https://bbc.com
+      scope: page
+      notes: null
+      created_at: '2025-10-10T03:50:25.309241+00:00'
+      updated_at: '2025-10-10T03:50:25.309241+00:00'
     - id: workspace-wikipedia-com
       entrypoints:
       - https://wikipedia.com

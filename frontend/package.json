@@ -3,14 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev -p 3100",
+    "dev:desktop": "cross-env ELECTRON_START_URL=http://localhost:3100 npm-run-all -p dev electron",
     "test": "vitest run",
     "test:watch": "vitest",
-    "electron": "wait-on http://localhost:3100 && cross-env NODE_ENV=development APP_URL=http://localhost:3100 electron electron/main.js",
-    "app:dev": "npm-run-all -p dev electron",
+    "electron": "wait-on http://localhost:3100 && cross-env NODE_ENV=development APP_URL=http://localhost:3100 electron .",
+    "app:dev": "npm run dev:desktop",
     "build:web": "next build",
+    "start:web": "next start -p 3100",
     "build:desktop": "npm run build:web && electron-builder",
+    "desktop": "npm-run-all -p start:web electron",
     "lint": "next lint"
   },
   "dependencies": {
@@ -64,8 +68,11 @@
     "appId": "com.personal.searchengine",
     "files": [
       "electron/**/*",
-      "out/**/*",
+      ".next/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "electron/**/*"
     ],
     "mac": {
       "category": "public.app-category.productivity"
