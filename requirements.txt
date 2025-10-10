@@ -23,3 +23,5 @@ tiktoken==0.7.0
 numpy==1.26.4
 watchdog==4.0.1
 pdfminer.six==20231228
+pydantic==2.9.2
+prometheus-client==0.20.0

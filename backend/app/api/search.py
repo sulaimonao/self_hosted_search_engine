@@ -11,6 +11,7 @@ from typing import Any, cast
 from urllib.parse import urlunparse
 
 from flask import Blueprint, current_app, g, jsonify, request
+from pydantic import ValidationError
 from markupsafe import escape
 
 from engine.agents.rag import RagAgent
@@ -29,6 +30,7 @@ from observability import start_span
 
 from .shipit_history import append_history
 from .shipit_crawl import create_crawl_job
+from .schemas import SearchQueryParams, SearchResponsePayload
 
 
 def _shipit_search_payload(query: str, page: int, size: int) -> tuple[int, list[dict[str, Any]], dict[str, list[list[Any]]]]:
@@ -67,12 +69,6 @@ bp = Blueprint("search_api", __name__, url_prefix="/api")
 
 
 _EMBEDDING_ERROR_CODE = "embedding_unavailable"
-
-
-def _normalize_bool(value: str | None) -> bool:
-    if value is None:
-        return False
-    return value.lower() in {"1", "true", "on", "yes"}
 
 
 def _format_snippet(text: str, width: int = 320) -> str:
@@ -565,22 +561,22 @@ def crawl_validation_endpoint():
 
 @bp.get("/search")
 def search_endpoint():
-    query = (request.args.get("q") or "").strip()
-    shipit_mode = request.args.get("shipit")
-    if shipit_mode:
-        if not query:
-            return jsonify({"ok": False, "error": "query_required"}), 400
-        page_raw = request.args.get("page", "1")
-        size_raw = request.args.get("size", "10")
-        try:
-            page = max(1, int(page_raw))
-        except (TypeError, ValueError):
-            page = 1
-        try:
-            size = max(1, min(int(size_raw), 50))
-        except (TypeError, ValueError):
-            size = 10
-        total, hits, facets = _shipit_search_payload(query, page, size)
+    raw_args = {
+        "query": request.args.get("q"),
+        "llm": request.args.get("llm"),
+        "model": request.args.get("model"),
+        "page": request.args.get("page"),
+        "size": request.args.get("size"),
+        "shipit": request.args.get("shipit"),
+    }
+    try:
+        params = SearchQueryParams.model_validate(raw_args)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 400
+
+    query = params.q
+    if params.shipit:
+        total, hits, facets = _shipit_search_payload(query, params.page, params.size)
         append_history(
             {
                 "id": f"shipit-{hashlib.md5(query.encode('utf-8')).hexdigest()}",
@@ -592,18 +588,16 @@ def search_endpoint():
             "ok": True,
             "data": {
                 "total": total,
-                "page": page,
-                "size": size,
+                "page": params.page,
+                "size": params.size,
                 "facets": facets,
                 "hits": hits,
             },
         }
         return jsonify(payload)
-    if not query:
-        return jsonify({"error": "Missing 'q' parameter"}), 400
 
-    llm_enabled = _normalize_bool(request.args.get("llm"))
-    llm_model = (request.args.get("model") or "").strip() or None
+    llm_enabled = params.llm
+    llm_model = params.model
     with start_span(
         "http.search",
         attributes={
@@ -660,7 +654,13 @@ def search_endpoint():
                         payload["status"] = "focused_crawl_running"
                 if llm_model:
                     payload["llm_model"] = llm_model
-            return jsonify(payload)
+                try:
+                    response_payload = SearchResponsePayload.model_validate(payload)
+                    return jsonify(response_payload.model_dump(exclude_none=True))
+                except ValidationError as exc:
+                    current_app.logger.debug("search payload validation failed", exc_info=True)
+                    return jsonify(payload)
+            return jsonify({"error": "search_service_unavailable"}), 503
         else:
             store = cast(VectorStore, store)
             embedder = cast(OllamaEmbedder, embedder)

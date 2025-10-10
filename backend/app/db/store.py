@@ -99,6 +99,14 @@ class AppStateDB:
                 """,
                 (job_id, seed, query, normalized_path),
             )
+    def pending_crawl_jobs(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT id, query, seed, status FROM crawl_jobs WHERE status IN ('queued','running')"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
 
     def update_crawl_status(self, job_id: str, status: str, *, stats: Mapping[str, Any] | None = None,
                              error: str | None = None, preview: Iterable[Mapping[str, Any]] | None = None,

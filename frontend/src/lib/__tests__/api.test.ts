@@ -8,7 +8,7 @@ import {
   fetchShadowConfig,
   updateShadowConfig,
 } from "@/lib/api";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, ChatStreamEvent } from "@/lib/types";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -51,28 +51,39 @@ describe("fetchModelInventory", () => {
 });
 
 describe("sendChat", () => {
-  it("sends the selected model and returns trace info", async () => {
+  it("sends the selected model, streams updates, and returns trace info", async () => {
     const history: ChatMessage[] = [];
-    const response = new Response(
+    const events: ChatStreamEvent[] = [];
+    const streamBody = [
+      JSON.stringify({ type: "metadata", attempt: 1, model: "gemma3", trace_id: "req_test" }),
+      JSON.stringify({ type: "delta", answer: "Hi!" }),
       JSON.stringify({
-        reasoning: "Because",
-        answer: "Hi!",
-        citations: ["https://example.com"],
-        model: "gemma3",
-        trace_id: "req_test",
-      }),
-      {
-        status: 200,
-        headers: {
-          "X-Request-Id": "req_test",
-          "X-LLM-Model": "gemma3",
+        type: "complete",
+        payload: {
+          reasoning: "Because",
+          answer: "Hi!",
+          citations: ["https://example.com"],
+          model: "gemma3",
+          trace_id: "req_test",
         },
+      }),
+      "",
+    ].join("\n");
+    const response = new Response(streamBody, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "X-Request-Id": "req_test",
+        "X-LLM-Model": "gemma3",
       },
-    );
+    });
 
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = init?.body as string;
       const payload = JSON.parse(body);
+      expect(init?.headers && (init.headers as Record<string, string>)["Accept"]).toBe(
+        "application/x-ndjson",
+      );
       expect(payload.model).toBe("gpt-oss");
       expect(payload.url).toBe("https://example.com");
       expect(payload.client_timezone).toBe("America/Los_Angeles");
@@ -90,8 +101,11 @@ describe("sendChat", () => {
       serverTime: "2024-01-01T12:00:00",
       serverTimezone: "UTC-5",
       serverUtc: "2024-01-01T17:00:00Z",
+      onStreamEvent: (event) => events.push(event),
     });
 
+    expect(events[0]?.type).toBe("metadata");
+    expect(events.some((event) => event.type === "delta")).toBe(true);
     expect(result.traceId).toBe("req_test");
     expect(result.model).toBe("gemma3");
     expect(result.payload.answer).toBe("Hi!");

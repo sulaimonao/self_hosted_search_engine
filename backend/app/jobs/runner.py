@@ -17,19 +17,27 @@ from typing import Any, Callable, Dict, Optional
 class JobRunner:
     """Simple single-worker queue that persists structured logs per job."""
 
-    def __init__(self, logs_dir: Path) -> None:
+    def __init__(self, logs_dir: Path, *, worker_count: int = 2) -> None:
         self.logs_dir = logs_dir
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._queue: "queue.Queue[tuple[str, Callable[[], Any]]]" = queue.Queue()
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self._worker = threading.Thread(target=self._worker_loop, name="job-runner", daemon=True)
-        self._worker.start()
+        self._worker_count = max(1, int(worker_count))
+        self._workers: list[threading.Thread] = []
+        for index in range(self._worker_count):
+            worker = threading.Thread(
+                target=self._worker_loop,
+                name=f"job-runner-{index}",
+                daemon=True,
+            )
+            worker.start()
+            self._workers.append(worker)
 
-    def submit(self, job: Callable[[], Any]) -> str:
+    def submit(self, job: Callable[[], Any], *, job_id: str | None = None) -> str:
         """Enqueue a job for background execution and return its identifier."""
 
-        job_id = uuid.uuid4().hex
+        job_id = job_id or uuid.uuid4().hex
         log_path = self.logs_dir / f"{job_id}.log"
         with self._lock:
             self._jobs[job_id] = {

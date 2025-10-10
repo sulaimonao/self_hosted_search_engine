@@ -22,6 +22,7 @@ import type {
   ConfiguredModels,
   LlmHealth,
   PageExtractResponse,
+  ChatStreamEvent,
   ShadowConfig,
   ShadowStatus,
   ShadowStatusDoc,
@@ -905,6 +906,7 @@ export interface ChatSendOptions {
   serverTime?: string | null;
   serverTimezone?: string | null;
   serverUtc?: string | null;
+  onStreamEvent?: (event: ChatStreamEvent) => void;
 }
 
 export interface ChatSendResult {
@@ -913,14 +915,106 @@ export interface ChatSendResult {
   model: string | null;
 }
 
+interface ChatStreamConsumeOptions {
+  onEvent?: (event: ChatStreamEvent) => void;
+  fallbackTraceId: string | null;
+  fallbackModel: string | null;
+}
+
+async function consumeChatStream(
+  response: Response,
+  options: ChatStreamConsumeOptions,
+): Promise<ChatSendResult> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new ChatRequestError("Streaming response is not supported in this environment", {
+      traceId: options.fallbackTraceId,
+    });
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let metadata: ChatStreamEvent | null = null;
+  let finalPayload: ChatResponsePayload | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      buffer += decoder.decode(new Uint8Array(), { stream: false });
+    } else if (value) {
+      buffer += decoder.decode(value, { stream: true });
+    }
+
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const chunk = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (chunk) {
+        try {
+          const event = JSON.parse(chunk) as ChatStreamEvent;
+          options.onEvent?.(event);
+          if (event.type === "metadata") {
+            metadata = event;
+          } else if (event.type === "delta") {
+            // handled by callback
+          } else if (event.type === "complete") {
+            finalPayload = event.payload;
+          } else if (event.type === "error") {
+            const trace = event.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
+            throw new ChatRequestError(event.error || "chat stream error", { traceId: trace });
+          }
+        } catch (error) {
+          console.warn("Skipping malformed stream chunk", error);
+        }
+      }
+      newlineIndex = buffer.indexOf("\n");
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  const trimmed = buffer.trim();
+  if (trimmed) {
+    try {
+      const event = JSON.parse(trimmed) as ChatStreamEvent;
+      options.onEvent?.(event);
+      if (event.type === "metadata") {
+        metadata = event;
+      } else if (event.type === "complete") {
+        finalPayload = event.payload;
+      } else if (event.type === "error") {
+        const trace = event.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
+        throw new ChatRequestError(event.error || "chat stream error", { traceId: trace });
+      }
+    } catch (error) {
+      console.warn("Ignoring trailing stream chunk", error);
+    }
+  }
+
+  if (!finalPayload) {
+    throw new ChatRequestError("Chat stream ended without completion", {
+      traceId: metadata?.trace_id ?? options.fallbackTraceId,
+    });
+  }
+
+  return {
+    payload: finalPayload,
+    traceId: finalPayload.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId,
+    model: finalPayload.model ?? metadata?.model ?? options.fallbackModel,
+  };
+}
+
 export async function sendChat(
   history: ChatMessage[],
   input: string,
   options: ChatSendOptions = {},
 ): Promise<ChatSendResult> {
+  const headers = { ...JSON_HEADERS, Accept: "application/x-ndjson" } as Record<string, string>;
   const response = await fetch(api("/api/chat"), {
     method: "POST",
-    headers: JSON_HEADERS,
+    headers,
     body: JSON.stringify({
       messages: serializeMessages(history, input),
       model: options.model ?? undefined,
@@ -935,8 +1029,17 @@ export async function sendChat(
     signal: options.signal,
   });
 
-  const traceId = response.headers.get("X-Request-Id");
-  const servedModel = response.headers.get("X-LLM-Model");
+  const traceIdHeader = response.headers.get("X-Request-Id");
+  const servedModel = response.headers.get("X-LLM-Model") ?? options.model ?? null;
+  const contentType = response.headers.get("Content-Type")?.toLowerCase() ?? "";
+
+  if (contentType.includes("application/x-ndjson") && response.body) {
+    return consumeChatStream(response, {
+      onEvent: options.onStreamEvent,
+      fallbackTraceId: traceIdHeader,
+      fallbackModel: servedModel,
+    });
+  }
 
   if (!response.ok) {
     let payload: Record<string, unknown> | null = null;
@@ -977,7 +1080,7 @@ export async function sendChat(
 
     throw new ChatRequestError(message, {
       status: response.status,
-      traceId,
+      traceId: traceIdHeader,
       code,
       hint,
       tried,
@@ -991,14 +1094,14 @@ export async function sendChat(
     citations: Array.isArray(data.citations)
       ? data.citations.filter((item): item is string => typeof item === "string")
       : [],
-    model: typeof data.model === "string" ? data.model : options.model ?? null,
-    trace_id: typeof data.trace_id === "string" ? data.trace_id : traceId ?? null,
+    model: typeof data.model === "string" ? data.model : servedModel,
+    trace_id: typeof data.trace_id === "string" ? data.trace_id : traceIdHeader ?? null,
   };
 
   return {
     payload,
-    traceId: payload.trace_id ?? traceId,
-    model: payload.model ?? servedModel ?? options.model ?? null,
+    traceId: payload.trace_id ?? traceIdHeader,
+    model: payload.model ?? servedModel,
   };
 }
 

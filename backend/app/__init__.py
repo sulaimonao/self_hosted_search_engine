@@ -158,7 +158,7 @@ def create_app() -> Flask:
     app.config.setdefault("CHAT_LOGGER", chat_logger)
 
     db = get_db(config.learned_web_db_path)
-    runner = JobRunner(config.logs_dir)
+    runner = JobRunner(config.logs_dir, worker_count=3)
     manager = FocusedCrawlManager(
         config,
         runner,

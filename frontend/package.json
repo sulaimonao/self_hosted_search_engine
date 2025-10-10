@@ -10,7 +10,8 @@
     "electron": "wait-on http://localhost:3100 && cross-env NODE_ENV=development APP_URL=http://localhost:3100 electron electron/main.js",
     "app:dev": "npm-run-all -p dev electron",
     "build:web": "next build",
-    "build:desktop": "npm run build:web && electron-builder"
+    "build:desktop": "npm run build:web && electron-builder",
+    "lint": "next lint"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",

@@ -1660,6 +1660,9 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         hasImg: Boolean(imageContext),
       });
 
+      let streamedModel = chatModel ?? null;
+      let streamedTrace: string | null = null;
+
       try {
         const result = await sendChat(historySnapshot, trimmed, {
           model: chatModel,
@@ -1671,19 +1674,41 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           serverTime: timeMeta?.server_time ?? null,
           serverTimezone: timeMeta?.server_timezone ?? null,
           serverUtc: timeMeta?.server_time_utc ?? null,
+          onStreamEvent: (event) => {
+            if (event.type === "metadata") {
+              streamedModel = event.model ?? streamedModel;
+              streamedTrace = event.trace_id ?? streamedTrace;
+              updateAssistant((message) => ({
+                ...message,
+                model: streamedModel ?? message.model ?? null,
+                traceId: streamedTrace ?? message.traceId ?? null,
+              }));
+            } else if (event.type === "delta") {
+              updateAssistant((message) => ({
+                ...message,
+                streaming: true,
+                content: event.answer ?? message.content ?? "",
+                answer: event.answer ?? message.answer ?? "",
+                reasoning: event.reasoning ?? message.reasoning ?? "",
+                citations: event.citations ?? message.citations ?? [],
+              }));
+            }
+          },
         });
 
-        lastSuccessfulModelRef.current = result.model ?? chatModel;
+        streamedModel = result.model ?? streamedModel;
+        streamedTrace = result.traceId ?? streamedTrace;
+        lastSuccessfulModelRef.current = streamedModel ?? chatModel;
 
         updateAssistant((message) => ({
           ...message,
           streaming: false,
-          content: result.payload.answer || result.payload.reasoning || "",
+          content: result.payload.answer || result.payload.reasoning || message.content || "",
           answer: result.payload.answer,
           reasoning: result.payload.reasoning,
           citations: result.payload.citations,
-          traceId: result.traceId ?? result.payload.trace_id ?? null,
-          model: result.model ?? chatModel ?? null,
+          traceId: streamedTrace ?? result.payload.trace_id ?? message.traceId ?? null,
+          model: streamedModel ?? result.payload.model ?? message.model ?? chatModel ?? null,
         }));
 
         const citationUrls = collectUniqueHttpCitations(result.payload.citations);
@@ -1700,8 +1725,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
         devlog({
           evt: "ui.chat.ok",
-          trace: result.traceId,
-          model: result.model ?? chatModel ?? "unknown",
+          trace: streamedTrace ?? result.traceId,
+          model: streamedModel ?? result.model ?? chatModel ?? "unknown",
         });
 
         appendLog({
@@ -1712,8 +1737,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           timestamp: new Date().toISOString(),
         });
 
-        if (result.model && result.model !== chatModel) {
-          setChatModel(result.model);
+        if (streamedModel && streamedModel !== chatModel) {
+          setChatModel(streamedModel);
         }
       } catch (error) {
         if (controller.signal.aborted) {

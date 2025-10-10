@@ -157,6 +157,30 @@ export interface ChatResponsePayload {
   trace_id?: string | null;
 }
 
+export type ChatStreamEvent =
+  | {
+      type: "metadata";
+      attempt: number;
+      model: string | null;
+      trace_id: string | null;
+    }
+  | {
+      type: "delta";
+      answer?: string | null;
+      reasoning?: string | null;
+      citations?: string[] | null;
+    }
+  | {
+      type: "complete";
+      payload: ChatResponsePayload;
+    }
+  | {
+      type: "error";
+      error: string;
+      hint?: string | null;
+      trace_id?: string | null;
+    };
+
 export interface PageExtractResponse {
   url: string;
   title?: string | null;

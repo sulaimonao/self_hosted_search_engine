@@ -52,6 +52,7 @@ class RefreshWorker:
         self._lock = threading.RLock()
         self._worker = threading.Thread(target=self._worker_loop, name="refresh-worker", daemon=True)
         self._worker.start()
+        self._resume_pending_jobs()
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,6 +67,7 @@ class RefreshWorker:
         depth: Optional[int] = None,
         force: bool = False,
         seeds: Optional[Sequence[str]] = None,
+        resume_job_id: str | None = None,
     ) -> tuple[str, dict, bool]:
         """Queue a refresh for *query*; return (job_id, status, created)."""
 
@@ -84,7 +86,7 @@ class RefreshWorker:
                 if existing and existing.get("state") in {"queued", "running"}:
                     return existing_id, self._snapshot(existing), False
 
-            job_id = uuid.uuid4().hex
+            job_id = resume_job_id or uuid.uuid4().hex
             now = time.time()
             record = {
                 "id": job_id,
@@ -124,6 +126,8 @@ class RefreshWorker:
             self._query_to_job[normalized] = job_id
             self._queue.put(job_id)
             if self._state_db is not None:
+                if resume_job_id:
+                    self._state_db.update_crawl_status(job_id, "queued")
                 primary_seed = seed_list[0] if seed_list else None
                 self._state_db.record_crawl_job(
                     job_id,
@@ -166,6 +170,32 @@ class RefreshWorker:
             active_jobs = [self._snapshot(self._jobs[jid]) for jid in self._query_to_job.values() if self._jobs.get(jid)]
             recent_jobs = [self._snapshot(self._jobs[jid]) for jid in list(self._history)[-self.max_history :]]
             return {"active": active_jobs, "recent": recent_jobs}
+    def _resume_pending_jobs(self) -> None:
+        if self._state_db is None:
+            return
+        try:
+            pending = self._state_db.pending_crawl_jobs()
+        except Exception:  # pragma: no cover - defensive logging
+            LOGGER.exception("failed to load pending refresh jobs")
+            return
+        for record in pending:
+            job_id = str(record.get("id") or record.get("job_id") or "").strip()
+            query = str(record.get("query") or "").strip()
+            if not job_id or not query:
+                continue
+            seed_value = record.get("seed")
+            seeds = [seed_value] if isinstance(seed_value, str) and seed_value.strip() else None
+            try:
+                self.enqueue(
+                    query,
+                    force=True,
+                    seeds=seeds,
+                    resume_job_id=job_id,
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                LOGGER.exception("failed to resume refresh job %s", job_id)
+
+
 
     # ------------------------------------------------------------------
     # Worker internals

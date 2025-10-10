@@ -5,16 +5,25 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Iterator
 
 import requests
-from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
+from pydantic import ValidationError
 
 from server.json_logger import log_event
 
 from ..config import AppConfig
 from ..services import ollama_client
 from observability import start_span
+from .schemas import (
+    ChatRequest,
+    ChatResponsePayload,
+    ChatStreamComplete,
+    ChatStreamDelta,
+    ChatStreamError,
+    ChatStreamMetadata,
+)
 
 bp = Blueprint("chat_api", __name__, url_prefix="/api")
 
@@ -34,21 +43,6 @@ def _truncate(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
     return value[: max_length - 3] + "..."
-
-
-def _sanitize_messages(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    sanitized: list[dict[str, Any]] = []
-    for raw in messages:
-        if not isinstance(raw, Mapping):
-            continue
-        role = raw.get("role")
-        content = raw.get("content")
-        if isinstance(role, str) and isinstance(content, str):
-            entry: dict[str, Any] = {"role": role, "content": content}
-            if "images" in raw and isinstance(raw["images"], list):
-                entry["images"] = [str(item) for item in raw["images"] if isinstance(item, str)]
-            sanitized.append(entry)
-    return sanitized
 
 
 def _configured_models() -> tuple[str, str | None, str | None]:
@@ -237,15 +231,46 @@ def _chat_endpoint(config: AppConfig) -> str:
     return f"{config.ollama_url.rstrip('/')}/api/chat"
 
 
-def _consume_streaming_response(response: requests.Response) -> Mapping[str, Any]:
-    """Return the final payload from a streaming Ollama response with merged content."""
+class _StreamAccumulator:
+    """Track the latest streaming payload and accumulated text."""
 
-    last_payload: Mapping[str, Any] | None = None
-    accumulated_content = ""
-    last_content_chunk = ""
-    accumulated_reasoning = ""
-    last_reasoning_chunk = ""
+    def __init__(self) -> None:
+        self.payload: Mapping[str, Any] | None = None
+        self.answer: str = ""
+        self.reasoning: str = ""
 
+    def update(self, chunk: Mapping[str, Any]) -> ChatStreamDelta | None:
+        message = chunk.get("message")
+        if not isinstance(message, Mapping):
+            return None
+        delta = ChatStreamDelta()
+        content = message.get("content")
+        if isinstance(content, str):
+            trimmed = content.strip()
+            if trimmed and trimmed != self.answer:
+                self.answer = trimmed
+                delta.answer = self.answer
+        reasoning_value = None
+        for key in ("reasoning", "thinking"):
+            raw = message.get(key)
+            if isinstance(raw, str) and raw.strip():
+                reasoning_value = raw.strip()
+                break
+        if reasoning_value and reasoning_value != self.reasoning:
+            self.reasoning = reasoning_value
+            delta.reasoning = self.reasoning
+        if delta.answer is None and delta.reasoning is None:
+            return None
+        self.payload = chunk
+        return delta
+
+
+def _iter_streaming_response(
+    response: requests.Response,
+) -> Iterator[tuple[Mapping[str, Any], ChatStreamDelta, "_StreamAccumulator"]]:
+    """Yield incremental updates for a streaming Ollama response."""
+
+    accumulator = _StreamAccumulator()
     for raw_line in response.iter_lines():
         if not raw_line:
             continue
@@ -261,120 +286,213 @@ def _consume_streaming_response(response: requests.Response) -> Mapping[str, Any
             continue
         if not isinstance(payload, Mapping):
             continue
-        last_payload = payload
-        message = payload.get("message")
-        if not isinstance(message, Mapping):
-            continue
+        delta = accumulator.update(payload)
+        if delta is not None:
+            yield payload, delta, accumulator
 
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            if last_content_chunk and content.startswith(last_content_chunk):
-                delta = content[len(last_content_chunk) :]
-                if delta:
-                    accumulated_content += delta
-            elif accumulated_content and content.startswith(accumulated_content):
-                delta = content[len(accumulated_content) :]
-                if delta:
-                    accumulated_content += delta
-            elif last_content_chunk and last_content_chunk.startswith(content):
-                # The stream repeated an earlier prefix; treat as no-op.
-                pass
-            else:
-                accumulated_content += content
-            last_content_chunk = content
 
-        reasoning_value = None
-        for key in ("reasoning", "thinking"):
-            value = message.get(key)
-            if isinstance(value, str) and value:
-                reasoning_value = value
-                break
-        if reasoning_value:
-            if last_reasoning_chunk and reasoning_value.startswith(last_reasoning_chunk):
-                delta = reasoning_value[len(last_reasoning_chunk) :]
-                if delta:
-                    accumulated_reasoning += delta
-            elif accumulated_reasoning and reasoning_value.startswith(accumulated_reasoning):
-                delta = reasoning_value[len(accumulated_reasoning) :]
-                if delta:
-                    accumulated_reasoning += delta
-            elif last_reasoning_chunk and last_reasoning_chunk.startswith(reasoning_value):
-                pass
-            else:
-                accumulated_reasoning += reasoning_value
-            last_reasoning_chunk = reasoning_value
 
-    if last_payload is None:
+def _drain_chat_response(response: requests.Response) -> tuple[Mapping[str, Any], _StreamAccumulator]:
+    """Consume the streaming response and return the final payload + accumulator."""
+
+    accumulator: _StreamAccumulator | None = None
+    final_payload: Mapping[str, Any] | None = None
+    for payload, _delta, acc in _iter_streaming_response(response):
+        accumulator = acc
+        final_payload = payload
+    response.close()
+    if accumulator is None or accumulator.payload is None or final_payload is None:
         raise ValueError("Upstream response stream was empty")
+    return accumulator.payload, accumulator
 
-    merged = dict(last_payload)
-    message = dict(merged.get("message") or {})
-    if accumulated_content:
-        message["content"] = accumulated_content
-    elif isinstance(message.get("content"), str):
-        # Preserve whatever content we last observed, even if empty string.
-        message["content"] = message.get("content")
-    if accumulated_reasoning:
-        message["reasoning"] = accumulated_reasoning
-    merged["message"] = message
-    return merged
+
+def _serialize_event(event: ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError) -> bytes:
+    if hasattr(event, "model_dump"):
+        payload = event.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+    else:  # pragma: no cover - defensive fallback
+        payload = event  # type: ignore[assignment]
+    return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _ndjson_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
+    for event in events:
+        yield _serialize_event(event)
+
+
+def _render_response_payload(
+    *,
+    candidate: str,
+    payload_json: Mapping[str, Any],
+    accumulator: _StreamAccumulator,
+    trace_id: str | None,
+    attempt_index: int,
+    start_time: float,
+    chat_span: Any,
+    image_context: str | None,
+    image_used: bool,
+) -> ChatResponsePayload:
+    content = _extract_model_content(payload_json)
+    reasoning_text = _extract_model_reasoning(payload_json).strip()
+    try:
+        structured = _coerce_schema(content)
+    except ValueError as exc:  # pragma: no cover - repair attempts best effort
+        LOGGER.debug("Falling back to raw chat content: %s", exc)
+        structured = {
+            "reasoning": reasoning_text or accumulator.reasoning or "",
+            "answer": content.strip() or accumulator.answer or "",
+            "citations": [],
+        }
+    else:
+        if reasoning_text and not structured.get("reasoning"):
+            structured["reasoning"] = reasoning_text
+    if accumulator.reasoning and not structured.get("reasoning"):
+        structured["reasoning"] = accumulator.reasoning
+    if accumulator.answer and not structured.get("answer"):
+        structured["answer"] = accumulator.answer
+    citations = structured.get("citations") or []
+    if not isinstance(citations, list):
+        citations = []
+    response_payload = ChatResponsePayload(
+        reasoning=(structured.get("reasoning") or "").strip(),
+        answer=(structured.get("answer") or "").strip(),
+        citations=[str(item) for item in citations if isinstance(item, (str, int, float))],
+        model=candidate,
+        trace_id=trace_id,
+    )
+    g.chat_model = candidate
+    g.chat_fallback_used = attempt_index > 1
+    g.chat_error_class = None
+    g.chat_error_message = None
+    if image_context and not image_used:
+        log_event(
+            "WARNING",
+            "chat.vision_ignored",
+            trace=trace_id,
+            model=candidate,
+        )
+    duration_ms = int((time.perf_counter() - start_time) * 1000)
+    log_event(
+        "INFO",
+        "chat.ready",
+        trace=trace_id,
+        model=candidate,
+        fallback_used=bool(g.chat_fallback_used),
+        duration_ms=duration_ms,
+    )
+    if chat_span is not None:
+        chat_span.set_attribute("chat.success_model", candidate)
+        chat_span.set_attribute("chat.duration_ms", duration_ms)
+        chat_span.set_attribute("chat.fallback_used", bool(g.chat_fallback_used))
+    return response_payload
+
+
+def _stream_chat_response(
+    *,
+    candidate: str,
+    attempt_index: int,
+    response: requests.Response,
+    trace_id: str | None,
+    streaming_start: float,
+    chat_span: Any,
+    image_context: str | None,
+    image_used: bool,
+) -> Response:
+    metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
+
+    def _events() -> Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]:
+        yield metadata
+        accumulator: _StreamAccumulator | None = None
+        try:
+            for payload, delta, acc in _iter_streaming_response(response):
+                accumulator = acc
+                yield delta
+            if accumulator is None or accumulator.payload is None:
+                raise ValueError("Upstream response stream was empty")
+            payload_model = _render_response_payload(
+                candidate=candidate,
+                payload_json=accumulator.payload,
+                accumulator=accumulator,
+                trace_id=trace_id,
+                attempt_index=attempt_index,
+                start_time=streaming_start,
+                chat_span=chat_span,
+                image_context=image_context,
+                image_used=image_used,
+            )
+            yield ChatStreamComplete(payload=payload_model)
+        except Exception as exc:  # pragma: no cover - defensive streaming guard
+            g.chat_error_class = exc.__class__.__name__
+            g.chat_error_message = str(exc)
+            log_event(
+                "ERROR",
+                "chat.error",
+                trace=trace_id,
+                model=candidate,
+                attempt=attempt_index,
+                msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
+            )
+            if chat_span is not None:
+                chat_span.set_attribute("chat.success", False)
+            yield ChatStreamError(
+                error="stream_error",
+                hint="upstream response terminated unexpectedly",
+                trace_id=trace_id,
+            )
+        finally:
+            response.close()
+
+    resp = Response(stream_with_context(_ndjson_stream(_events())), mimetype="application/x-ndjson")
+    resp.headers["X-LLM-Model"] = candidate
+    resp.headers.setdefault("Cache-Control", "no-store")
+    resp.headers.setdefault("X-Accel-Buffering", "no")
+    return resp
+
 
 
 @bp.post("/chat")
 def chat_invoke() -> Response:
     start = time.perf_counter()
-    payload = request.get_json(silent=True) or {}
-    messages_raw = payload.get("messages")
-    if not isinstance(messages_raw, list):
+    try:
+        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
         g.chat_error_class = "ValidationError"
-        g.chat_error_message = "messages must be a list"
-        return jsonify({"error": "messages must be a list", "trace_id": getattr(g, "trace_id", None)}), 400
+        g.chat_error_message = "invalid_request"
+        return (
+            jsonify(
+                {
+                    "error": "validation_error",
+                    "detail": exc.errors(),
+                    "trace_id": getattr(g, "trace_id", None),
+                }
+            ),
+            400,
+        )
 
-    sanitized_messages = _sanitize_messages(messages_raw)
-    if not sanitized_messages:
-        g.chat_error_class = "ValidationError"
-        g.chat_error_message = "messages must contain at least one message"
-        return jsonify({"error": "messages must contain at least one message", "trace_id": getattr(g, "trace_id", None)}), 400
+    sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
 
     chat_logger = current_app.config.get("CHAT_LOGGER")
     if hasattr(chat_logger, "info"):
-        preview = " | ".join(
-            entry.get("content", "") for entry in sanitized_messages if isinstance(entry.get("content"), str)
-        )
+        preview = " | ".join(entry.get("content", "") for entry in sanitized_messages)
         chat_logger.info("chat request received: %s", preview.strip())
 
-    requested_model = (payload.get("model") or "").strip() or None
-    url_value = (payload.get("url") or "").strip() or None
-    text_context = (payload.get("text_context") or "").strip() or None
-    image_context_raw = payload.get("image_context")
-    image_context = image_context_raw if isinstance(image_context_raw, str) and image_context_raw.strip() else None
-    client_timezone_raw = payload.get("client_timezone")
-    server_time_raw = payload.get("server_time")
-    server_timezone_raw = payload.get("server_timezone")
-    server_time_utc_raw = payload.get("server_time_utc")
-    client_timezone = (
-        client_timezone_raw.strip()
-        if isinstance(client_timezone_raw, str)
-        else None
-    )
-    server_time = (
-        server_time_raw.strip()
-        if isinstance(server_time_raw, str)
-        else None
-    )
-    server_timezone = (
-        server_timezone_raw.strip()
-        if isinstance(server_timezone_raw, str)
-        else None
-    )
-    server_time_utc = (
-        server_time_utc_raw.strip()
-        if isinstance(server_time_utc_raw, str)
-        else None
-    )
+    requested_model = chat_request.model
+    url_value = chat_request.url
+    text_context = chat_request.text_context
+    image_context = chat_request.image_context
+    client_timezone = chat_request.client_timezone
+    server_time = chat_request.server_time
+    server_timezone = chat_request.server_timezone
+    server_time_utc = chat_request.server_time_utc
 
     trace_id = getattr(g, "trace_id", None)
     primary_model, fallback_model, _ = _configured_models()
+
+    accept_header = (request.headers.get("Accept") or "").lower()
+    stream_flag = request.args.get("stream")
+    if stream_flag is not None:
+        streaming_requested = stream_flag.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        streaming_requested = "application/json" not in accept_header
 
     trace_inputs = {
         "message_count": len(sanitized_messages),
@@ -449,6 +567,7 @@ def chat_invoke() -> Response:
                 )
 
             response = None
+            attempt_start = time.perf_counter()
             try:
                 with start_span(
                     "llm.chat",
@@ -475,123 +594,112 @@ def chat_invoke() -> Response:
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    attempt=attempt_index,
                     error=g.chat_error_class,
                     msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
                 )
-                return jsonify({"error": "upstream_unavailable", "message": str(exc), "trace_id": trace_id}), 502
+                return (
+                    jsonify(
+                        {
+                            "error": "upstream_unavailable",
+                            "message": str(exc),
+                            "trace_id": trace_id,
+                        }
+                    ),
+                    502,
+                )
 
             if response is None:  # pragma: no cover - defensive guard
                 continue
 
-            try:
-                if response.status_code == 404:
-                    content_raw = response.text.strip() or "model not found"
-                    reason = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-                    missing_reasons.append(reason)
-                    log_event(
-                        "ERROR",
-                        "chat.error",
-                        trace=trace_id,
-                        model=candidate,
-                        code=404,
-                        msg=reason,
-                    )
-                    continue
-
-                if response.status_code >= 400:
-                    content_raw = response.text.strip() or f"HTTP {response.status_code}"
-                    g.chat_error_class = "HTTPError"
-                    g.chat_error_message = _truncate(content_raw, _MAX_ERROR_PREVIEW)
-                    log_event(
-                        "ERROR",
-                        "chat.error",
-                        trace=trace_id,
-                        model=candidate,
-                        code=response.status_code,
-                        msg=g.chat_error_message,
-                    )
-                    return (
-                        jsonify(
-                            {
-                                "error": "upstream_error",
-                                "status": response.status_code,
-                                "message": g.chat_error_message,
-                                "trace_id": trace_id,
-                            }
-                        ),
-                        response.status_code,
-                    )
-
-                try:
-                    payload_json = _consume_streaming_response(response)
-                except ValueError as exc:
-                    g.chat_error_class = "InvalidStream"
-                    g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
-                    log_event(
-                        "ERROR",
-                        "chat.error",
-                        trace=trace_id,
-                        model=candidate,
-                        msg=g.chat_error_message,
-                    )
-                    return jsonify({"error": "invalid_response", "message": str(exc), "trace_id": trace_id}), 502
-            finally:
-                closer = getattr(response, "close", None)
-                if callable(closer):
-                    closer()
-
-            content = _extract_model_content(payload_json)
-            reasoning_text = _extract_model_reasoning(payload_json).strip()
-            try:
-                structured = _coerce_schema(content)
-            except ValueError as exc:
-                LOGGER.debug("Falling back to raw chat content: %s", exc)
-                structured = {
-                    "reasoning": "",
-                    "answer": content.strip(),
-                    "citations": [],
-                }
-                if reasoning_text:
-                    structured["reasoning"] = reasoning_text
-            else:
-                if reasoning_text and not structured.get("reasoning"):
-                    structured["reasoning"] = reasoning_text
-
-            g.chat_model = candidate
-            g.chat_fallback_used = attempt_index > 1
-            g.chat_error_class = None
-            g.chat_error_message = None
-
-            if image_context and not image_used:
+            if response.status_code == 404:
+                content_raw = response.text.strip() or "model not found"
+                reason = _truncate(content_raw, _MAX_ERROR_PREVIEW)
+                missing_reasons.append(reason)
                 log_event(
-                    "WARNING",
-                    "chat.vision_ignored",
+                    "ERROR",
+                    "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    code=404,
+                    msg=reason,
+                )
+                response.close()
+                continue
+
+            if response.status_code >= 400:
+                content_raw = response.text.strip() or f"HTTP {response.status_code}"
+                g.chat_error_class = "HTTPError"
+                g.chat_error_message = _truncate(content_raw, _MAX_ERROR_PREVIEW)
+                log_event(
+                    "ERROR",
+                    "chat.error",
+                    trace=trace_id,
+                    model=candidate,
+                    code=response.status_code,
+                    msg=g.chat_error_message,
+                )
+                response.close()
+                return (
+                    jsonify(
+                        {
+                            "error": "upstream_error",
+                            "status": response.status_code,
+                            "message": g.chat_error_message,
+                            "trace_id": trace_id,
+                        }
+                    ),
+                    response.status_code,
                 )
 
-            duration_ms = int((time.perf_counter() - start) * 1000)
-            log_event(
-                "INFO",
-                "chat.ready",
-                trace=trace_id,
-                model=candidate,
-                fallback_used=g.chat_fallback_used,
-                duration_ms=duration_ms,
-            )
-            if chat_span is not None:
-                chat_span.set_attribute("chat.success_model", candidate)
-                chat_span.set_attribute("chat.duration_ms", duration_ms)
-                chat_span.set_attribute("chat.fallback_used", bool(g.chat_fallback_used))
+            if streaming_requested:
+                return _stream_chat_response(
+                    candidate=candidate,
+                    attempt_index=attempt_index,
+                    response=response,
+                    trace_id=trace_id,
+                    streaming_start=attempt_start,
+                    chat_span=chat_span,
+                    image_context=image_context,
+                    image_used=image_used,
+                )
 
-            response_payload = {
-                "reasoning": structured["reasoning"],
-                "answer": structured["answer"],
-                "citations": structured["citations"],
-                "model": candidate,
-                "trace_id": trace_id,
-            }
-            flask_response = jsonify(response_payload)
+            try:
+                payload_json, accumulator = _drain_chat_response(response)
+            except ValueError as exc:
+                g.chat_error_class = "InvalidStream"
+                g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
+                log_event(
+                    "ERROR",
+                    "chat.error",
+                    trace=trace_id,
+                    model=candidate,
+                    msg=g.chat_error_message,
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "invalid_response",
+                            "message": str(exc),
+                            "trace_id": trace_id,
+                        }
+                    ),
+                    502,
+                )
+
+            response_payload = _render_response_payload(
+                candidate=candidate,
+                payload_json=payload_json,
+                accumulator=accumulator,
+                trace_id=trace_id,
+                attempt_index=attempt_index,
+                start_time=attempt_start,
+                chat_span=chat_span,
+                image_context=image_context,
+                image_used=image_used,
+            )
+
+            flask_response = jsonify(response_payload.model_dump(exclude_none=True))
             flask_response.headers["X-LLM-Model"] = candidate
             return flask_response
 
@@ -621,6 +729,7 @@ def chat_invoke() -> Response:
             ),
             503,
         )
+
 
 
 __all__ = ["bp"]
