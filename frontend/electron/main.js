@@ -16,6 +16,7 @@ const sharedWebPreferences = Object.freeze({
 
 let mainWindow;
 const shadowModeByWindow = new Map();
+let frameBypassHookRegistered = false;
 
 function isShadowModeEnabled(win) {
   if (!win) {
@@ -35,6 +36,73 @@ function resolveAppUrl() {
 function loadAppUrl(win) {
   const target = resolveAppUrl();
   win.loadURL(target);
+}
+
+function sanitizeSandboxHeaders() {
+  if (frameBypassHookRegistered) {
+    return;
+  }
+  frameBypassHookRegistered = true;
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    try {
+      const url = new URL(details.url);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        callback({ cancel: false, responseHeaders: details.responseHeaders });
+        return;
+      }
+    } catch {
+      callback({ cancel: false, responseHeaders: details.responseHeaders });
+      return;
+    }
+
+    const { responseHeaders } = details;
+    if (!responseHeaders) {
+      callback({ cancel: false, responseHeaders });
+      return;
+    }
+
+    const lowerCaseMap = new Map(
+      Object.keys(responseHeaders).map((key) => [key.toLowerCase(), key]),
+    );
+
+    const clonedHeaders = { ...responseHeaders };
+
+    const frameOptionsKey = lowerCaseMap.get('x-frame-options');
+    if (frameOptionsKey) {
+      delete clonedHeaders[frameOptionsKey];
+    }
+
+    const cspKey = lowerCaseMap.get('content-security-policy');
+    if (cspKey) {
+      const original = responseHeaders[cspKey];
+      if (Array.isArray(original)) {
+        const updated = original
+          .map((value) => {
+            if (typeof value !== 'string') {
+              return value;
+            }
+            const segments = value
+              .split(';')
+              .map((segment) => segment.trim())
+              .filter((segment) => segment.length > 0);
+            const filtered = segments.filter(
+              (segment) => !segment.toLowerCase().startsWith('frame-ancestors'),
+            );
+            return filtered.join('; ');
+          })
+          .filter((entry) => typeof entry === 'string' && entry.length > 0);
+        if (updated.length > 0) {
+          clonedHeaders[cspKey] = updated;
+        } else {
+          delete clonedHeaders[cspKey];
+        }
+      } else {
+        delete clonedHeaders[cspKey];
+      }
+    }
+
+    callback({ cancel: false, responseHeaders: clonedHeaders });
+  });
 }
 
 function postShadowCrawl(win, targetUrl, reason) {
@@ -64,6 +132,8 @@ function postShadowCrawl(win, targetUrl, reason) {
 }
 
 function createBrowserWindow() {
+  sanitizeSandboxHeaders();
+
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
