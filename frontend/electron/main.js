@@ -5,6 +5,15 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const sharedWebPreferences = Object.freeze({
+  preload: path.join(__dirname, 'preload.js'),
+  contextIsolation: true,
+  sandbox: false,
+  nodeIntegration: false,
+  webviewTag: true,
+  enableRemoteModule: false,
+});
+
 let mainWindow;
 const shadowModeByWindow = new Map();
 
@@ -59,12 +68,7 @@ function createBrowserWindow() {
     width: 1280,
     height: 820,
     title: 'Personal Search Engine',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
+    webPreferences: { ...sharedWebPreferences },
   });
 
   loadAppUrl(window);
@@ -90,12 +94,7 @@ function createBrowserWindow() {
       parent: window,
       width: 1200,
       height: 800,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
-        sandbox: true,
-        nodeIntegration: false,
-      },
+      webPreferences: { ...sharedWebPreferences },
     });
     child.webContents.on('did-navigate', (_event, targetUrl) => {
       child.webContents.send('nav-progress', { stage: 'navigated', url: targetUrl, tabId: child.id });

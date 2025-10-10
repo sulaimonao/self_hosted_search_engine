@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('appBridge', {
+  supportsWebview: true,
   onNavProgress: (callback) => {
     if (typeof callback !== 'function') {
       return () => {};

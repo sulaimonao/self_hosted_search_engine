@@ -6,7 +6,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type DragEvent,
 } from "react";
@@ -82,7 +81,6 @@ export function WebPreview({
   crawlLabel = "Crawl domain",
 }: WebPreviewProps) {
   const [addressValue, setAddressValue] = useState(url || DEFAULT_URL);
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
   const domainHint = useMemo(() => {
     try {
       return url ? new URL(url).hostname : null;
@@ -94,6 +92,15 @@ export function WebPreview({
   useEffect(() => {
     setAddressValue(url);
   }, [url]);
+
+  const [supportsWebview, setSupportsWebview] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    setSupportsWebview(Boolean(window.appBridge?.supportsWebview));
+  }, []);
 
 
   const canGoBack = historyIndex > 0;
@@ -240,18 +247,21 @@ export function WebPreview({
         </div>
       ) : null}
       <div className="relative flex-1">
-        <iframe
-          key={reloadKey}
-          ref={frameRef}
-          src={url}
-          title="Web preview"
-          className="w-full h-full border-0"
-          sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-          onLoad={() => {
-            // Previously attempted to clear a selection error state here, but no state setter exists.
-            // Keeping the handler in case future logic needs to respond to iframe load events.
-          }}
-        />
+        {supportsWebview ? (
+          <webview key={reloadKey} src={url} className="w-full h-full border-0" allowpopups />
+        ) : (
+          <iframe
+            key={reloadKey}
+            src={url}
+            title="Web preview"
+            className="w-full h-full border-0"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+            onLoad={() => {
+              // Previously attempted to clear a selection error state here, but no state setter exists.
+              // Keeping the handler in case future logic needs to respond to iframe load events.
+            }}
+          />
+        )}
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/65 backdrop-blur-sm">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
