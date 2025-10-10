@@ -2,6 +2,16 @@
 
 Modern copilot interface for the self-hosted search engine. The app is built with Next.js (App Router), Tailwind CSS 4, and shadcn/ui.
 
+## Research browser overview
+
+- **Browser vs Research modes** – switch the shell between lightweight browsing and research workflows. Browser mode keeps Shadow indexing off; Research mode enables it and surfaces crawl/index panels.
+- **Persistent tabs and omnibox** – tabs, active URL, mode, and shadow flag persist in local storage so Electron and web sessions restore state.
+- **Side panels** – open Local Search, Collections, Chat, Shadow queue, and Agent Log via sheet-style drawers without blocking the workspace.
+- **Notification center** – the bell icon opens grouped crawl/index/server notifications. Counts aggregate per (site, kind) and you can mute or clear entries.
+- **Status bar** – bottom strip shows crawl progress, queued jobs, and model/health indicators fed by the events stream.
+
+> Screenshots live under `frontend/public/` so both the web app and Electron builds can reference them without extra configuration.
+
 ## Prerequisites
 
 - Node.js 18+ (Node 20+ recommended for React 19 support)
