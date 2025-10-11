@@ -166,6 +166,28 @@ port `3100`, waits for the UI to become reachable, and then launches Electron
 with live reload (`electronmon`) enabled. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to
 shut everything down.
 
+### System check & diagnostics
+
+- After the API reports healthy, `make dev` posts to `/api/system_check`. The
+  command aborts only when the response marks `summary.critical_failures` as
+  `true`; otherwise, the Next.js dev server starts normally and the results are
+  cached to `diagnostics/system_check_last.json`.
+- Skip the entire preflight with `SKIP_SYSTEM_CHECK=1 make dev`. Adjust the
+  browser harness timeout by exporting `DIAG_TIMEOUT` (milliseconds) before
+  running `npm run desktop`, `npm run diagnose:browser`, or the Make target.
+- The backend endpoint merges filesystem checks, the diagnostics snapshot job,
+  and `/api/llm/health`. When successful it also enqueues a lightweight warmup
+  job so the agent model metadata is ready for the first chat.
+- Browser diagnostics run through Electron and persist the latest report at
+  `diagnostics/browser_diagnostics.json`. Invoke them manually with
+  `npm run diagnose:browser` (full) or `npm run diagnose:browser:fast` (10s
+  timeout).
+- The UI exposes a **System Check** panel that auto-opens when
+  `NEXT_PUBLIC_SYSTEM_CHECK_ON_BOOT=1`. Access it later from the desktop menu
+  (Help → Run System Check…) or visit `http://localhost:3100/system-check` in
+  the browser build. Critical failures block the “Continue” button; warnings
+  allow you to proceed.
+
 Build a distributable macOS app bundle with:
 
 ```bash

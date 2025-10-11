@@ -351,3 +351,67 @@ export interface PendingDocument {
   lastError?: string | null;
   updatedAt?: number | null;
 }
+
+export type SystemCheckStatus = 'pass' | 'fail' | 'warn' | 'timeout' | 'skip' | 'queued' | string;
+
+export interface SystemCheckItem {
+  id: string;
+  title: string;
+  status: SystemCheckStatus;
+  detail?: string | null;
+  critical?: boolean;
+  duration_ms?: number | null;
+}
+
+export interface SystemCheckBackend {
+  status: SystemCheckStatus;
+  checks: SystemCheckItem[];
+}
+
+export interface SystemCheckDiagnostics {
+  status: SystemCheckStatus;
+  job_id: string;
+  duration_ms?: number | null;
+  detail?: string | null;
+  result?: Record<string, unknown> | null;
+}
+
+export interface SystemCheckLlm {
+  status: SystemCheckStatus;
+  reachable?: boolean;
+  detail?: string | null;
+  critical?: boolean;
+  duration_ms?: number | null;
+  payload?: Record<string, unknown> | null;
+}
+
+export interface SystemCheckSummary {
+  critical_failures?: boolean;
+  warmup_job_id?: string | null;
+}
+
+export interface SystemCheckResponse {
+  generated_at?: string;
+  backend: SystemCheckBackend;
+  diagnostics: SystemCheckDiagnostics;
+  llm: SystemCheckLlm;
+  summary: SystemCheckSummary;
+}
+
+export type BrowserDiagnosticsStatus = 'pass' | 'fail' | 'warn' | 'timeout' | string;
+
+export interface BrowserDiagnosticsCheck {
+  id: string;
+  title: string;
+  status: BrowserDiagnosticsStatus;
+  detail?: string | null;
+  critical?: boolean;
+  durationMs?: number | null;
+}
+
+export interface BrowserDiagnosticsReport {
+  generatedAt: string;
+  timeoutMs: number;
+  checks: BrowserDiagnosticsCheck[];
+  summary: { status: BrowserDiagnosticsStatus; criticalFailures: boolean };
+}

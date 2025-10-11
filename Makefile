@@ -77,10 +77,41 @@ dev:
 	  echo "▶ Running make first-run (initial setup)…"; \
 	  $(MAKE) first-run; \
 	fi
-	@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
-	@BACKEND_PORT="$(BACKEND_PORT)" API_URL="$(API_URL)" VENV_PY="$(VENV_PY)" ./scripts/dev_backend.sh
+@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
+@BACKEND_PORT="$(BACKEND_PORT)" API_URL="$(API_URL)" VENV_PY="$(VENV_PY)" ./scripts/dev_backend.sh
+	@if [ "$(SKIP_SYSTEM_CHECK)" != "1" ]; then \
+		echo "▶ Running backend system check…"; \
+		mkdir -p diagnostics; \
+		response=$$(curl -fsS -X POST "http://127.0.0.1:$(BACKEND_PORT)/api/system_check" -H 'Content-Type: application/json' -d '{}'); \
+		status="$$?"; \
+		echo "$$response" > diagnostics/system_check_last.json; \
+		if [ "$$status" -ne 0 ]; then \
+			echo "⚠️  System check request failed (curl exit $$status)"; \
+                else \
+                        critical=$$(python3 - "$$response" <<'PYCODE'
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    print("false")
+else:
+    summary = data.get("summary") or {}
+    print("true" if summary.get("critical_failures") else "false")
+PYCODE
+); \
+			if [ "$$critical" = "true" ]; then \
+				echo "❌ Critical system check failures detected"; \
+				exit 1; \
+			fi; \
+		fi; \
+	else \
+		echo "⏭️  System check skipped (SKIP_SYSTEM_CHECK=1)"; \
+	fi
 	@echo "▶ Starting Frontend (Next.js)…"
-	@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
 	  mkdir -p logs; \
 	  (cd frontend && \
 	    if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
@@ -132,7 +163,7 @@ api:
 	fi
 
 web:
-	@echo "▶ Starting Frontend (Next.js)…"
+		@echo "▶ Starting Frontend (Next.js)…"
 	@NEXT_PUBLIC_API_BASE_URL="$$NEXT_PUBLIC_API_BASE_URL"; \
 	if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
 	  NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:$(BACKEND_PORT)"; \
