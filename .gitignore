@@ -17,6 +17,7 @@ node_modules/
 _MAIN_0.toc
 /worktrees/
 /data/telemetry/
+diagnostics/
 *.py
 *.json
 !package.json
@@ -39,6 +40,7 @@ _MAIN_0.toc
 !backend/app/api/shipit_diag.py
 !backend/app/api/shipit_history.py
 !backend/app/api/shipit_ingest.py
+!backend/app/api/system_check.py
 !backend/app/api/meta.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py

@@ -15,6 +15,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -96,12 +102,18 @@ import { devlog } from "@/lib/devlog";
 import { useNavProgress } from "@/hooks/use-nav-progress";
 import { normalizeInput } from "@/lib/normalize-input";
 import { AGENT_ENABLED, IN_APP_BROWSER_ENABLED } from "@/lib/flags";
+import { SystemCheckPanel } from "@/components/system-check-panel";
+import { useSystemCheck } from "@/hooks/use-system-check";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
 const FEATURE_LOCAL_DISCOVERY = String(process.env.NEXT_PUBLIC_FEATURE_LOCAL_DISCOVERY ?? "");
 const LOCAL_DISCOVERY_ENABLED = ["1", "true", "yes", "on"].includes(
   FEATURE_LOCAL_DISCOVERY.trim().toLowerCase(),
+);
+const SYSTEM_CHECK_BOOT_FLAG = String(process.env.NEXT_PUBLIC_SYSTEM_CHECK_ON_BOOT ?? "");
+const SYSTEM_CHECK_ON_BOOT = ["1", "true", "yes", "on"].includes(
+  SYSTEM_CHECK_BOOT_FLAG.trim().toLowerCase(),
 );
 
 function uid() {
@@ -395,6 +407,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     }
     return INITIAL_URL;
   }, [initialUrl]);
+
+  const systemCheck = useSystemCheck({
+    autoRun: SYSTEM_CHECK_ON_BOOT,
+    openInitially: SYSTEM_CHECK_ON_BOOT,
+  });
 
   const [previewState, setPreviewState] = useState(() => ({
     history: [sanitizedInitialUrl],
@@ -2690,6 +2707,32 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
             disabled={shadowConfigLoading || shadowConfigSaving}
             aria-label="Toggle shadow mode"
           />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">
+                Help
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  systemCheck.setOpen(true);
+                  void systemCheck.rerun();
+                }}
+              >
+                Run System Check…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void systemCheck.openReport();
+                }}
+              >
+                Open last report
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       {shadowJobSummary ? <ShadowProgress job={shadowJobSummary} /> : null}
@@ -2996,6 +3039,19 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           onDismiss={handleDismissDiscovery}
         />
       ) : null}
+      <SystemCheckPanel
+        open={systemCheck.open}
+        onOpenChange={systemCheck.setOpen}
+        systemCheck={systemCheck.backendReport}
+        browserReport={systemCheck.browserReport}
+        loading={systemCheck.loading}
+        error={systemCheck.error}
+        blocking={systemCheck.blocking}
+        skipMessage={systemCheck.skipMessage}
+        onRetry={systemCheck.rerun}
+        onContinue={() => systemCheck.setOpen(false)}
+        onOpenReport={systemCheck.openReport}
+      />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

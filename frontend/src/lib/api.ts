@@ -33,6 +33,7 @@ import type {
   ShadowPolicy,
   ShadowPolicyResponse,
   ShadowSnapshotResponse,
+  SystemCheckResponse,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -51,6 +52,18 @@ export async function fetchServerTime(): Promise<MetaTimeResponse> {
   const response = await fetch(api("/api/meta/time"));
   if (!response.ok) {
     throw new Error(`Unable to fetch server time (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function runSystemCheck(): Promise<SystemCheckResponse> {
+  const response = await fetch(api("/api/system_check"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: "{}",
+  });
+  if (!response.ok) {
+    throw new Error(`System check failed (${response.status})`);
   }
   return response.json();
 }

@@ -16,6 +16,12 @@ declare global {
       setShadowMode?: (enabled: boolean) => void;
       supportsWebview?: boolean;
     };
+    desktop?: {
+      runSystemCheck?: (options?: { timeoutMs?: number }) => Promise<unknown>;
+      getLastSystemCheck?: () => Promise<unknown>;
+      openSystemCheckReport?: () => Promise<unknown>;
+      onSystemCheckEvent?: (channel: string, handler: (payload: unknown) => void) => (() => void) | void;
+    };
   }
 }
 
