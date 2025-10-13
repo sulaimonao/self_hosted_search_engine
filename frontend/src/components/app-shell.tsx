@@ -439,7 +439,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [embeddingModel, setEmbeddingModel] = useState<string | null>(null);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
   const [chatModels, setChatModels] = useState<string[]>([]);
-  const [modelWarning, setModelWarning] = useState<string | null>(null);
+  const [, setModelWarning] = useState<string | null>(null);
   const [isAutopulling, setIsAutopulling] = useState(false);
   const [autopullMessage, setAutopullMessage] = useState<string | null>(null);
   const [pageContext, setPageContext] = useState<PageExtractResponse | null>(initialContext ?? null);
@@ -448,7 +448,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [isExtractingContext, setIsExtractingContext] = useState(false);
   const [manualContextTrigger, setManualContextTrigger] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [citationIndexState, setCitationIndexState] = useState<Record<string, CitationIndexRecord>>({});
+  const [, setCitationIndexState] = useState<Record<string, CitationIndexRecord>>({});
   const [editorAction, setEditorAction] = useState<ProposedAction | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [searchState, setSearchState] = useState<SearchState>(() => createInitialSearchState());
@@ -621,7 +621,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         [url]: { status, error: error ?? null },
       }));
     },
-    [],
+    [setCitationIndexState],
   );
 
   const dismissToast = useCallback((id: string) => {
@@ -793,6 +793,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           setDocMetadata(match as Record<string, unknown>);
         }
       } catch (error) {
+        console.warn("Failed to load document metadata", error);
         if (!cancelled) {
           setDocMetadata(null);
         }
@@ -1410,7 +1411,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       pushToast(message, { variant: 'destructive' });
       devlog({ evt: 'ui.shadow.manual_error', url: targetUrl, message });
     }
-  }, [currentUrl, pushToast, queueShadowIndex, registerJob]);
+  }, [currentUrl, pushToast, registerJob]);
 
   const handleCrawlDomain = useCallback(async () => {
     const targetUrl = (currentUrl ?? "").trim();
@@ -1546,16 +1547,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         timestamp: new Date().toISOString(),
       });
     }
-  }, [
-    applySeedRegistry,
-    appendLog,
-    createDomainSeed,
-    currentUrl,
-    defaultScope,
-    pushToast,
-    registerJob,
-    triggerRefresh,
-  ]);
+  }, [applySeedRegistry, appendLog, currentUrl, defaultScope, pushToast, registerJob]);
 
   const handleSearch = useCallback(
     async (value: string) => {
@@ -1874,7 +1866,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       clientTimezone,
       timeMeta,
       handleQueueAdd,
-      queueShadowIndex,
       setCitationIndexStatus,
       shadowModeEnabled,
     ]
@@ -2541,7 +2532,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       cancelled = true;
       shadowWatcherRef.current = null;
     };
-  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving, registerJob, shadowJobId, queueShadowIndex]);
+  }, [currentUrl, pushToast, shadowModeEnabled, shadowConfigSaving, registerJob, shadowJobId]);
 
   useEffect(() => {
     chatHistoryRef.current = chatMessages;
@@ -2619,6 +2610,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       try {
         await refreshModels();
       } catch (error) {
+        console.warn("Failed to refresh chat model inventory", error);
         if (!cancelled) {
           modelsLoadedRef.current = false;
         }
@@ -2726,7 +2718,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       return shadowModeEnabled ? "Idle" : "Disabled";
     }
     return details.join(" · ");
-  }, [shadowConfig, shadowConfigError, shadowConfigLoading, shadowModeEnabled]);
+  }, [shadowConfig, shadowConfigError, shadowConfigLoading, shadowJobSummary, shadowModeEnabled]);
 
   const modelSelectDisabled = backendHealth.loading || !backendHealthy;
 

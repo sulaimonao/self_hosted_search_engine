@@ -116,11 +116,12 @@ function createComponents(
 }
 
 export function ChatMessageMarkdown({ text, className, onLinkClick }: ChatMessageMarkdownProps) {
-  if (!text.trim()) {
+  const trimmed = text.trim();
+  const components = useMemo(() => createComponents(onLinkClick), [onLinkClick]);
+
+  if (!trimmed) {
     return null;
   }
-
-  const components = useMemo(() => createComponents(onLinkClick), [onLinkClick]);
 
   return (
     <div

@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -357,7 +356,7 @@ export default function BrowserPanel(): JSX.Element {
         handleSnapshotError(tabId, error);
       }
     },
-    [activeTab, ensureDomainPolicy, handleSnapshotError, handleSnapshotSuccess, persistHistory, setTabState],
+    [ensureDomainPolicy, handleSnapshotError, handleSnapshotSuccess, persistHistory, setTabState],
   );
 
   const goBack = useCallback(

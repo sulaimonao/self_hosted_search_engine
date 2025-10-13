@@ -15,7 +15,10 @@ export function devlog(entry: Record<string, unknown>) {
     serialized = JSON.stringify(payload);
     console.debug(serialized);
   } catch (error) {
-    console.debug("{\"evt\":\"devlog.fallback\",\"error\":\"serialization_failed\"}");
+    console.debug(
+      "{\"evt\":\"devlog.fallback\",\"error\":\"serialization_failed\"}",
+      error,
+    );
   }
 
   if (typeof window === "undefined") return;
@@ -37,6 +40,9 @@ export function devlog(entry: Record<string, unknown>) {
       credentials: "same-origin",
     }).catch(() => undefined);
   } catch (error) {
-    console.debug("{\"evt\":\"devlog.fallback\",\"error\":\"forward_failed\"}");
+    console.debug(
+      "{\"evt\":\"devlog.fallback\",\"error\":\"forward_failed\"}",
+      error,
+    );
   }
 }

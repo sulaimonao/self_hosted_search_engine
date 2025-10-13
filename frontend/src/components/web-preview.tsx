@@ -81,14 +81,6 @@ export function WebPreview({
   crawlLabel = "Crawl domain",
 }: WebPreviewProps) {
   const [addressValue, setAddressValue] = useState(url || DEFAULT_URL);
-  const domainHint = useMemo(() => {
-    try {
-      return url ? new URL(url).hostname : null;
-    } catch {
-      return null;
-    }
-  }, [url]);
-
   useEffect(() => {
     setAddressValue(url);
   }, [url]);
