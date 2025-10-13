@@ -502,6 +502,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
   const searchAbortRef = useRef<AbortController | null>(null);
   const lastSuccessfulModelRef = useRef<string | null>(null);
+  const modelsLoadedRef = useRef(false);
   const autopullAttemptedRef = useRef(false);
   const shadowWatcherRef = useRef<{ cancel: () => void } | null>(null);
   const lastNavEventRef = useRef<{ url: string; tabId: number | null } | null>(null);
@@ -1121,6 +1122,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     if (!backendHealthy) {
       const warning = backendOfflineMessage ?? "Backend offline (5050). Start the API to load chat models.";
       setModelWarning(warning);
+      modelsLoadedRef.current = false;
       return null;
     }
     try {
@@ -1147,9 +1149,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       });
       setChatModel(nextModel);
       lastSuccessfulModelRef.current = nextModel;
+      modelsLoadedRef.current = true;
       devlog({ evt: "ui.models.loaded", available: inventory.chatModels.length, model: nextModel });
       return inventory;
     } catch (error) {
+      modelsLoadedRef.current = false;
       console.warn("Unable to load model inventory", error);
       devlog({ evt: "ui.models.error", message: error instanceof Error ? error.message : String(error) });
       throw error instanceof Error ? error : new Error(String(error));
@@ -2606,8 +2610,30 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [navEvent, shadowModeEnabled]);
 
   useEffect(() => {
-    void refreshModels();
-  }, [refreshModels]);
+    if (!backendHealthy || modelsLoadedRef.current) {
+      return;
+    }
+    let cancelled = false;
+    modelsLoadedRef.current = true;
+    void (async () => {
+      try {
+        await refreshModels();
+      } catch (error) {
+        if (!cancelled) {
+          modelsLoadedRef.current = false;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendHealthy, refreshModels]);
+
+  useEffect(() => {
+    if (!backendHealthy) {
+      modelsLoadedRef.current = false;
+    }
+  }, [backendHealthy]);
 
   useEffect(() => {
     const subscriptions = jobSubscriptions.current;
@@ -2776,7 +2802,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               !backendHealthy
             }
             loading={shadowConfigSaving}
-            error={backendHealthy ? shadowConfigError : null}
+            error={
+              backendHealthy
+                ? shadowConfigError
+                : backendOfflineMessage ?? "Backend offline (5050)"
+            }
           />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -2807,150 +2837,152 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         </div>
       </div>
       {shadowJobSummary ? <ShadowProgress job={shadowJobSummary} /> : null}
-      <div className="flex flex-1 flex-col lg:flex-row">
-        <SearchResultsPanel
-          className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
-          query={searchState.query}
-          hits={searchState.hits}
-          status={searchState.status}
-          isLoading={searchState.isLoading}
-          error={searchState.error}
-          detail={searchState.detail}
-          onOpenHit={handleNavigate}
-          onAskAgent={agentEnabled ? handleAskAgent : undefined}
-          onRefresh={searchState.query ? refreshSearch : undefined}
-          onQueryChange={handleSearchQueryChange}
-          onSubmitQuery={handleLocalSearchSubmit}
-          inputDisabled={!hasDocuments}
-          currentUrl={currentUrl}
-          confidence={searchState.confidence}
-          llmUsed={searchState.llmUsed}
-          triggerReason={searchState.triggerReason}
-          seedCount={searchState.seedCount}
-          jobId={searchState.jobId}
-          lastFetchedAt={searchState.lastFetchedAt}
-          actionLabel={searchState.action}
-          code={searchState.code}
-          candidates={searchState.candidates}
-        />
-        <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
-          {livePreviewEnabled ? (
-            <WebPreview
-              url={currentUrl}
-              history={previewState.history}
-              historyIndex={previewState.index}
-              isLoading={isPreviewLoading}
-              reloadKey={reloadKey}
-              onNavigate={handleNavigate}
-              onHistoryBack={handleBack}
-              onHistoryForward={handleForward}
-              onReload={handleReload}
-              onOpenInNewTab={handleOpenInNewTab}
-              onCrawlDomain={handleCrawlDomain}
-              crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
-              crawlStatus={crawlMonitor}
-              crawlLabel={crawlButtonLabel}
-            />
-          ) : inAppBrowserEnabled && liveFallbackActive ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-              <p className="max-w-md">
-                Live preview is unavailable for this site due to content security restrictions. Reader
-                mode has been activated automatically.
-              </p>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  if (currentUrl) {
-                    void openLiveUrl(currentUrl);
-                  }
-                }}
-              >
-                Retry live preview
-              </Button>
-            </div>
-          ) : (
-            <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-              In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.
-            </div>
-          )}
-        </section>
-        <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
-            <TabsList className="grid grid-cols-2 bg-muted/60">
-              <TabsTrigger value="chat">Chat</TabsTrigger>
-              <TabsTrigger value="agent">Agent ops</TabsTrigger>
-            </TabsList>
-            <TabsContent value="chat" className="flex-1 flex flex-col">
-              <div className="flex flex-1 flex-col gap-3 p-3">
-                <ProgressPanel jobId={searchState.jobId} />
-                <DocInspector doc={docMetadata} />
-                <ContextPanel
-                  url={currentUrl}
-                  context={pageContext}
-                  includeContext={includeContext}
-                  onIncludeChange={setIncludeContext}
-                  onExtract={handleExtractContext}
-                  extracting={isExtractingContext}
-                  supportsVision={supportsVision}
-                  onManualSubmit={handleManualContext}
-                  onClear={handleClearContext}
-                  manualOpenTrigger={manualContextTrigger}
-                />
-                <ChatPanel
-                  header={
-                    <CopilotHeader
-                  chatModels={chatModelOptions}
-                  selectedModel={chatModel}
-                  onModelChange={handleModelSelect}
-                  installing={isAutopulling}
-                  onInstallModel={handleAutopull}
-                  installMessage={autopullMessage}
-                  reachable={Boolean(ollamaStatus?.running)}
-                  statusLabel={isChatLoading ? "Generating response" : undefined}
-                  timeSummary={timeSummary}
-                  controlsDisabled={modelSelectDisabled}
-                />
-              }
-                  messages={chatMessages}
-                  input={chatInput}
-                  onInputChange={setChatInput}
-                  onSend={handleSendChat}
-                  isBusy={isChatLoading}
-                  onCancel={isChatLoading ? handleCancelChat : undefined}
-                  onApproveAction={handleApproveAction}
-                  onEditAction={handleEditAction}
-                  onDismissAction={handleDismissAction}
-                  disableInput={chatModels.length === 0 || isAutopulling}
-                  onLinkClick={handleChatLink}
-                />
+      <main className="flex-1 min-h-0">
+        <div className="flex h-full min-h-0 flex-col lg:flex-row">
+          <SearchResultsPanel
+            className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
+            query={searchState.query}
+            hits={searchState.hits}
+            status={searchState.status}
+            isLoading={searchState.isLoading}
+            error={searchState.error}
+            detail={searchState.detail}
+            onOpenHit={handleNavigate}
+            onAskAgent={agentEnabled ? handleAskAgent : undefined}
+            onRefresh={searchState.query ? refreshSearch : undefined}
+            onQueryChange={handleSearchQueryChange}
+            onSubmitQuery={handleLocalSearchSubmit}
+            inputDisabled={!hasDocuments}
+            currentUrl={currentUrl}
+            confidence={searchState.confidence}
+            llmUsed={searchState.llmUsed}
+            triggerReason={searchState.triggerReason}
+            seedCount={searchState.seedCount}
+            jobId={searchState.jobId}
+            lastFetchedAt={searchState.lastFetchedAt}
+            actionLabel={searchState.action}
+            code={searchState.code}
+            candidates={searchState.candidates}
+          />
+          <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
+            {livePreviewEnabled ? (
+              <WebPreview
+                url={currentUrl}
+                history={previewState.history}
+                historyIndex={previewState.index}
+                isLoading={isPreviewLoading}
+                reloadKey={reloadKey}
+                onNavigate={handleNavigate}
+                onHistoryBack={handleBack}
+                onHistoryForward={handleForward}
+                onReload={handleReload}
+                onOpenInNewTab={handleOpenInNewTab}
+                onCrawlDomain={handleCrawlDomain}
+                crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
+                crawlStatus={crawlMonitor}
+                crawlLabel={crawlButtonLabel}
+              />
+            ) : inAppBrowserEnabled && liveFallbackActive ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+                <p className="max-w-md">
+                  Live preview is unavailable for this site due to content security restrictions. Reader
+                  mode has been activated automatically.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    if (currentUrl) {
+                      void openLiveUrl(currentUrl);
+                    }
+                  }}
+                >
+                  Retry live preview
+                </Button>
               </div>
-            </TabsContent>
-            <TabsContent value="agent" className="flex-1">
-              <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-2">
-                <AgentLog entries={agentLog} isStreaming={isChatLoading} />
-                <div className="flex flex-col gap-3">
-                  <JobStatus jobs={jobSummaries} />
-                  <PendingEmbedsCard docs={pendingDocs} />
-                  <CrawlManager
-                    queue={crawlQueue}
-                    defaultScope={defaultScope}
-                    onAddUrl={handleQueueAdd}
-                    onRemove={handleQueueRemove}
-                    onUpdateScope={handleQueueScopeUpdate}
-                    onScopePresetChange={setDefaultScope}
-                    onRefresh={refreshSeeds}
-                    isLoading={isSeedsLoading}
-                    errorMessage={seedError}
-                    currentUrl={currentUrl}
+            ) : (
+              <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+                In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.
+              </div>
+            )}
+          </section>
+          <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
+              <TabsList className="grid grid-cols-2 bg-muted/60">
+                <TabsTrigger value="chat">Chat</TabsTrigger>
+                <TabsTrigger value="agent">Agent ops</TabsTrigger>
+              </TabsList>
+              <TabsContent value="chat" className="flex-1 flex flex-col">
+                <div className="flex flex-1 flex-col gap-3 p-3">
+                  <ProgressPanel jobId={searchState.jobId} />
+                  <DocInspector doc={docMetadata} />
+                  <ContextPanel
+                    url={currentUrl}
+                    context={pageContext}
+                    includeContext={includeContext}
+                    onIncludeChange={setIncludeContext}
+                    onExtract={handleExtractContext}
+                    extracting={isExtractingContext}
+                    supportsVision={supportsVision}
+                    onManualSubmit={handleManualContext}
+                    onClear={handleClearContext}
+                    manualOpenTrigger={manualContextTrigger}
+                  />
+                  <ChatPanel
+                    header={
+                      <CopilotHeader
+                        chatModels={chatModelOptions}
+                        selectedModel={chatModel}
+                        onModelChange={handleModelSelect}
+                        installing={isAutopulling}
+                        onInstallModel={handleAutopull}
+                        installMessage={autopullMessage}
+                        reachable={Boolean(ollamaStatus?.running)}
+                        statusLabel={isChatLoading ? "Generating response" : undefined}
+                        timeSummary={timeSummary}
+                        controlsDisabled={modelSelectDisabled}
+                      />
+                    }
+                    messages={chatMessages}
+                    input={chatInput}
+                    onInputChange={setChatInput}
+                    onSend={handleSendChat}
+                    isBusy={isChatLoading}
+                    onCancel={isChatLoading ? handleCancelChat : undefined}
+                    onApproveAction={handleApproveAction}
+                    onEditAction={handleEditAction}
+                    onDismissAction={handleDismissAction}
+                    disableInput={chatModels.length === 0 || isAutopulling}
+                    onLinkClick={handleChatLink}
                   />
                 </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </aside>
-      </div>
+              </TabsContent>
+              <TabsContent value="agent" className="flex-1">
+                <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-2">
+                  <AgentLog entries={agentLog} isStreaming={isChatLoading} />
+                  <div className="flex flex-col gap-3">
+                    <JobStatus jobs={jobSummaries} />
+                    <PendingEmbedsCard docs={pendingDocs} />
+                    <CrawlManager
+                      queue={crawlQueue}
+                      defaultScope={defaultScope}
+                      onAddUrl={handleQueueAdd}
+                      onRemove={handleQueueRemove}
+                      onUpdateScope={handleQueueScopeUpdate}
+                      onScopePresetChange={setDefaultScope}
+                      onRefresh={refreshSeeds}
+                      isLoading={isSeedsLoading}
+                      errorMessage={seedError}
+                      currentUrl={currentUrl}
+                    />
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </aside>
+        </div>
+      </main>
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
         <CommandInput placeholder="Start crawl, reload, settings…" />

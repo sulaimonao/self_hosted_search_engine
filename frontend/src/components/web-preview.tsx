@@ -129,7 +129,7 @@ export function WebPreview({
   );
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 p-3 pb-2 border-b" draggable onDragStart={handleDragStart}>
         <div className="flex items-center gap-1">
           <TooltipProvider delayDuration={0}>
@@ -246,15 +246,15 @@ export function WebPreview({
           {crawlStatus.statusText}
         </div>
       ) : null}
-      <div className="relative flex-1">
+      <div className="relative flex-1 min-h-0 w-full overflow-hidden">
         {supportsWebview ? (
-          <webview key={reloadKey} src={url} className="w-full h-full border-0" allowpopups />
+          <webview key={reloadKey} src={url} className="block h-full w-full border-0" allowpopups />
         ) : (
           <iframe
             key={reloadKey}
             src={url}
             title="Web preview"
-            className="w-full h-full border-0"
+            className="block h-full w-full border-0"
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
             onLoad={() => {
               // Previously attempted to clear a selection error state here, but no state setter exists.
