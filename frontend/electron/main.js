@@ -130,17 +130,37 @@ function attachView(window, view) {
   window.setBrowserView(view);
   view.setAutoResize({ width: true, height: true });
   const updateBounds = () => {
+    if (window.isDestroyed()) {
+      return;
+    }
     const [width, height] = window.getContentSize();
-    view.setBounds({ x: 0, y: 0, width, height });
+    try {
+      view.setBounds({ x: 0, y: 0, width, height });
+    } catch (error) {
+      console.warn('failed to resize BrowserView', error);
+    }
   };
+  const resizeEvents = [
+    'resize',
+    'resized',
+    'will-resize',
+    'enter-full-screen',
+    'leave-full-screen',
+    'maximize',
+    'unmaximize',
+    'restore',
+  ];
   updateBounds();
-  window.on('resize', updateBounds);
-  window.on('enter-full-screen', updateBounds);
-  window.on('leave-full-screen', updateBounds);
+  for (const eventName of resizeEvents) {
+    window.on(eventName, updateBounds);
+  }
   return () => {
-    window.removeListener('resize', updateBounds);
-    window.removeListener('enter-full-screen', updateBounds);
-    window.removeListener('leave-full-screen', updateBounds);
+    for (const eventName of resizeEvents) {
+      window.removeListener(eventName, updateBounds);
+    }
+    if (!window.isDestroyed()) {
+      window.setBrowserView(null);
+    }
   };
 }
 
