@@ -87,3 +87,4 @@ logs/backend.pid
 logs/frontend.pid
 codex_task_shadow_desktop.md
 /frontend/dist
+!scripts/system_check_has_critical.py

@@ -60,25 +60,25 @@ start:
 dev:
 	@# If stdout is not a TTY, skip (prevents sandboxes from hanging)
 	@if [ ! -t 1 ]; then \
-  echo "Non-interactive environment detected; skipping 'make dev'."; \
-  echo "Run 'make verify' instead."; \
-	  exit 0; \
+		echo "Non-interactive environment detected; skipping 'make dev'."; \
+		echo "Run 'make verify' instead."; \
+		exit 0; \
 	fi
 	@missing=0; \
 	if [ ! -x "$(VENV_PY)" ]; then \
-	  echo "⚠️  Missing backend virtualenv at $(VENV_PY)."; \
-	  missing=1; \
+		echo "⚠️  Missing backend virtualenv at $(VENV_PY)."; \
+		missing=1; \
 	fi; \
 	if [ ! -d frontend/node_modules ]; then \
-	  echo "⚠️  Missing frontend/node_modules (npm deps)."; \
-	  missing=1; \
+		echo "⚠️  Missing frontend/node_modules (npm deps)."; \
+		missing=1; \
 	fi; \
 	if [ $$missing -eq 1 ]; then \
-	  echo "▶ Running make first-run (initial setup)…"; \
-	  $(MAKE) first-run; \
+		echo "▶ Running make first-run (initial setup)…"; \
+		$(MAKE) first-run; \
 	fi
-@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
-@BACKEND_PORT="$(BACKEND_PORT)" API_URL="$(API_URL)" VENV_PY="$(VENV_PY)" ./scripts/dev_backend.sh
+	@# Detached with nohup so dev survives terminal exits; logs in logs/*.log
+	@BACKEND_PORT="$(BACKEND_PORT)" API_URL="$(API_URL)" VENV_PY="$(VENV_PY)" ./scripts/dev_backend.sh
 	@if [ "$(SKIP_SYSTEM_CHECK)" != "1" ]; then \
 		echo "▶ Running backend system check…"; \
 		mkdir -p diagnostics; \
@@ -87,21 +87,8 @@ dev:
 		echo "$$response" > diagnostics/system_check_last.json; \
 		if [ "$$status" -ne 0 ]; then \
 			echo "⚠️  System check request failed (curl exit $$status)"; \
-                else \
-                        critical=$$(python3 - "$$response" <<'PYCODE'
-import json
-import sys
-
-raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    print("false")
-else:
-    summary = data.get("summary") or {}
-    print("true" if summary.get("critical_failures") else "false")
-PYCODE
-); \
+		else \
+			critical=$$(printf '%s' "$$response" | python3 scripts/system_check_has_critical.py); \
 			if [ "$$critical" = "true" ]; then \
 				echo "❌ Critical system check failures detected"; \
 				exit 1; \
@@ -111,39 +98,40 @@ PYCODE
 		echo "⏭️  System check skipped (SKIP_SYSTEM_CHECK=1)"; \
 	fi
 	@echo "▶ Starting Frontend (Next.js)…"
-@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
-	  mkdir -p logs; \
-	  (cd frontend && \
-	    if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
-	      export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:$(BACKEND_PORT); \
-	    fi; \
-	    nohup npm run dev -- --hostname localhost --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
-	  ) ; \
+	@if ! lsof -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+		mkdir -p logs; \
+		(cd frontend && \
+			if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
+				export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:$(BACKEND_PORT); \
+			fi; \
+			nohup npm run dev -- --hostname localhost --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
+		); \
 	fi
 	@API_ORIGIN="$${NEXT_PUBLIC_API_BASE_URL}"; \
 	if [ -z "$$API_ORIGIN" ]; then \
-	  API_ORIGIN="http://127.0.0.1:$(BACKEND_PORT)"; \
+		API_ORIGIN="http://127.0.0.1:$(BACKEND_PORT)"; \
 	fi; \
 	API_ORIGIN="$$(printf "%s" "$$API_ORIGIN" | sed 's:/*$$::')"; \
 	echo "🚀 Frontend ready at http://localhost:$(FRONTEND_PORT)"; \
 	echo "ℹ️  API $$API_ORIGIN"
 	@if [ "$(AUTO_OPEN_BROWSER)" = "1" ]; then \
-	  URL="http://localhost:$(FRONTEND_PORT)"; \
-	  OS=$$(uname -s); \
-	  case "$$OS" in \
-	    Darwin) \
-	      (open "$$URL" >/dev/null 2>&1 &) || true; \
-	      ;; \
-	    Linux) \
-	      if command -v xdg-open >/dev/null 2>&1; then \
-	        (xdg-open "$$URL" >/dev/null 2>&1 &) || true; \
-	      fi; \
-	      ;; \
-	    MINGW*|MSYS*|CYGWIN*) \
-	      (cmd /c start "" "$$URL" >/dev/null 2>&1 &) || true; \
-	      ;; \
-	  esac; \
+		URL="http://localhost:$(FRONTEND_PORT)"; \
+		OS=$$(uname -s); \
+		case "$$OS" in \
+			Darwin) \
+				(open "$$URL" >/dev/null 2>&1 &) || true; \
+				;; \
+			Linux) \
+				if command -v xdg-open >/dev/null 2>&1; then \
+					(xdg-open "$$URL" >/dev/null 2>&1 &) || true; \
+				fi; \
+				;; \
+			MINGW*|MSYS*|CYGWIN*) \
+				(cmd /c start "" "$$URL" >/dev/null 2>&1 &) || true; \
+				;; \
+		esac; \
 	fi
+
 
 stop:
 	@echo "🛑 Stopping dev processes…"
