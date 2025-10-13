@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, webContents } from 'electron';
+import { app, BrowserWindow, BrowserView, ipcMain, session, webContents } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -31,11 +31,6 @@ function resolveAppUrl() {
     (value) => typeof value === 'string' && value.trim().length > 0,
   );
   return envUrl ?? defaultUrl;
-}
-
-function loadAppUrl(win) {
-  const target = resolveAppUrl();
-  win.loadURL(target);
 }
 
 function sanitizeSandboxHeaders() {
@@ -131,51 +126,56 @@ function postShadowCrawl(win, targetUrl, reason) {
   }
 }
 
-function createBrowserWindow() {
-  sanitizeSandboxHeaders();
+function attachView(window, view) {
+  window.setBrowserView(view);
+  view.setAutoResize({ width: true, height: true });
+  const updateBounds = () => {
+    const [width, height] = window.getContentSize();
+    view.setBounds({ x: 0, y: 0, width, height });
+  };
+  updateBounds();
+  window.on('resize', updateBounds);
+  window.on('enter-full-screen', updateBounds);
+  window.on('leave-full-screen', updateBounds);
+  return () => {
+    window.removeListener('resize', updateBounds);
+    window.removeListener('enter-full-screen', updateBounds);
+    window.removeListener('leave-full-screen', updateBounds);
+  };
+}
 
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    title: 'Personal Search Engine',
-    webPreferences: { ...sharedWebPreferences },
-  });
+function attachNavigationHandlers(window, view, initialUrl) {
+  const fallbackUrl = typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveAppUrl();
 
-  loadAppUrl(window);
-
-  shadowModeByWindow.set(window.id, false);
-  window.on('closed', () => {
-    shadowModeByWindow.delete(window.id);
-  });
-
-  window.webContents.on('did-fail-load', (_event, _code, _desc, _url, isMainFrame) => {
-    if (isMainFrame) {
-      setTimeout(() => loadAppUrl(window), 800);
+  view.webContents.on('did-fail-load', (_event, _code, _desc, failingUrl, isMainFrame) => {
+    if (!isMainFrame) {
+      return;
     }
+    const retry = typeof failingUrl === 'string' && failingUrl.trim().length > 0 ? failingUrl : fallbackUrl;
+    setTimeout(() => {
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.loadURL(retry).catch(() => {
+          // Ignore reload failures, the banner in renderer will surface state.
+        });
+      }
+    }, 800);
   });
 
-  window.webContents.on('did-navigate', (_event, url) => {
-    window.webContents.send('nav-progress', { stage: 'navigated', url, tabId: window.id });
+  view.webContents.on('did-navigate', (_event, url) => {
+    if (view.webContents.isDestroyed()) {
+      return;
+    }
+    view.webContents.send('nav-progress', { stage: 'navigated', url, tabId: window.id });
     postShadowCrawl(window, url, 'did-navigate');
   });
 
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    const child = new BrowserWindow({
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    const child = createBrowserWindow({
       parent: window,
-      width: 1200,
-      height: 800,
-      webPreferences: { ...sharedWebPreferences },
+      initialUrl: url,
+      shadowEnabled: isShadowModeEnabled(window),
     });
-    child.webContents.on('did-navigate', (_event, targetUrl) => {
-      child.webContents.send('nav-progress', { stage: 'navigated', url: targetUrl, tabId: child.id });
-      postShadowCrawl(child, targetUrl, 'new-window');
-    });
-    child.loadURL(url);
     postShadowCrawl(child, url, 'new-window');
-    shadowModeByWindow.set(child.id, isShadowModeEnabled(window));
-    child.on('closed', () => {
-      shadowModeByWindow.delete(child.id);
-    });
     return { action: 'deny' };
   });
 
@@ -183,27 +183,63 @@ function createBrowserWindow() {
     if (details.resourceType !== 'mainFrame') {
       return;
     }
-    let recipient = window;
+    let recipient = view.webContents;
+    let tabId = window.id;
     if (typeof details.webContentsId === 'number' && typeof webContents.fromId === 'function') {
       try {
         const contents = webContents.fromId(details.webContentsId);
         if (contents) {
+          recipient = contents;
           const owningWindow = BrowserWindow.fromWebContents(contents);
           if (owningWindow) {
-            recipient = owningWindow;
+            tabId = owningWindow.id;
           }
         }
       } catch (error) {
         console.warn('nav-progress resolution failed', error);
       }
     }
-    recipient.webContents.send('nav-progress', {
-      stage: 'loaded',
-      url: details.url,
-      status: details.statusCode,
-      tabId: recipient.id,
-    });
+    try {
+      recipient.send('nav-progress', {
+        stage: 'loaded',
+        url: details.url,
+        status: details.statusCode,
+        tabId,
+      });
+    } catch (error) {
+      console.warn('nav-progress delivery failed', error);
+    }
   });
+}
+
+function createBrowserWindow({ parent = null, initialUrl = null, shadowEnabled = false } = {}) {
+  sanitizeSandboxHeaders();
+
+  const window = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    title: 'Personal Search Engine',
+    parent: parent ?? undefined,
+    show: true,
+    backgroundColor: '#0b0d17',
+  });
+
+  const view = new BrowserView({ webPreferences: { ...sharedWebPreferences } });
+  const detachView = attachView(window, view);
+
+  const targetUrl = typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveAppUrl();
+  view.webContents.loadURL(targetUrl).catch((error) => {
+    console.warn('initial load failed', error);
+  });
+
+  shadowModeByWindow.set(window.id, Boolean(shadowEnabled));
+
+  window.on('closed', () => {
+    detachView();
+    shadowModeByWindow.delete(window.id);
+  });
+
+  attachNavigationHandlers(window, view, targetUrl);
 
   return window;
 }

@@ -22,7 +22,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -100,10 +99,12 @@ import { ShadowProgress } from "@/components/shadow-progress";
 import { NavProgressHud } from "@/components/nav-progress-hud";
 import { devlog } from "@/lib/devlog";
 import { useNavProgress } from "@/hooks/use-nav-progress";
+import { useBackendHealth } from "@/hooks/useBackendHealth";
 import { normalizeInput } from "@/lib/normalize-input";
 import { AGENT_ENABLED, IN_APP_BROWSER_ENABLED } from "@/lib/flags";
 import { SystemCheckPanel } from "@/components/system-check-panel";
 import { useSystemCheck } from "@/hooks/use-system-check";
+import { ShadowToggle } from "@/components/toolbar/ShadowToggle";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
@@ -490,6 +491,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     };
   }, [timeMeta, clientTimezone]);
 
+  const backendHealth = useBackendHealth({ intervalMs: 15_000 });
+  const backendHealthy = backendHealth.healthy;
+  const backendOfflineMessage = backendHealth.error;
+
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const jobSubscriptions = useRef(new Map<string, () => void>());
@@ -647,6 +652,9 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, []);
 
   useEffect(() => {
+    if (!backendHealthy) {
+      return;
+    }
     let cancelled = false;
 
     const load = async () => {
@@ -681,7 +689,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backendHealthy]);
+
+  useEffect(() => {
+    if (backendHealthy) {
+      return;
+    }
+    setShadowConfigLoading(false);
+    setShadowModeEnabled(false);
+    if (!backendHealth.loading) {
+      setShadowConfigError(backendOfflineMessage ?? "Backend offline (5050)");
+    }
+  }, [backendHealthy, backendHealth.loading, backendOfflineMessage]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1038,6 +1057,12 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const handleShadowToggle = useCallback(
     async (next: boolean) => {
+      if (!backendHealthy) {
+        const offlineMessage = backendOfflineMessage ?? "Backend offline (5050)";
+        setShadowConfigError(offlineMessage);
+        devlog({ evt: "ui.shadow.toggle_blocked", enabled: next, reason: "backend_offline" });
+        return;
+      }
       const previous = shadowModeEnabled;
       if (next === previous) {
         return;
@@ -1053,19 +1078,24 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         devlog({ evt: "ui.shadow.mode", enabled: Boolean(config.enabled) });
         pushToast(config.enabled ? "Shadow mode enabled" : "Shadow mode disabled");
       } catch (error) {
-        const message =
+        const rawMessage =
           error instanceof Error
             ? error.message
             : String(error ?? "Failed to update shadow mode");
+        const normalized = rawMessage.toLowerCase().includes("fetch") || rawMessage.toLowerCase().includes("network")
+          ? backendOfflineMessage ?? "Backend offline (5050)"
+          : rawMessage;
         setShadowModeEnabled(previous);
-        setShadowConfigError(message);
-        pushToast(message, { variant: "destructive" });
-        devlog({ evt: "ui.shadow.toggle_error", enabled: next, message });
+        setShadowConfigError(normalized);
+        if (!normalized.toLowerCase().includes("offline")) {
+          pushToast(normalized, { variant: "destructive" });
+        }
+        devlog({ evt: "ui.shadow.toggle_error", enabled: next, message: normalized });
       } finally {
         setShadowConfigSaving(false);
       }
     },
-    [pushToast, shadowModeEnabled],
+    [backendHealthy, backendOfflineMessage, pushToast, shadowModeEnabled],
   );
 
   useEffect(() => {
@@ -1088,6 +1118,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [handleShadowToggle]);
 
   const refreshModels = useCallback(async () => {
+    if (!backendHealthy) {
+      const warning = backendOfflineMessage ?? "Backend offline (5050). Start the API to load chat models.";
+      setModelWarning(warning);
+      return null;
+    }
     try {
       const inventory = await fetchModelInventory();
       setModelStatus(inventory.models);
@@ -1119,9 +1154,15 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       devlog({ evt: "ui.models.error", message: error instanceof Error ? error.message : String(error) });
       throw error instanceof Error ? error : new Error(String(error));
     }
-  }, []);
+  }, [backendHealthy, backendOfflineMessage]);
 
   const handleAutopull = useCallback(async () => {
+    if (!backendHealthy) {
+      const message = backendOfflineMessage ?? "Backend offline (5050). Start the API before installing models.";
+      setAutopullMessage(message);
+      devlog({ evt: "ui.models.autopull.blocked", reason: "backend_offline" });
+      return;
+    }
     if (isAutopulling) return;
     setIsAutopulling(true);
     setAutopullMessage("Starting Gemma3 install…");
@@ -1158,9 +1199,12 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     } finally {
       setIsAutopulling(false);
     }
-  }, [isAutopulling, refreshModels, pushToast]);
+  }, [backendHealthy, backendOfflineMessage, isAutopulling, refreshModels, pushToast]);
 
   useEffect(() => {
+    if (!backendHealthy) {
+      return;
+    }
     if (chatModels.length > 0) {
       autopullAttemptedRef.current = false;
       return;
@@ -1172,7 +1216,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     setAutopullMessage((current) => current ?? "No chat models detected. Installing Gemma3…");
     devlog({ evt: "ui.models.autopull.auto" });
     void handleAutopull();
-  }, [chatModels, handleAutopull, isAutopulling]);
+  }, [backendHealthy, chatModels, handleAutopull, isAutopulling]);
 
   const handleExtractContext = useCallback(async () => {
     const targetUrl = currentUrl?.trim();
@@ -2658,6 +2702,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     return details.join(" · ");
   }, [shadowConfig, shadowConfigError, shadowConfigLoading, shadowModeEnabled]);
 
+  const modelSelectDisabled = backendHealth.loading || !backendHealthy;
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <OmniBox
@@ -2669,6 +2715,25 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <NavProgressHud />
+      {!backendHealthy && backendOfflineMessage ? (
+        <div className="flex items-center justify-between gap-3 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <span>{backendOfflineMessage}</span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              void backendHealth.refresh();
+            }}
+            disabled={backendHealth.loading}
+          >
+            {backendHealth.loading ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
+            ) : null}
+            Retry
+          </Button>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="font-semibold text-foreground">Shadow mode</span>
@@ -2701,11 +2766,17 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               Crawl this page
             </Button>
           ) : null}
-          <Switch
-            checked={shadowModeEnabled}
-            onCheckedChange={handleShadowToggle}
-            disabled={shadowConfigLoading || shadowConfigSaving}
-            aria-label="Toggle shadow mode"
+          <ShadowToggle
+            enabled={shadowModeEnabled}
+            onToggle={handleShadowToggle}
+            disabled={
+              shadowConfigLoading ||
+              shadowConfigSaving ||
+              backendHealth.loading ||
+              !backendHealthy
+            }
+            loading={shadowConfigSaving}
+            error={backendHealthy ? shadowConfigError : null}
           />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -2830,17 +2901,18 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                 <ChatPanel
                   header={
                     <CopilotHeader
-                      chatModels={chatModelOptions}
-                      selectedModel={chatModel}
-                      onModelChange={handleModelSelect}
-                      installing={isAutopulling}
-                      onInstallModel={handleAutopull}
-                      installMessage={autopullMessage}
-                      reachable={Boolean(ollamaStatus?.running)}
-                      statusLabel={isChatLoading ? "Generating response" : undefined}
-                      timeSummary={timeSummary}
-                    />
-                  }
+                  chatModels={chatModelOptions}
+                  selectedModel={chatModel}
+                  onModelChange={handleModelSelect}
+                  installing={isAutopulling}
+                  onInstallModel={handleAutopull}
+                  installMessage={autopullMessage}
+                  reachable={Boolean(ollamaStatus?.running)}
+                  statusLabel={isChatLoading ? "Generating response" : undefined}
+                  timeSummary={timeSummary}
+                  controlsDisabled={modelSelectDisabled}
+                />
+              }
                   messages={chatMessages}
                   input={chatInput}
                   onInputChange={setChatInput}

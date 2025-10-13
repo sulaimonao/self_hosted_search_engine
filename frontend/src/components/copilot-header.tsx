@@ -1,15 +1,9 @@
 "use client";
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { AlertTriangle, Loader2, PlugZap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ModelSelect } from "@/components/toolbar/ModelSelect";
 
 interface CopilotHeaderProps {
   chatModels: string[];
@@ -26,6 +20,7 @@ interface CopilotHeaderProps {
     serverZone: string;
     clientZone: string;
   } | null;
+  controlsDisabled?: boolean;
 }
 
 export function CopilotHeader({
@@ -38,9 +33,10 @@ export function CopilotHeader({
   reachable = true,
   statusLabel,
   timeSummary,
+  controlsDisabled = false,
 }: CopilotHeaderProps) {
   const hasModels = chatModels.length > 0;
-  const disabled = installing || chatModels.length === 0;
+  const disabled = installing || chatModels.length === 0 || controlsDisabled;
 
   return (
     <div className="flex flex-col gap-3">
@@ -62,22 +58,13 @@ export function CopilotHeader({
         {hasModels ? (
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Model</span>
-            <Select
-              value={selectedModel ?? undefined}
-              onValueChange={onModelChange}
+            <ModelSelect
+              value={selectedModel}
+              options={chatModels}
+              onChange={onModelChange}
               disabled={disabled}
-            >
-              <SelectTrigger className="h-8 w-48">
-                <SelectValue placeholder="Select model" />
-              </SelectTrigger>
-              <SelectContent>
-                {chatModels.map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {option}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              loading={installing}
+            />
           </div>
         ) : null}
       </div>
