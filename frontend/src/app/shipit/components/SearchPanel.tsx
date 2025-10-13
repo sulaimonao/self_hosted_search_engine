@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -6,7 +5,7 @@ import useSWR from "swr";
 
 import { api } from "@/app/shipit/lib/api";
 
-import FacetRail from "./FacetRail";
+import FacetRail, { FacetRecord } from "./FacetRail";
 
 type HybridSearchHit = {
   url: string;
@@ -21,6 +20,10 @@ type HybridSearchResponse = {
   combined: HybridSearchHit[];
   vector_top_score: number;
   keyword_fallback: boolean;
+  facets?: FacetRecord;
+  data?: {
+    facets?: FacetRecord;
+  };
 };
 
 function formatHostname(url: string): string {
@@ -33,14 +36,17 @@ function formatHostname(url: string): string {
 
 export default function SearchPanel(): JSX.Element {
   const [query, setQuery] = useState<string>("");
-  const searchPath = query ? `/api/index/search?q=${encodeURIComponent(query)}&k=12` : null;
+  const searchPath: string | null = query
+    ? `/api/index/search?q=${encodeURIComponent(query)}&k=12`
+    : null;
   const { data, isLoading } = useSWR<HybridSearchResponse>(searchPath, api);
 
   const hits = data?.combined ?? [];
+  const facets = data?.facets ?? data?.data?.facets;
 
   return (
     <div className="grid grid-cols-[16rem_1fr] gap-4">
-      <FacetRail facets={data?.data?.facets} />
+      <FacetRail facets={facets} />
       <div>
         <div className="flex gap-2 mb-3">
           <input

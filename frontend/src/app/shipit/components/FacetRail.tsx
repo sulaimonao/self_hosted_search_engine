@@ -2,7 +2,7 @@
 
 type FacetEntry = [string, number];
 
-type FacetRecord = Record<string, FacetEntry[]>;
+export type FacetRecord = Record<string, FacetEntry[]>;
 
 interface FacetRailProps {
   facets: FacetRecord | undefined;

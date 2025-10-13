@@ -1058,7 +1058,7 @@ export async function sendChat(
     let payload: Record<string, unknown> | null = null;
     try {
       payload = (await response.clone().json()) as Record<string, unknown>;
-    } catch (error) {
+    } catch {
       payload = null;
     }
 
@@ -1843,7 +1843,8 @@ async function requestSelectionResult(
       payload = await response.text();
     }
   } catch (error) {
-    throw new Error(`${errorMessage}: Unable to parse response`);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${errorMessage}: Unable to parse response (${detail})`);
   }
 
   if (!response.ok) {
