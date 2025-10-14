@@ -35,6 +35,7 @@ diagnostics/
 !backend/app/api/docs.py
 !backend/app/api/memory.py
 !backend/app/api/chat_history.py
+!backend/app/api/browser.py
 !backend/app/api/_shipit_jobs.py
 !backend/app/api/shipit_crawl.py
 !backend/app/api/shipit_diag.py
@@ -80,6 +81,7 @@ diagnostics/
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
 !tests/backend/test_vector_index_retry.py
+!tests/backend/test_app_state_browser.py
 !tests/backend/test_agent_runtime.py
 /.venv
 .venv/
