@@ -231,6 +231,17 @@ def _chat_endpoint(config: AppConfig) -> str:
     return f"{config.ollama_url.rstrip('/')}/api/chat"
 
 
+def _close_response_safely(response: Any) -> None:
+    """Best-effort wrapper to close streaming responses."""
+
+    close_fn = getattr(response, "close", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception:  # pragma: no cover - defensive cleanup
+            LOGGER.debug("failed to close chat response", exc_info=True)
+
+
 class _StreamAccumulator:
     """Track the latest streaming payload and accumulated text."""
 
@@ -300,7 +311,7 @@ def _drain_chat_response(response: requests.Response) -> tuple[Mapping[str, Any]
     for payload, _delta, acc in _iter_streaming_response(response):
         accumulator = acc
         final_payload = payload
-    response.close()
+    _close_response_safely(response)
     if accumulator is None or accumulator.payload is None or final_payload is None:
         raise ValueError("Upstream response stream was empty")
     return accumulator.payload, accumulator
@@ -439,7 +450,7 @@ def _stream_chat_response(
                 trace_id=trace_id,
             )
         finally:
-            response.close()
+            _close_response_safely(response)
 
     resp = Response(stream_with_context(_ndjson_stream(_events())), mimetype="application/x-ndjson")
     resp.headers["X-LLM-Model"] = candidate

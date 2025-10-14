@@ -44,6 +44,7 @@ diagnostics/
 !backend/app/api/system_check.py
 !backend/app/api/meta.py
 !backend/app/api/sources.py
+!backend/app/api/schemas.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py

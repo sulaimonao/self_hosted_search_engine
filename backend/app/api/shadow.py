@@ -87,13 +87,31 @@ def _policy_to_payload(policy: ShadowPolicy) -> dict[str, Any]:
     return data
 
 
+def _ensure_enabled_flag(manager, config: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
+    if not isinstance(config, dict):
+        config = {}
+    enabled_value = config.get("enabled")
+    if enabled_value is None:
+        getter = getattr(manager, "is_enabled", None)
+        if callable(getter):
+            try:
+                enabled_value = getter()
+            except Exception:  # pragma: no cover - defensive guard
+                enabled_value = None
+        if enabled_value is None and hasattr(manager, "enabled"):
+            enabled_value = getattr(manager, "enabled")
+    enabled_bool = bool(enabled_value)
+    config["enabled"] = enabled_bool
+    return config, enabled_bool
+
+
 @bp.get("")
 def shadow_config():
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
         return error_response
 
-    config = manager.get_config()
+    config, _ = _ensure_enabled_flag(manager, manager.get_config())
     policy_store = _policy_store()
     if policy_store is not None:
         config["policy"] = _policy_to_payload(policy_store.get_global())
@@ -112,10 +130,11 @@ def update_shadow_config():
     if enabled_value is None:
         return jsonify({"error": "invalid_enabled"}), 400
 
-    config = manager.set_enabled(enabled_value)
+    config, enabled_state = _ensure_enabled_flag(manager, manager.set_enabled(enabled_value))
+    config["enabled"] = enabled_state
     policy_store = _policy_store()
     if policy_store is not None:
-        policy_store.update_global({"enabled": enabled_value})
+        policy_store.update_global({"enabled": enabled_state})
         config["policy"] = _policy_to_payload(policy_store.get_global())
     return jsonify(config), 200
 
@@ -125,10 +144,11 @@ def toggle_shadow():
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
         return error_response
-    config = manager.toggle()
+    config, enabled_state = _ensure_enabled_flag(manager, manager.toggle())
+    config["enabled"] = enabled_state
     policy_store = _policy_store()
     if policy_store is not None:
-        policy_store.update_global({"enabled": config.get("enabled", False)})
+        policy_store.update_global({"enabled": enabled_state})
         config["policy"] = _policy_to_payload(policy_store.get_global())
     return jsonify(config), 200
 
