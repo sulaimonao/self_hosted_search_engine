@@ -49,6 +49,9 @@ class Candidate:
     weight: float
     available_at: float = 0.0
     score: float | None = None
+    depth: int = 0
+    is_source: bool = False
+    parent_url: str | None = None
 
     def priority(self) -> float:
         return self.score if self.score is not None else self.weight

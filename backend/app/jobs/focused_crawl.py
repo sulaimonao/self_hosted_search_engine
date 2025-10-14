@@ -15,6 +15,7 @@ from crawler.run import FocusedCrawler
 from server.discover import DiscoveryEngine
 
 from backend.app.db import AppStateDB
+from backend.app.services.source_follow import SourceFollowConfig, SourceLink
 from backend.app.services.categorizer import deterministic_categories
 from backend.app.services.progress_bus import ProgressBus
 
@@ -178,7 +179,15 @@ def run_focused_crawl(
             attributes={"seed.count": len(seeds), "crawl.depth": depth_value},
             inputs={"budget": budget, "use_llm": use_llm},
         ) as crawl_span:
-            raw_path, pages = _crawl(query, budget, use_llm, model, config, seeds)
+            raw_path, pages = _crawl(
+                query,
+                budget,
+                use_llm,
+                model,
+                config,
+                seeds,
+                state_db=state_db,
+            )
             if crawl_span is not None:
                 crawl_span.set_attribute("crawl.pages", len(pages))
         _emit("crawl_complete", pages_fetched=len(pages), raw_path=str(raw_path) if raw_path else None)
@@ -455,11 +464,39 @@ def _crawl(
     model: Optional[str],
     config: AppConfig,
     seeds: Sequence[Candidate],
+    *,
+    state_db: AppStateDB | None = None,
 ) -> tuple[Optional[Path], Sequence[object]]:
     if not seeds:
         return None, []
 
     async def _run() -> FocusedCrawler:
+        source_config = state_db.get_sources_config() if state_db is not None else SourceFollowConfig()
+
+        def _record_links(parent: str, links: Sequence[SourceLink], mark_enqueued: bool) -> None:
+            if state_db is None:
+                return
+            state_db.record_source_links(parent, links, mark_enqueued=mark_enqueued)
+
+        def _record_missing(
+            parent: str,
+            source_url: str,
+            reason: str,
+            http_status: Optional[int],
+            next_action: Optional[str],
+            notes: Optional[str],
+        ) -> None:
+            if state_db is None:
+                return
+            state_db.record_missing_source(
+                parent,
+                source_url,
+                reason=reason,
+                http_status=http_status,
+                next_action=next_action,
+                notes=notes,
+            )
+
         crawler = FocusedCrawler(
             query=query,
             budget=budget,
@@ -467,11 +504,18 @@ def _crawl(
             use_llm=use_llm,
             model=model,
             initial_seeds=seeds,
+            source_config=source_config,
+            record_source_links=_record_links,
+            record_missing_source=_record_missing,
         )
         await crawler.run()
         return crawler
 
     crawler = asyncio.run(_run())
+    if state_db is not None:
+        for page in crawler.results:
+            if getattr(page, "is_source", False) and getattr(page, "parent_url", None):
+                state_db.resolve_missing_source(page.parent_url, page.url)
     return crawler.last_output_path, list(crawler.results)
 
 

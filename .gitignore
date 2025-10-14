@@ -43,6 +43,7 @@ diagnostics/
 !backend/app/api/shipit_ingest.py
 !backend/app/api/system_check.py
 !backend/app/api/meta.py
+!backend/app/api/sources.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
@@ -56,6 +57,7 @@ diagnostics/
 !backend/app/services/labeler.py
 !backend/app/services/embeddings.py
 !backend/app/services/__init__.py
+!backend/app/services/source_follow.py
 !backend/app/db/__init__.py
 !backend/app/db/schema.py
 !backend/app/db/store.py
@@ -77,12 +79,14 @@ diagnostics/
 !tests/api/test_visits_api.py
 !tests/api/test_docs_api.py
 !tests/api/test_meta_api.py
+!tests/api/test_sources_api.py
 !tests/e2e/test_agent_browser.py
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
 !tests/backend/test_vector_index_retry.py
 !tests/backend/test_app_state_browser.py
 !tests/backend/test_agent_runtime.py
+!tests/backend/test_source_follow.py
 /.venv
 .venv/
 logs/backend.pid

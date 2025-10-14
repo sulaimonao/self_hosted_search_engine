@@ -74,6 +74,7 @@ def create_app() -> Flask:
     from .api import shipit_history as shipit_history_api
     from .api import shipit_ingest as shipit_ingest_api
     from .api import system_check as system_check_api
+    from .api import sources as sources_api
     from .config import AppConfig
     from .jobs.focused_crawl import FocusedCrawlManager
     from .jobs.runner import JobRunner
@@ -402,6 +403,7 @@ def create_app() -> Flask:
     app.register_blueprint(shipit_history_api.bp)
     app.register_blueprint(shipit_ingest_api.bp)
     app.register_blueprint(system_check_api.bp)
+    app.register_blueprint(sources_api.bp)
     if feature_agent_mode and browser_manager is not None:
         app.register_blueprint(agent_browser_api.bp)
 

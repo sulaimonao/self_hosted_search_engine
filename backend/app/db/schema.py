@@ -87,8 +87,14 @@ def _migration_already_applied(
             return _column_exists(connection, "pending_documents", "last_error") and _column_exists(
                 connection, "pending_documents", "retry_count"
             )
+        if name == "006_sources.sql":
+            return _column_exists(connection, "crawl_jobs", "parent_url") and _column_exists(
+                connection, "crawl_jobs", "is_source"
+            )
     if "already exists" in message and name == "003_job_status_settings.sql":
         return _table_exists(connection, "job_status")
+    if "already exists" in message and name == "006_sources.sql":
+        return _table_exists(connection, "source_links") and _table_exists(connection, "missing_sources")
     return False
 
 

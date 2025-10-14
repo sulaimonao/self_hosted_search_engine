@@ -14,10 +14,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.app.services.source_follow import (
+    SourceFollowConfig,
+    SourceLink,
+    normalize_config,
+    serialize_config,
+)
+
 from .schema import connect, migrate
 
 
 LOGGER = logging.getLogger(__name__)
+
+SOURCES_CONFIG_KEY = "sources.config"
 
 
 def _serialize(data: Any) -> str:
@@ -356,19 +365,50 @@ class AppStateDB:
             return "off"
         return str(settings.get("mode") or "off")
 
-    def enqueue_crawl_job(self, url: str, *, priority: int = 0, reason: str | None = None) -> str:
+    def enqueue_crawl_job(
+        self,
+        url: str,
+        *,
+        priority: int = 0,
+        reason: str | None = None,
+        parent_url: str | None = None,
+        is_source: bool = False,
+    ) -> str:
         job_id = uuid.uuid4().hex
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path, priority, reason, enqueued_at)
-                VALUES(?, 'queued', NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO crawl_jobs(
+                    id,
+                    status,
+                    seed,
+                    query,
+                    normalized_path,
+                    priority,
+                    reason,
+                    enqueued_at,
+                    parent_url,
+                    is_source
+                )
+                VALUES(?, 'queued', NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP, ?, ?)
                 """,
-                (job_id, priority, reason),
+                (job_id, priority, reason, parent_url, int(bool(is_source))),
             )
             self._conn.execute(
                 "INSERT INTO crawl_events(job_id, stage, payload) VALUES(?, ?, ?)",
-                (job_id, "enqueue", _serialize({"url": url, "reason": reason, "priority": priority})),
+                (
+                    job_id,
+                    "enqueue",
+                    _serialize(
+                        {
+                            "url": url,
+                            "reason": reason,
+                            "priority": priority,
+                            "parent_url": parent_url,
+                            "is_source": bool(is_source),
+                        }
+                    ),
+                ),
             )
         return job_id
 
@@ -390,7 +430,19 @@ class AppStateDB:
         with self._lock, self._conn:
             row = self._conn.execute(
                 """
-                SELECT id, status, seed, query, priority, reason, enqueued_at, started_at, finished_at, error
+                SELECT
+                    id,
+                    status,
+                    seed,
+                    query,
+                    priority,
+                    reason,
+                    enqueued_at,
+                    started_at,
+                    finished_at,
+                    error,
+                    parent_url,
+                    is_source
                   FROM crawl_jobs
                  WHERE id = ?
                 """,
@@ -524,16 +576,28 @@ class AppStateDB:
     # ------------------------------------------------------------------
     # Crawl jobs
     # ------------------------------------------------------------------
-    def record_crawl_job(self, job_id: str, *, seed: str | None = None, query: str | None = None,
-                          normalized_path: str | None = None) -> None:
+    def record_crawl_job(
+        self,
+        job_id: str,
+        *,
+        seed: str | None = None,
+        query: str | None = None,
+        normalized_path: str | None = None,
+        parent_url: str | None = None,
+        is_source: bool = False,
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path)
-                VALUES(?, 'queued', ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET seed=excluded.seed, query=excluded.query
+                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path, parent_url, is_source)
+                VALUES(?, 'queued', ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    seed=excluded.seed,
+                    query=excluded.query,
+                    parent_url=COALESCE(excluded.parent_url, crawl_jobs.parent_url),
+                    is_source=excluded.is_source
                 """,
-                (job_id, seed, query, normalized_path),
+                (job_id, seed, query, normalized_path, parent_url, int(bool(is_source))),
             )
     def pending_crawl_jobs(self) -> list[dict[str, Any]]:
         with self._lock, self._conn:
@@ -757,6 +821,142 @@ class AppStateDB:
                 """,
                 (key, value),
             )
+
+    def get_sources_config(self) -> SourceFollowConfig:
+        raw = self.get_setting(SOURCES_CONFIG_KEY)
+        payload: Mapping[str, object] | None = None
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, Mapping):
+                    payload = parsed
+            except json.JSONDecodeError:
+                LOGGER.warning("invalid sources config JSON; using defaults")
+        return normalize_config(payload)
+
+    def set_sources_config(
+        self, config: SourceFollowConfig | Mapping[str, object]
+    ) -> SourceFollowConfig:
+        if isinstance(config, SourceFollowConfig):
+            normalized = config
+        else:
+            normalized = normalize_config(config)
+        serialized = serialize_config(normalized)
+        self.set_setting(SOURCES_CONFIG_KEY, serialized)
+        return normalized
+
+    # ------------------------------------------------------------------
+    # Source discovery records
+    # ------------------------------------------------------------------
+    def record_source_links(
+        self,
+        parent_url: str,
+        links: Sequence[SourceLink],
+        *,
+        mark_enqueued: bool = False,
+    ) -> None:
+        if not parent_url or not links:
+            return
+        enqueued_flag = 1 if mark_enqueued else 0
+        with self._lock, self._conn:
+            for link in links:
+                self._conn.execute(
+                    """
+                    INSERT INTO source_links(parent_url, source_url, kind, enqueued)
+                    VALUES(?, ?, ?, ?)
+                    ON CONFLICT(parent_url, source_url) DO UPDATE SET
+                        kind = excluded.kind,
+                        enqueued = CASE
+                            WHEN source_links.enqueued = 1 THEN 1
+                            ELSE excluded.enqueued
+                        END
+                    """,
+                    (parent_url, link.url, link.kind, enqueued_flag),
+                )
+
+    def mark_sources_enqueued(self, parent_url: str, urls: Sequence[str]) -> None:
+        if not parent_url or not urls:
+            return
+        with self._lock, self._conn:
+            for url in urls:
+                self._conn.execute(
+                    "UPDATE source_links SET enqueued = 1 WHERE parent_url = ? AND source_url = ?",
+                    (parent_url, url),
+                )
+
+    def record_missing_source(
+        self,
+        parent_url: str,
+        source_url: str,
+        *,
+        reason: str,
+        http_status: int | None = None,
+        next_action: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        if not parent_url or not source_url:
+            return
+        timestamp = int(time.time())
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO missing_sources(parent_url, source_url, reason, http_status, last_attempt, retries, next_action, notes)
+                VALUES(?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(parent_url, source_url) DO UPDATE SET
+                    reason = excluded.reason,
+                    http_status = excluded.http_status,
+                    last_attempt = excluded.last_attempt,
+                    retries = missing_sources.retries + 1,
+                    next_action = COALESCE(excluded.next_action, missing_sources.next_action),
+                    notes = COALESCE(excluded.notes, missing_sources.notes)
+                """,
+                (
+                    parent_url,
+                    source_url,
+                    reason,
+                    http_status,
+                    timestamp,
+                    next_action,
+                    notes,
+                ),
+            )
+
+    def resolve_missing_source(self, parent_url: str, source_url: str, *, notes: str | None = None) -> None:
+        if not parent_url or not source_url:
+            return
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM missing_sources WHERE parent_url = ? AND source_url = ?",
+                (parent_url, source_url),
+            )
+            if notes:
+                self._conn.execute(
+                    """
+                    INSERT INTO source_links(parent_url, source_url, kind, enqueued, discovered_at)
+                    VALUES(?, ?, 'resolved', 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(parent_url, source_url) DO UPDATE SET
+                        enqueued = 1
+                    """,
+                    (parent_url, source_url),
+                )
+
+    def list_missing_sources(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        capped = max(1, min(int(limit), 500))
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT id, parent_url, source_url, reason, http_status, last_attempt, retries, next_action, notes
+                FROM missing_sources
+                ORDER BY COALESCE(last_attempt, 0) DESC
+                LIMIT ?
+                """,
+                (capped,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Pending vectors
