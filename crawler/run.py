@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -25,6 +25,13 @@ except ImportError:  # pragma: no cover - optional dependency
     BeautifulSoup = None
 
 from backend.app.metrics import metrics
+from backend.app.services.source_follow import (
+    BudgetExceeded,
+    SourceBudget,
+    SourceFollowConfig,
+    SourceLink,
+    extract_sources,
+)
 from frontier import ContentFingerprint, RobotsCache, UrlBloom
 
 from .frontier import (
@@ -54,6 +61,9 @@ class PageResult:
     fetched_at: float
     fingerprint: ContentFingerprint
     outlinks: List[str]
+    sources: List[SourceLink]
+    is_source: bool
+    parent_url: Optional[str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,7 +118,7 @@ def _visible_text_length(html: str) -> int:
         return len(html)
 
 
-async def _fetch_with_playwright(url: str) -> Optional[PageResult]:
+async def _fetch_with_playwright(url: str, candidate: Optional[Candidate] = None) -> Optional[PageResult]:
     try:
         from playwright.async_api import async_playwright
     except Exception as exc:  # pragma: no cover - optional dependency issues
@@ -125,6 +135,7 @@ async def _fetch_with_playwright(url: str) -> Optional[PageResult]:
             status = response.status if response else 200
             fingerprint = ContentFingerprint.from_text(html)
             outlinks = _extract_outlinks(url, html)
+            sources = extract_sources(html, url)
             await browser.close()
             metrics.record_playwright_use()
             return PageResult(
@@ -135,6 +146,9 @@ async def _fetch_with_playwright(url: str) -> Optional[PageResult]:
                 fetched_at=time.time(),
                 fingerprint=fingerprint,
                 outlinks=outlinks,
+                sources=sources,
+                is_source=candidate.is_source if candidate else False,
+                parent_url=candidate.parent_url if candidate else None,
             )
     except Exception as exc:
         LOGGER.debug("Playwright fetch failed for %s: %s", url, exc)
@@ -186,6 +200,11 @@ class FocusedCrawler:
         use_llm: bool,
         model: Optional[str],
         initial_seeds: Optional[Sequence[Candidate]] = None,
+        source_config: Optional[SourceFollowConfig] = None,
+        record_source_links: Optional[Callable[[str, Sequence[SourceLink], bool], None]] = None,
+        record_missing_source: Optional[
+            Callable[[str, str, str, Optional[int], Optional[str], Optional[str]], None]
+        ] = None,
     ) -> None:
         self.query = query
         self.budget = max(1, budget)
@@ -203,6 +222,17 @@ class FocusedCrawler:
         self._domain_lock_guard: Optional[asyncio.Lock] = None
         self._results_lock: Optional[asyncio.Lock] = None
         self.last_output_path: Optional[Path] = None
+        self._queued_urls: set[str] = set()
+        self.source_config = source_config or SourceFollowConfig()
+        self.source_budget = SourceBudget(self.source_config) if self.source_config.enabled else None
+        self._record_source_links = record_source_links
+        self._record_missing_source = record_missing_source
+        self.source_stats = {
+            "discovered": 0,
+            "enqueued": 0,
+            "skipped": 0,
+            "budget_exhausted": False,
+        }
         if not RESPECT_ROBOTS:
             LOGGER.warning("Robots.txt enforcement disabled for this run")
 
@@ -252,6 +282,7 @@ class FocusedCrawler:
         queue: asyncio.Queue[Candidate] = asyncio.Queue()
         for candidate in seeds:
             await queue.put(candidate)
+            self._queued_urls.add(candidate.url)
         stop_event = asyncio.Event()
         workers = [asyncio.create_task(self._worker(client, queue, stop_event)) for _ in range(GLOBAL_CONCURRENCY)]
         await queue.join()
@@ -285,10 +316,12 @@ class FocusedCrawler:
             domain = urlparse(url).netloc.lower()
             lock = await self._get_domain_lock(domain)
             async with lock:
-                result = await self._fetch_single(client, candidate)
+                result, failure = await self._fetch_single(client, candidate)
             queue.task_done()
             if result:
                 assert self._results_lock is not None
+                follow_sources = bool(self.source_budget)
+                pending_sources = result.sources if self.source_budget else []
                 async with self._results_lock:
                     if len(self.results) >= self.budget:
                         stop_event.set()
@@ -296,8 +329,14 @@ class FocusedCrawler:
                     self.results.append(result)
                     self.visited.add(url)
                     self.cooldowns.mark(self.query, domain, time.time())
+                    if pending_sources:
+                        self.source_stats["discovered"] += len(pending_sources)
                     if len(self.results) >= self.budget:
                         stop_event.set()
+                if follow_sources:
+                    await self._handle_sources(candidate, result, queue)
+            elif failure and candidate.is_source:
+                self._handle_source_failure(candidate, failure)
 
     async def _get_domain_lock(self, domain: str) -> asyncio.Semaphore:
         if self._domain_lock_guard is None:
@@ -309,24 +348,26 @@ class FocusedCrawler:
                 self._domain_locks[domain] = lock
             return lock
 
-    async def _fetch_single(self, client: httpx.AsyncClient, candidate: Candidate) -> Optional[PageResult]:
+    async def _fetch_single(
+        self, client: httpx.AsyncClient, candidate: Candidate
+    ) -> tuple[Optional[PageResult], Optional[dict[str, object]]]:
         url = candidate.url
         if url in self.visited:
-            return None
+            return None, None
         if RESPECT_ROBOTS and not await self.robots.allowed_async(client, url):
             LOGGER.debug("blocked by robots: %s", url)
-            return None
+            return None, {"reason": "robots", "next_action": "manual"}
         if PLAYWRIGHT_MODE in {"1", "true", "yes", "on"}:
-            replacement = await _fetch_with_playwright(url)
+            replacement = await _fetch_with_playwright(url, candidate)
             if replacement:
                 fingerprint = replacement.fingerprint
                 if fingerprint.md5 in self._content_seen:
-                    return None
+                    return None, None
                 self._content_seen.add(fingerprint.md5)
                 metrics.record_crawl_pages(1)
-                return replacement
+                return replacement, None
         backoff = 1.0
-        last_error: Optional[Exception] = None
+        last_failure: Optional[dict[str, object]] = None
         for _ in range(MAX_RETRIES):
             try:
                 response = await client.get(url, timeout=10.0, follow_redirects=True)
@@ -335,18 +376,21 @@ class FocusedCrawler:
                 title = _extract_title(html)
                 fingerprint = ContentFingerprint.from_text(html)
                 if fingerprint.md5 in self._content_seen:
-                    return None
+                    return None, None
                 metrics.record_crawl_pages(1)
                 if PLAYWRIGHT_MODE != "0" and _should_use_playwright(html):
-                    replacement = await _fetch_with_playwright(str(response.url))
+                    replacement = await _fetch_with_playwright(str(response.url), candidate)
                     if replacement:
                         fingerprint = replacement.fingerprint
                         if fingerprint.md5 in self._content_seen:
-                            return None
+                            return None, None
                         self._content_seen.add(fingerprint.md5)
-                        return replacement
+                        return replacement, None
                 outlinks = _extract_outlinks(str(response.url), html)
                 self._content_seen.add(fingerprint.md5)
+                sources = extract_sources(html, str(response.url))
+                if candidate.is_source and status >= 400:
+                    return None, {"reason": str(status), "status": status}
                 return PageResult(
                     url=str(response.url),
                     status=status,
@@ -355,14 +399,90 @@ class FocusedCrawler:
                     fetched_at=time.time(),
                     fingerprint=fingerprint,
                     outlinks=outlinks,
-                )
+                    sources=sources,
+                    is_source=candidate.is_source,
+                    parent_url=candidate.parent_url,
+                ), None
             except Exception as exc:
-                last_error = exc
+                reason = "network"
+                if isinstance(exc, asyncio.TimeoutError):
+                    reason = "timeout"
+                elif httpx is not None and isinstance(exc, getattr(httpx, "TimeoutException", ())):
+                    reason = "timeout"
+                last_failure = {"reason": reason, "detail": str(exc)}
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 8.0)
-        if last_error:
-            LOGGER.debug("failed to fetch %s: %s", url, last_error)
-        return None
+        if last_failure:
+            LOGGER.debug("failed to fetch %s: %s", url, last_failure.get("detail", "error"))
+        return None, last_failure
+
+    async def _handle_sources(
+        self,
+        candidate: Candidate,
+        result: PageResult,
+        queue: asyncio.Queue[Candidate],
+    ) -> None:
+        if not self.source_budget or not result.sources:
+            return
+        depth = max(0, candidate.depth) + 1
+        per_page_limit = max(1, self.source_config.max_sources_per_page)
+        allowed_links: list[SourceLink] = []
+        budget_exhausted = False
+        for link in result.sources[:per_page_limit]:
+            try:
+                if not self.source_budget.can_follow(result.url, link.url, kind=link.kind, depth=depth):
+                    self.source_stats["skipped"] += 1
+                    continue
+            except BudgetExceeded:
+                budget_exhausted = True
+                break
+            if link.url in self._queued_urls or link.url in self.visited:
+                self.source_stats["skipped"] += 1
+                continue
+            self._queued_urls.add(link.url)
+            self.source_budget.record_follow()
+            await queue.put(
+                Candidate(
+                    url=link.url,
+                    source="source",
+                    weight=max(candidate.weight * 0.8, 0.1),
+                    score=candidate.score,
+                    depth=depth,
+                    is_source=True,
+                    parent_url=result.url,
+                )
+            )
+            allowed_links.append(link)
+        if allowed_links:
+            self.source_stats["enqueued"] += len(allowed_links)
+            if self._record_source_links:
+                try:
+                    self._record_source_links(result.url, allowed_links, True)
+                except Exception:  # pragma: no cover - logging only
+                    LOGGER.debug("failed to persist source links for %s", result.url, exc_info=True)
+        if budget_exhausted:
+            self.source_stats["budget_exhausted"] = True
+
+    def _handle_source_failure(self, candidate: Candidate, failure: dict[str, object]) -> None:
+        self.source_stats["skipped"] += 1
+        if not self._record_missing_source:
+            return
+        parent = candidate.parent_url
+        if not parent:
+            return
+        reason = str(failure.get("reason", "unknown"))
+        status_value = failure.get("status")
+        http_status = None
+        if isinstance(status_value, int):
+            http_status = status_value
+        next_action_value = failure.get("next_action")
+        next_action = str(next_action_value) if isinstance(next_action_value, str) else None
+        notes_value = failure.get("detail")
+        notes = str(notes_value) if isinstance(notes_value, str) else None
+        try:
+            self._record_missing_source(parent, candidate.url, reason, http_status, next_action, notes)
+        except Exception:  # pragma: no cover - logging only
+            LOGGER.debug("failed to record missing source %s", candidate.url, exc_info=True)
 
     def _persist_results(self) -> None:
         if not self.results:
@@ -385,6 +505,12 @@ class FocusedCrawler:
                                 "content_hash": result.fingerprint.md5,
                                 "simhash": result.fingerprint.simhash,
                                 "outlinks": result.outlinks,
+                                "sources": [
+                                    {"url": link.url, "kind": link.kind}
+                                    for link in result.sources
+                                ],
+                                "is_source": bool(result.is_source),
+                                "parent_url": result.parent_url,
                             },
                             ensure_ascii=False,
                         )
