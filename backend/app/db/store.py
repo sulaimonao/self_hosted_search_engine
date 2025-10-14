@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -84,6 +85,441 @@ class AppStateDB:
         migrate(self._conn)
         self._lock = threading.RLock()
         self._schema_validation: SchemaValidation = self._validate_schema()
+
+    # ------------------------------------------------------------------
+    # Tabs & history
+    # ------------------------------------------------------------------
+    def ensure_tab(self, tab_id: str, *, shadow_mode: str | None = None) -> None:
+        if not tab_id:
+            return
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO tabs(id) VALUES(?)",
+                (tab_id,),
+            )
+            if shadow_mode:
+                self._conn.execute(
+                    "UPDATE tabs SET shadow_mode=? WHERE id=?",
+                    (shadow_mode, tab_id),
+                )
+
+    def update_tab_shadow_mode(self, tab_id: str, mode: str | None) -> None:
+        self.ensure_tab(tab_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE tabs SET shadow_mode=? WHERE id=?",
+                (mode, tab_id),
+            )
+
+    def tab_shadow_mode(self, tab_id: str) -> str | None:
+        if not tab_id:
+            return None
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT shadow_mode FROM tabs WHERE id=?",
+                (tab_id,),
+            ).fetchone()
+        if not row:
+            return None
+        value = row["shadow_mode"]
+        return str(value) if value is not None else None
+
+    def add_history_entry(
+        self,
+        *,
+        tab_id: str | None,
+        url: str,
+        title: str | None = None,
+        referrer: str | None = None,
+        status_code: int | None = None,
+        content_type: str | None = None,
+        shadow_enqueued: bool = False,
+    ) -> int:
+        self.ensure_tab(tab_id or "")
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO history(tab_id, url, title, referrer, status_code, content_type, shadow_enqueued)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (tab_id, url, title, referrer, status_code, content_type, int(bool(shadow_enqueued))),
+            )
+            history_id = cursor.lastrowid
+        return int(history_id)
+
+    def mark_history_shadow_enqueued(self, history_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE history SET shadow_enqueued=1 WHERE id=?",
+                (history_id,),
+            )
+
+    def delete_history_entry(self, history_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM history WHERE id=?", (history_id,))
+
+    def query_history(
+        self,
+        *,
+        limit: int = 200,
+        query: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            "SELECT id, tab_id, url, title, visited_at, referrer, status_code, content_type, shadow_enqueued",
+            "FROM history",
+        ]
+        clauses: list[str] = []
+        params: list[Any] = []
+        if query:
+            pattern = f"%{query.lower()}%"
+            clauses.append("(lower(url) LIKE ? OR lower(COALESCE(title,'')) LIKE ?)")
+            params.extend([pattern, pattern])
+        if start:
+            clauses.append("visited_at >= ?")
+            params.append(start.isoformat())
+        if end:
+            clauses.append("visited_at <= ?")
+            params.append(end.isoformat())
+        if clauses:
+            sql.append("WHERE " + " AND ".join(clauses))
+        sql.append("ORDER BY visited_at DESC")
+        sql.append("LIMIT ?")
+        params.append(max(1, min(int(limit), 1000)))
+        query_sql = " ".join(sql)
+        with self._lock, self._conn:
+            rows = self._conn.execute(query_sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Bookmarks
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _encode_tags(tags: Iterable[str] | None) -> str | None:
+        if not tags:
+            return None
+        normalized = sorted({str(tag).strip() for tag in tags if str(tag).strip()})
+        if not normalized:
+            return None
+        return json.dumps(normalized, ensure_ascii=False)
+
+    @staticmethod
+    def _decode_tags(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return [token.strip() for token in raw.split(",") if token.strip()]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+        return []
+
+    def create_bookmark_folder(self, name: str, parent_id: int | None = None) -> int:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO bookmark_folders(name, parent_id) VALUES(?, ?)",
+                (name, parent_id),
+            )
+            folder_id = cursor.lastrowid
+        return int(folder_id)
+
+    def list_bookmark_folders(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT id, name, parent_id, created_at FROM bookmark_folders ORDER BY name ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_bookmark(
+        self,
+        *,
+        url: str,
+        title: str | None = None,
+        folder_id: int | None = None,
+        tags: Iterable[str] | None = None,
+    ) -> int:
+        payload_tags = self._encode_tags(tags)
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO bookmarks(folder_id, url, title, tags) VALUES(?,?,?,?)",
+                (folder_id, url, title, payload_tags),
+            )
+            bookmark_id = cursor.lastrowid
+        return int(bookmark_id)
+
+    def list_bookmarks(self, folder_id: int | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT id, folder_id, url, title, tags, created_at FROM bookmarks"
+        params: list[Any] = []
+        if folder_id is not None:
+            sql += " WHERE folder_id = ?"
+            params.append(folder_id)
+        sql += " ORDER BY created_at DESC"
+        with self._lock, self._conn:
+            rows = self._conn.execute(sql, params).fetchall()
+        results = []
+        for row in rows:
+            record = dict(row)
+            record["tags"] = self._decode_tags(row["tags"])
+            results.append(record)
+        return results
+
+    # ------------------------------------------------------------------
+    # Seed sources
+    # ------------------------------------------------------------------
+    def list_source_categories(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT key, label FROM source_categories ORDER BY label ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_seed_sources(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT id, category_key, url, title, added_by, enabled, created_at
+                  FROM seed_sources
+                 ORDER BY category_key ASC, created_at DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def bulk_upsert_seed_sources(self, seeds: Sequence[Mapping[str, Any]]) -> int:
+        if not seeds:
+            return 0
+        with self._lock, self._conn:
+            for seed in seeds:
+                params = {
+                    "category_key": seed.get("category_key"),
+                    "url": seed.get("url"),
+                    "title": seed.get("title"),
+                    "added_by": seed.get("added_by", "user"),
+                    "enabled": 1 if seed.get("enabled", True) else 0,
+                }
+                self._conn.execute(
+                    """
+                    INSERT INTO seed_sources(category_key, url, title, added_by, enabled)
+                    VALUES(:category_key, :url, :title, :added_by, :enabled)
+                    ON CONFLICT(category_key, url) DO UPDATE SET
+                        title = COALESCE(excluded.title, seed_sources.title),
+                        added_by = excluded.added_by,
+                        enabled = excluded.enabled
+                    """,
+                    params,
+                )
+        return len(seeds)
+
+    def enabled_seed_urls(self, category_keys: Sequence[str] | None = None) -> list[str]:
+        sql = "SELECT url FROM seed_sources WHERE enabled = 1"
+        params: list[Any] = []
+        if category_keys:
+            placeholders = ",".join("?" for _ in category_keys)
+            sql += f" AND category_key IN ({placeholders})"
+            params.extend(category_keys)
+        sql += " ORDER BY created_at DESC"
+        with self._lock, self._conn:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [row["url"] for row in rows]
+
+    # ------------------------------------------------------------------
+    # Shadow settings & crawl queue
+    # ------------------------------------------------------------------
+    def get_shadow_settings(self) -> dict[str, Any]:
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT enabled, mode FROM shadow_settings WHERE id=1"
+            ).fetchone()
+        if not row:
+            return {"enabled": False, "mode": "off"}
+        return {"enabled": bool(row["enabled"]), "mode": row["mode"] or "off"}
+
+    def set_shadow_settings(self, *, enabled: bool, mode: str) -> dict[str, Any]:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO shadow_settings(id, enabled, mode)
+                VALUES(1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled, mode=excluded.mode, updated_at=CURRENT_TIMESTAMP
+                """,
+                (int(bool(enabled)), mode),
+            )
+        return {"enabled": bool(enabled), "mode": mode}
+
+    def effective_shadow_mode(self, tab_id: str | None) -> str:
+        tab_mode = self.tab_shadow_mode(tab_id or "")
+        if tab_mode and tab_mode != "off":
+            return tab_mode
+        settings = self.get_shadow_settings()
+        if not settings.get("enabled"):
+            return "off"
+        return str(settings.get("mode") or "off")
+
+    def enqueue_crawl_job(self, url: str, *, priority: int = 0, reason: str | None = None) -> str:
+        job_id = uuid.uuid4().hex
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path, priority, reason, enqueued_at)
+                VALUES(?, 'queued', NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (job_id, priority, reason),
+            )
+            self._conn.execute(
+                "INSERT INTO crawl_events(job_id, stage, payload) VALUES(?, ?, ?)",
+                (job_id, "enqueue", _serialize({"url": url, "reason": reason, "priority": priority})),
+            )
+        return job_id
+
+    def crawl_overview(self) -> dict[str, int]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) as total FROM crawl_jobs GROUP BY status"
+            ).fetchall()
+        summary = {"queued": 0, "running": 0, "done": 0, "error": 0}
+        for row in rows:
+            status = row["status"]
+            if status == "success":
+                summary["done"] += int(row["total"])
+            elif status in summary:
+                summary[status] += int(row["total"])
+        return summary
+
+    def crawl_job_status(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                """
+                SELECT id, status, seed, query, priority, reason, enqueued_at, started_at, finished_at, error
+                  FROM crawl_jobs
+                 WHERE id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def enqueue_seed_jobs(self, category_keys: Sequence[str], *, priority: int = 0) -> list[str]:
+        urls = self.enabled_seed_urls(category_keys)
+        job_ids: list[str] = []
+        for url in urls:
+            job_ids.append(self.enqueue_crawl_job(url, priority=priority, reason="seed"))
+        return job_ids
+
+    # ------------------------------------------------------------------
+    # Graph queries
+    # ------------------------------------------------------------------
+    def graph_summary(self) -> dict[str, Any]:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        with self._lock, self._conn:
+            page_total = self._conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+            site_total = self._conn.execute(
+                "SELECT COUNT(DISTINCT site) FROM pages WHERE site IS NOT NULL"
+            ).fetchone()[0]
+            fresh = self._conn.execute(
+                "SELECT COUNT(*) FROM pages WHERE last_seen IS NOT NULL AND last_seen >= ?",
+                (seven_days_ago.isoformat(),),
+            ).fetchone()[0]
+            top_sites = self._conn.execute(
+                """
+                SELECT site, COUNT(*) as degree
+                  FROM link_edges
+                  JOIN pages ON pages.url = link_edges.dst_url
+                 WHERE site IS NOT NULL
+              GROUP BY site
+              ORDER BY degree DESC
+              LIMIT 5
+                """
+            ).fetchall()
+        clusters = []
+        for row in top_sites:
+            clusters.append({"site": row["site"], "degree": row["degree"]})
+        return {
+            "pages": int(page_total),
+            "sites": int(site_total),
+            "fresh_7d": int(fresh),
+            "top_sites": clusters,
+        }
+
+    def graph_nodes(
+        self,
+        *,
+        site: str | None = None,
+        limit: int = 200,
+        min_degree: int = 0,
+        category: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            "SELECT id, url, site, title, first_seen, last_seen, topics",
+            "FROM pages",
+        ]
+        clauses: list[str] = []
+        params: list[Any] = []
+        if site:
+            clauses.append("site = ?")
+            params.append(site)
+        if start:
+            clauses.append("last_seen >= ?")
+            params.append(start.isoformat())
+        if end:
+            clauses.append("last_seen <= ?")
+            params.append(end.isoformat())
+        if category:
+            clauses.append("topics LIKE ?")
+            params.append(f"%{category}%")
+        if clauses:
+            sql.append("WHERE " + " AND ".join(clauses))
+        sql.append("ORDER BY last_seen DESC")
+        sql.append("LIMIT ?")
+        params.append(max(1, min(limit, 1000)))
+        query_sql = " ".join(sql)
+        with self._lock, self._conn:
+            rows = self._conn.execute(query_sql, params).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["topics"] = self._decode_tags(row["topics"])
+            if min_degree > 0:
+                degree = self._page_degree(row["url"])
+                if degree < min_degree:
+                    continue
+                record["degree"] = degree
+            results.append(record)
+        return results
+
+    def _page_degree(self, url: str) -> int:
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM link_edges WHERE src_url = ? OR dst_url = ?",
+                (url, url),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def graph_edges(
+        self,
+        *,
+        site: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            "SELECT src_url, dst_url, relation",
+            "FROM link_edges",
+        ]
+        params: list[Any] = []
+        if site:
+            sql.append(
+                "WHERE src_url IN (SELECT url FROM pages WHERE site = ?) OR dst_url IN (SELECT url FROM pages WHERE site = ?)"
+            )
+            params.extend([site, site])
+        sql.append("LIMIT ?")
+        params.append(max(1, min(limit, 2000)))
+        query_sql = " ".join(sql)
+        with self._lock, self._conn:
+            rows = self._conn.execute(query_sql, params).fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Crawl jobs

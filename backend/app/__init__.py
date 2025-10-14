@@ -51,6 +51,7 @@ def create_app() -> Flask:
     from .api import chat as chat_api
     from .api import discovery as discovery_api
     from .api import extract as extract_api
+    from .api import browser as browser_api
     from .api import progress as progress_api
     from .api import visits as visits_api
     from .api import docs as docs_api
@@ -391,6 +392,7 @@ def create_app() -> Flask:
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
     app.register_blueprint(agent_tools_api.bp)
+    app.register_blueprint(browser_api.bp)
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
     app.register_blueprint(index_api.bp)
