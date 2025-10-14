@@ -12,7 +12,7 @@ from backend.app.db import AppStateDB
 
 _ALLOWED_SHADOW_MODES = {"off", "visited_only", "visited_outbound"}
 
-bp = Blueprint("browser", __name__, url_prefix="/api")
+bp = Blueprint("browser", __name__, url_prefix="/api/browser")
 
 
 def _state_db() -> AppStateDB:
