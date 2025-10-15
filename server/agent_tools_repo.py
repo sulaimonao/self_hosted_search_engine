@@ -16,7 +16,7 @@ import os
 import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple, cast
 
 import yaml  # type: ignore[import]
@@ -34,14 +34,25 @@ class Policy:
     max_changed_loc: int
 
     def is_path_allowed(self, path: str) -> bool:
-        candidate = path.strip().lstrip("./")
+        candidate = _normalize_candidate_path(path)
         if not candidate:
             return False
-        if any(candidate.startswith(deny.rstrip("/*")) for deny in self.deny_paths):
-            return False
-        return any(
-            candidate.startswith(allow.rstrip("/*")) for allow in self.write_paths
-        )
+
+        for deny in self.deny_paths:
+            prefix = _normalize_policy_prefix(deny)
+            if prefix == "*":
+                return False
+            if prefix and _matches_prefix(candidate, prefix):
+                return False
+
+        for allow in self.write_paths:
+            if allow.strip() == "*":
+                return True
+            prefix = _normalize_policy_prefix(allow)
+            if prefix and _matches_prefix(candidate, prefix):
+                return True
+
+        return False
 
 
 DEFAULT_POLICY = Policy(
@@ -52,6 +63,53 @@ DEFAULT_POLICY = Policy(
 )
 
 _policy: Policy = DEFAULT_POLICY
+
+
+def _normalize_candidate_path(path: str) -> str:
+    """Return a normalized, safe repository path or ``""`` when invalid."""
+
+    raw = str(path).strip().replace("\\", "/")
+    if not raw:
+        return ""
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if not raw or raw.startswith("../") or raw.startswith("/"):
+        return ""
+    normalized = PurePosixPath(raw)
+    if any(part == ".." for part in normalized.parts):
+        return ""
+    text = str(normalized)
+    return "" if text == "." else text
+
+
+def _normalize_policy_prefix(path: str) -> str:
+    """Normalize policy prefixes, handling wildcards and directory suffixes."""
+
+    raw = str(path).strip().replace("\\", "/")
+    if not raw:
+        return ""
+    if raw == "*":
+        return "*"
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if raw.endswith("/*"):
+        raw = raw[:-2]
+    raw = raw.rstrip("/")
+    if not raw or raw.startswith("../") or raw.startswith("/"):
+        return ""
+    normalized = PurePosixPath(raw)
+    if any(part == ".." for part in normalized.parts):
+        return ""
+    text = str(normalized)
+    return "" if text == "." else text
+
+
+def _matches_prefix(candidate: str, prefix: str) -> bool:
+    if prefix == "*":
+        return True
+    if candidate == prefix:
+        return True
+    return candidate.startswith(f"{prefix}/")
 
 
 def _coerce_sequence(value: object, default: Sequence[str]) -> Tuple[str, ...]:
