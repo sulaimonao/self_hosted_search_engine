@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -11,9 +12,12 @@ from flask import Blueprint, current_app, jsonify, request
 bp = Blueprint("shipit_history", __name__, url_prefix="/api")
 
 
-def _history_store() -> tuple[deque[dict[str, Any]], Any]:
+def _history_store() -> tuple[deque[dict[str, Any]], threading.Lock]:
     store = current_app.config.setdefault("SHIPIT_HISTORY", deque(maxlen=100))
-    lock = current_app.config.setdefault("SHIPIT_HISTORY_LOCK", None)
+    lock = current_app.config.get("SHIPIT_HISTORY_LOCK")
+    if lock is None:
+        lock = threading.Lock()
+        current_app.config["SHIPIT_HISTORY_LOCK"] = lock
     return store, lock
 
 
@@ -27,12 +31,8 @@ def get_history() -> Any:
     limit = max(1, min(limit, 200))
 
     store, lock = _history_store()
-    items: list[dict[str, Any]]
-    if lock is None:
+    with lock:
         items = list(store)
-    else:
-        with lock:
-            items = list(store)
     payload = {
         "ok": True,
         "data": items[-limit:][::-1],
@@ -50,11 +50,8 @@ def append_history(entry: dict[str, Any]) -> None:
         "filters": entry.get("filters"),
         "results_count": entry.get("results_count", 0),
     }
-    if lock is None:
+    with lock:
         store.append(enriched)
-    else:
-        with lock:
-            store.append(enriched)
 
 
 __all__ = ["bp", "get_history", "append_history"]
