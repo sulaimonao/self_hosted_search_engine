@@ -34,7 +34,9 @@ from .schemas import SearchQueryParams, SearchResponsePayload
 
 
 def _shipit_search_payload(query: str, page: int, size: int) -> tuple[int, list[dict[str, Any]], dict[str, list[list[Any]]]]:
-    base_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
+    base_hash = hashlib.md5(
+        query.encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
     domain = f"{base_hash[:6]}.example.com"
     total = max(size * 4, size)
     hits: list[dict[str, Any]] = []
@@ -579,7 +581,7 @@ def search_endpoint():
         total, hits, facets = _shipit_search_payload(query, params.page, params.size)
         append_history(
             {
-                "id": f"shipit-{hashlib.md5(query.encode('utf-8')).hexdigest()}",
+                "id": f"shipit-{hashlib.md5(query.encode('utf-8'), usedforsecurity=False).hexdigest()}",
                 "query": query,
                 "results_count": total,
             }
