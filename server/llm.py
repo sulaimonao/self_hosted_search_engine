@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Mapping, Sequence
@@ -55,21 +56,30 @@ class OllamaJSONClient:
         self.default_model = default_model or _env_model()
         self.timeout = timeout
         self._session = session or requests.Session()
+        self._session_lock = threading.Lock()
+        self._model_cache_lock = threading.Lock()
         self._model_cache: tuple[list[str], float] | None = None
 
     # ------------------------------------------------------------------
     # Model helpers
     # ------------------------------------------------------------------
     def list_models(self, *, refresh: bool = False) -> list[str]:
-        if not refresh and self._model_cache:
-            cached, expiry = self._model_cache
-            if time.monotonic() < expiry:
-                return list(cached)
+        if not refresh:
+            with self._model_cache_lock:
+                cache = self._model_cache
+                if cache and time.monotonic() < cache[1]:
+                    return list(cache[0])
         try:
-            response = self._session.get(
-                f"{self.base_url}/api/tags", timeout=self.timeout
-            )
-            response.raise_for_status()
+            with self._session_lock:
+                if not refresh:
+                    with self._model_cache_lock:
+                        cache = self._model_cache
+                        if cache and time.monotonic() < cache[1]:
+                            return list(cache[0])
+                response = self._session.get(
+                    f"{self.base_url}/api/tags", timeout=self.timeout
+                )
+                response.raise_for_status()
         except requests.RequestException as exc:
             raise LLMError(str(exc)) from exc
         try:
@@ -89,7 +99,8 @@ class OllamaJSONClient:
                 cleaned = name.strip()
                 if cleaned:
                     models.append(cleaned)
-        self._model_cache = (models, time.monotonic() + 30.0)
+        with self._model_cache_lock:
+            self._model_cache = (models, time.monotonic() + 30.0)
         return list(models)
 
     def select_model(self, preferred: str | None = None) -> str:
@@ -131,9 +142,10 @@ class OllamaJSONClient:
             payload["options"] = dict(options)
         LOGGER.debug("planner.llm calling model=%s", resolved_model)
         try:
-            response = self._session.post(
-                f"{self.base_url}/api/chat", json=payload, timeout=self.timeout
-            )
+            with self._session_lock:
+                response = self._session.post(
+                    f"{self.base_url}/api/chat", json=payload, timeout=self.timeout
+                )
         except requests.RequestException as exc:
             raise LLMError(str(exc)) from exc
         status = response.status_code
