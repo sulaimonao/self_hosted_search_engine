@@ -157,6 +157,7 @@ def pull_model(
         command,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=proc_env,
     )
 
 
