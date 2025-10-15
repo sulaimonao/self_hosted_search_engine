@@ -20,6 +20,7 @@ export default function SystemCheckPage() {
         onRetry={controller.rerun}
         onContinue={() => controller.setOpen(false)}
         onOpenReport={controller.openReport}
+        onDownloadReport={controller.downloadReport}
       />
       {!controller.open ? (
         <div className="mt-6 flex flex-col items-center gap-3 text-sm text-muted-foreground">

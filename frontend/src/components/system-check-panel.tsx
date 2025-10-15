@@ -20,6 +20,7 @@ interface SystemCheckPanelProps {
   onRetry?: () => void;
   onContinue?: () => void;
   onOpenReport?: () => void;
+  onDownloadReport?: () => void;
 }
 
 function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
@@ -85,6 +86,7 @@ export function SystemCheckPanel({
   onRetry,
   onContinue,
   onOpenReport,
+  onDownloadReport,
 }: SystemCheckPanelProps) {
   const backendChecks = systemCheck?.backend?.checks ?? [];
   const diagnosticsStatus = systemCheck?.diagnostics;
@@ -197,6 +199,19 @@ export function SystemCheckPanel({
               <h3 className="text-sm font-semibold">Browser diagnostics</h3>
               <p className="text-xs text-muted-foreground">Captured at {browserReport.generatedAt}</p>
               <p className="text-xs text-muted-foreground">Timeout: {browserReport.timeoutMs} ms</p>
+              {typeof browserReport.durationMs === "number" ? (
+                <p className="text-xs text-muted-foreground">Duration: {browserReport.durationMs} ms</p>
+              ) : null}
+              {Array.isArray(browserReport.logs) ? (
+                <p className="text-xs text-muted-foreground">
+                  Log entries: {browserReport.logs.length} · Events: {Array.isArray(browserReport.trace) ? browserReport.trace.length : 0}
+                </p>
+              ) : null}
+              {browserReport.metadata ? (
+                <p className="text-xs text-muted-foreground">
+                  Engine: Electron {browserReport.metadata.electron ?? "?"} · Chromium {browserReport.metadata.chrome ?? "?"} · Platform {browserReport.metadata.platform ?? "?"}/{browserReport.metadata.arch ?? "?"}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -211,6 +226,15 @@ export function SystemCheckPanel({
                 onClick={onOpenReport}
               >
                 Open browser diagnostics report
+              </button>
+            ) : null}
+            {onDownloadReport ? (
+              <button
+                type="button"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+                onClick={onDownloadReport}
+              >
+                Download full diagnostics
               </button>
             ) : null}
           </div>
