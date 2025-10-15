@@ -9,6 +9,12 @@ import pytest
 from backend.app.embedding_manager import EmbeddingManager
 
 
+def test_explicit_empty_fallbacks_disable_defaults() -> None:
+    manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary", fallbacks=[])
+
+    assert manager.fallbacks == []
+
+
 def test_ollama_alive_success(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = EmbeddingManager(base_url="http://localhost:11434", embed_model="primary")
 
