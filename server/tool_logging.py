@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from functools import wraps
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 try:  # pragma: no cover - optional flask dependency for tooling
     from flask import g, has_app_context, has_request_context
@@ -21,6 +21,80 @@ from backend.logging_utils import event_base, redact, write_event
 from server.runlog import add_run_log_line
 
 ToolFunc = Callable[..., Any]
+
+_PREVIEW_MAX_STRING = 256
+_PREVIEW_MAX_SEQUENCE_ITEMS = 8
+_PREVIEW_MAX_MAPPING_ENTRIES = 16
+_PREVIEW_MAX_DEPTH = 4
+
+
+def _truncate_string(value: str) -> str:
+    if len(value) <= _PREVIEW_MAX_STRING:
+        return value
+    return value[:_PREVIEW_MAX_STRING] + "...[truncated]"
+
+
+def _preview_value(value: Any, *, depth: int = 0) -> Any:
+    """Return a JSON-serialisable preview without large payloads."""
+
+    if depth >= _PREVIEW_MAX_DEPTH:
+        return "...[truncated]"
+
+    if isinstance(value, Mapping):
+        preview: dict[str, Any] = {}
+        try:
+            total_keys = len(value)
+        except Exception:
+            total_keys = None
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _PREVIEW_MAX_MAPPING_ENTRIES:
+                remaining = (
+                    total_keys - _PREVIEW_MAX_MAPPING_ENTRIES
+                    if total_keys is not None and total_keys > _PREVIEW_MAX_MAPPING_ENTRIES
+                    else None
+                )
+                preview["..."] = (
+                    f"+{remaining} keys" if remaining is not None else "truncated"
+                )
+                break
+            preview[str(key)] = _preview_value(item, depth=depth + 1)
+        return preview
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            seq_length = len(value)
+        except Exception:
+            seq_list = list(value)
+            seq_length = len(seq_list)
+        else:
+            seq_list = [value[idx] for idx in range(min(seq_length, _PREVIEW_MAX_SEQUENCE_ITEMS))]
+        truncated = seq_length > _PREVIEW_MAX_SEQUENCE_ITEMS
+        if seq_length == 0:
+            return []
+        if all(isinstance(item, (int, float)) for item in seq_list) and seq_length > 0:
+            preview: dict[str, Any] = {
+                "len": seq_length,
+                "sample": [float(item) for item in seq_list],
+            }
+            if truncated:
+                preview["truncated"] = True
+            return preview
+        preview_seq = [_preview_value(item, depth=depth + 1) for item in seq_list]
+        if truncated:
+            preview_seq.append(
+                {
+                    "truncated": True,
+                    "omitted": seq_length - _PREVIEW_MAX_SEQUENCE_ITEMS,
+                }
+            )
+        return preview_seq
+
+    if isinstance(value, (bytes, bytearray)):
+        text = value.decode("utf-8", "ignore")
+        return _truncate_string(text)
+    if isinstance(value, str):
+        return _truncate_string(value)
+    return value
 
 
 def _summarize_success(tool_name: str, params: Mapping[str, Any], result: Any) -> str:
@@ -114,6 +188,7 @@ def log_tool(tool_name: str) -> Callable[[ToolFunc], ToolFunc]:
                 add_run_log_line(_summarize_error(tool_name, {"error": str(exc)}))
                 raise
             duration_ms = int((time.time() - start) * 1000)
+            preview = _preview_value(result)
             write_event(
                 event_base(
                     event="tool.end",
@@ -124,7 +199,7 @@ def log_tool(tool_name: str) -> Callable[[ToolFunc], ToolFunc]:
                     duration_ms=duration_ms,
                     status="ok",
                     msg=f"{tool_name} ok",
-                    meta={"result_preview": redact(result)},
+                    meta={"result_preview": redact(preview)},
                 )
             )
             if isinstance(result, MutableMapping) and result.get("ok") is not None:
