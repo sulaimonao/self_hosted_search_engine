@@ -39,8 +39,8 @@ def migrate(connection: sqlite3.Connection) -> None:
             continue
         LOGGER.info("Applying migration %s", migration_id)
         try:
+            migration_fn(connection)
             with connection:
-                migration_fn(connection)
                 _mark_applied(connection, migration_id)
         except Exception:  # noqa: BLE001 - surface precise failure context to logs
             LOGGER.exception(
@@ -52,14 +52,15 @@ def migrate(connection: sqlite3.Connection) -> None:
 
 
 def _ensure_ledger(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS _migrations (
-            id TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL
+    with connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _migrations (
+                id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
 
 
 def _backfill_legacy_ledger(connection: sqlite3.Connection) -> None:
@@ -73,14 +74,21 @@ def _backfill_legacy_ledger(connection: sqlite3.Connection) -> None:
     }
     if not legacy:
         return
+    inserts: list[tuple[str, str]] = []
     for filename, applied_at in legacy.items():
         migration_id = filename.rsplit(".", 1)[0]
-        if migration_id not in _MIGRATION_IDS or _already_applied(connection, migration_id):
+        if migration_id not in MIGRATION_IDS or _already_applied(connection, migration_id):
             continue
         LOGGER.debug("Backfilling legacy migration %s", migration_id)
-        connection.execute(
+        inserts.append((migration_id, _coerce_epoch_to_iso(applied_at)))
+
+    if not inserts:
+        return
+
+    with connection:
+        connection.executemany(
             "INSERT OR IGNORE INTO _migrations(id, applied_at) VALUES(?, ?)",
-            (migration_id, _coerce_epoch_to_iso(applied_at)),
+            inserts,
         )
 
 
@@ -134,10 +142,9 @@ def _column_type(connection: sqlite3.Connection, table: str, column: str) -> str
 
 
 def _index_exists(connection: sqlite3.Connection, table: str, name: str) -> bool:
-    return any(
-        row[1] == name
-        for row in connection.execute(f"PRAGMA index_list({table})")
-    )
+    if not _table_exists(connection, table):
+        return False
+    return any(row[1] == name for row in connection.execute(f"PRAGMA index_list({table})"))
 
 
 def _migration_001_init(connection: sqlite3.Connection) -> None:
@@ -301,24 +308,27 @@ def _migration_004_pending_vectors_text(connection: sqlite3.Connection) -> None:
 
 def _migration_005_browser_features(connection: sqlite3.Connection) -> None:
     table = "crawl_jobs"
-    if not _column_exists(connection, table, "priority"):
+    with connection:
+        if not _column_exists(connection, table, "priority"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
+            )
+        if not _column_exists(connection, table, "reason"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN reason TEXT"
+            )
+        if not _column_exists(connection, table, "enqueued_at"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN enqueued_at TEXT"
+            )
+        if not _column_exists(connection, table, "finished_at"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN finished_at TEXT"
+            )
+
+    with connection:
         connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
-        )
-    if not _column_exists(connection, table, "reason"):
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN reason TEXT"
-        )
-    if not _column_exists(connection, table, "enqueued_at"):
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN enqueued_at TEXT"
-        )
-        connection.execute(
-            "UPDATE crawl_jobs SET enqueued_at = COALESCE(enqueued_at, started_at, datetime('now'))"
-        )
-    if not _column_exists(connection, table, "finished_at"):
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN finished_at TEXT"
+            "UPDATE crawl_jobs SET enqueued_at = COALESCE(enqueued_at, started_at, datetime('now')) WHERE enqueued_at IS NULL"
         )
 
     connection.executescript(
@@ -427,14 +437,15 @@ def _migration_005_browser_features(connection: sqlite3.Connection) -> None:
 
 def _migration_006_sources(connection: sqlite3.Connection) -> None:
     table = "crawl_jobs"
-    if not _column_exists(connection, table, "parent_url"):
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN parent_url TEXT"
-        )
-    if not _column_exists(connection, table, "is_source"):
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN is_source INTEGER NOT NULL DEFAULT 0"
-        )
+    with connection:
+        if not _column_exists(connection, table, "parent_url"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN parent_url TEXT"
+            )
+        if not _column_exists(connection, table, "is_source"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN is_source INTEGER NOT NULL DEFAULT 0"
+            )
 
     connection.executescript(
         """
@@ -490,4 +501,4 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("006_sources", _migration_006_sources),
 ]
 
-_MIGRATION_IDS = {migration_id for migration_id, _ in _MIGRATIONS}
+MIGRATION_IDS = tuple(migration_id for migration_id, _ in _MIGRATIONS)

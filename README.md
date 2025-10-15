@@ -199,6 +199,22 @@ Next.js production build first, then reuses those assets when assembling the
 binary. Override `FRONTEND_URL` or `BACKEND_PORT` while running the desktop
 script if you need alternative endpoints.
 
+## SQLite migrations
+
+- The backend tracks schema changes in a ledger table named `_migrations`. Each
+  migration records its ID and timestamp so the runner can safely re-enter and
+  no-op once a change has been applied.
+- SQLite only allows constant defaults when adding columns. New columns are
+  created with literal defaults such as `0` or left `NULL`, then populated with a
+  follow-up `UPDATE` to handle dynamic timestamps or derived data.
+- Migrations run automatically when the backend opens the application state DB.
+  Logs show `Running state DB migrations` and `State DB migrations finished`—if
+  a failure occurs, check backend logs for the migration ID and inspect the
+  `_migrations` table for partial progress.
+- Stuck locally? Stop the backend, delete the state database (defaults to
+  `data/app_state.sqlite3`), and restart. This clears local app state, so only
+  do it if you are fine losing cached jobs/history.
+
 Open the browser at `http://localhost:3100` (not `127.0.0.1`) to use the UI and
 avoid dev-only cross-origin warnings. Make sure `ollama` is listening on
 `http://127.0.0.1:11434` (or adjust `OLLAMA_HOST`). If
