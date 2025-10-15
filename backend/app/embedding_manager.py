@@ -38,7 +38,10 @@ class EmbeddingManager:
         self.base_url = (base_url or env_base).rstrip("/")
         self.embed_model = env_model
         self.auto_install = env_auto if auto_install is None else bool(auto_install)
-        self.fallbacks = list(fallbacks or parsed_fallbacks)
+        if fallbacks is None:
+            self.fallbacks = list(parsed_fallbacks)
+        else:
+            self.fallbacks = list(fallbacks)
 
         self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
