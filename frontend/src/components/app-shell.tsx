@@ -3276,6 +3276,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         onRetry={systemCheck.rerun}
         onContinue={() => systemCheck.setOpen(false)}
         onOpenReport={systemCheck.openReport}
+        onDownloadReport={systemCheck.downloadReport}
       />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>

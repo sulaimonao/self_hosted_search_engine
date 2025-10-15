@@ -417,9 +417,49 @@ export interface BrowserDiagnosticsCheck {
   durationMs?: number | null;
 }
 
+export interface BrowserDiagnosticsTraceEvent {
+  timestamp: string;
+  type: string;
+  id?: string;
+  title?: string;
+  status?: BrowserDiagnosticsStatus;
+  detail?: string | null;
+  durationMs?: number | null;
+  outcome?: string;
+  context?: Record<string, unknown> | null;
+  critical?: boolean;
+  expectFailure?: boolean;
+  timeoutMs?: number;
+  error?: string | null;
+  [key: string]: unknown;
+}
+
+export interface BrowserDiagnosticsLogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface BrowserDiagnosticsMetadata {
+  electron: string | null;
+  chrome: string | null;
+  node: string | null;
+  platform: string;
+  arch: string;
+  release: string | null;
+  appVersion: string | null;
+  [key: string]: unknown;
+}
+
 export interface BrowserDiagnosticsReport {
   generatedAt: string;
   timeoutMs: number;
   checks: BrowserDiagnosticsCheck[];
   summary: { status: BrowserDiagnosticsStatus; criticalFailures: boolean };
+  durationMs?: number | null;
+  trace?: BrowserDiagnosticsTraceEvent[];
+  logs?: BrowserDiagnosticsLogEntry[];
+  metadata?: BrowserDiagnosticsMetadata;
+  artifactPath?: string | null;
 }

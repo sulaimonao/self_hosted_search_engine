@@ -26,5 +26,6 @@ contextBridge.exposeInMainWorld('desktop', {
   runSystemCheck: (options) => ipcRenderer.invoke('system-check:run', options ?? {}),
   getLastSystemCheck: () => ipcRenderer.invoke('system-check:last'),
   openSystemCheckReport: () => ipcRenderer.invoke('system-check:open-report'),
+  exportSystemCheckReport: (options) => ipcRenderer.invoke('system-check:export-report', options ?? {}),
   onSystemCheckEvent: (channel, handler) => subscribe(channel, handler),
 });

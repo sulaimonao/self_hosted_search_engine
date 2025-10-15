@@ -198,6 +198,31 @@ ipcMain.handle('system-check:open-report', async () => {
   return { ok: !error, error: error || null, path: outputPath };
 });
 
+ipcMain.handle('system-check:export-report', async (_event, options = {}) => {
+  if (process.env.SKIP_SYSTEM_CHECK === '1') {
+    return { ok: false, skipped: true };
+  }
+  try {
+    const runOptions = {};
+    if (typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs)) {
+      runOptions.timeoutMs = options.timeoutMs;
+    }
+    if (options.write === false) {
+      runOptions.write = false;
+    }
+    const report = await runBrowserSystemCheck(runOptions);
+    const artifactPath = typeof report === 'object' && report ? report.artifactPath ?? null : null;
+    return {
+      ok: true,
+      report,
+      artifactPath,
+      path: artifactPath ?? null,
+    };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {

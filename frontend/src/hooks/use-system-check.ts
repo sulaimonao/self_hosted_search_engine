@@ -36,6 +36,7 @@ export interface SystemCheckController {
   run: (options?: RunOptions) => Promise<void>;
   rerun: () => Promise<void>;
   openReport: () => Promise<void>;
+  downloadReport: () => Promise<void>;
 }
 
 export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheckController {
@@ -114,6 +115,26 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
   );
 
   const rerun = useCallback(() => run({ forceBrowser: true }), [run]);
+
+  const downloadReportToFile = useCallback((report: BrowserDiagnosticsReport) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const timestamp = typeof report.generatedAt === 'string' ? report.generatedAt : new Date().toISOString();
+    const safeStamp = timestamp.replace(/[:\s]/g, '-').replace(/[^0-9A-Za-z._-]/g, '-');
+    const fileName = `browser-diagnostics-${safeStamp}.json`;
+    const payload = JSON.stringify(report, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }, []);
 
   useEffect(() => {
     if (!desktop?.onSystemCheckEvent) {
@@ -211,6 +232,49 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
     }
   }, []);
 
+  const downloadReport = useCallback(async () => {
+    if (!desktop?.exportSystemCheckReport) {
+      if (browserReport) {
+        downloadReportToFile(browserReport);
+        return;
+      }
+      setError('System check report is only available in the desktop app.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSkipMessage(null);
+    try {
+      const payload = await desktop.exportSystemCheckReport({ timeoutMs: undefined });
+      if (!payload) {
+        setError('No diagnostics export result from the desktop app.');
+        return;
+      }
+      if (payload.skipped) {
+        setSkipMessage('Browser diagnostics skipped by configuration.');
+        return;
+      }
+      if (!payload.ok) {
+        setError(payload.error ?? 'Failed to export browser diagnostics.');
+        return;
+      }
+      const exportedReport = payload.report;
+      if (exportedReport) {
+        setBrowserReport(exportedReport);
+        downloadReportToFile(exportedReport);
+      } else if (browserReport) {
+        downloadReportToFile(browserReport);
+      } else {
+        setError('Diagnostics export did not include a report. Re-run the system check and try again.');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? 'Failed to export diagnostics');
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [browserReport, downloadReportToFile]);
+
   const blocking = useMemo(() => {
     if (skipMessage) {
       return false;
@@ -232,5 +296,6 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
     run,
     rerun,
     openReport,
+    downloadReport,
   };
 }

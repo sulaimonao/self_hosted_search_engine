@@ -3,6 +3,7 @@
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -22,7 +23,34 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withWindow(options, task) {
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function createRecorder() {
+  const logs = [];
+  const trace = [];
+  const log = (level, message, data = null) => {
+    logs.push({
+      timestamp: nowIso(),
+      level,
+      message,
+      data: data === undefined ? null : data,
+    });
+  };
+  const record = (event) => {
+    if (!event || typeof event !== 'object') {
+      return;
+    }
+    trace.push({
+      timestamp: nowIso(),
+      ...event,
+    });
+  };
+  return { logs, trace, log, record };
+}
+
+async function withWindow(options, task, recorder, context = {}) {
   const win = new BrowserWindow({
     show: false,
     width: 800,
@@ -35,16 +63,18 @@ async function withWindow(options, task) {
       ...options?.webPreferences,
     },
   });
+  recorder?.record({ type: 'window:create', context });
   try {
     return await task(win);
   } finally {
+    recorder?.record({ type: 'window:destroy', context });
     if (!win.isDestroyed()) {
       win.destroy();
     }
   }
 }
 
-async function loadUrl(win, url, { expectFailure = false, timeoutMs }) {
+async function loadUrl(win, url, { expectFailure = false, timeoutMs }, recorder, context = {}) {
   const startedAt = Date.now();
   return new Promise((resolve) => {
     let settled = false;
@@ -52,13 +82,26 @@ async function loadUrl(win, url, { expectFailure = false, timeoutMs }) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ ...status, durationMs: Date.now() - startedAt });
+      const payload = { ...status, durationMs: Date.now() - startedAt };
+      recorder?.record({
+        type: 'load:complete',
+        context,
+        url,
+        expectFailure,
+        outcome: status.outcome,
+        detail: status.detail ?? null,
+        durationMs: payload.durationMs,
+      });
+      resolve(payload);
     };
 
+    const effectiveTimeout = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
-      finish({ outcome: 'timeout', detail: `Timed out after ${timeoutMs}ms` });
-    }, timeoutMs);
+      recorder?.record({ type: 'load:timeout', context, url, timeoutMs: effectiveTimeout });
+      finish({ outcome: 'timeout', detail: `Timed out after ${effectiveTimeout}ms` });
+    }, effectiveTimeout);
 
+    recorder?.record({ type: 'load:start', context, url, expectFailure, timeoutMs: effectiveTimeout });
     win.webContents.once('did-finish-load', () => {
       if (expectFailure) {
         finish({ outcome: 'fail', detail: 'Page loaded but failure expected' });
@@ -76,12 +119,18 @@ async function loadUrl(win, url, { expectFailure = false, timeoutMs }) {
     });
 
     win.loadURL(url).catch((error) => {
+      recorder?.record({
+        type: 'load:error',
+        context,
+        url,
+        error: error?.message || 'loadURL failed',
+      });
       finish({ outcome: 'fail', detail: error?.message || 'loadURL failed' });
     });
   });
 }
 
-async function checkTlsFailures(timeoutMs) {
+async function checkTlsFailures(timeoutMs, recorder) {
   const targets = [
     { id: 'expired.badssl.com', label: 'Block expired certificate', critical: true },
     { id: 'wrong.host.badssl.com', label: 'Block wrong host certificate', critical: true },
@@ -90,8 +139,13 @@ async function checkTlsFailures(timeoutMs) {
 
   const results = [];
   for (const target of targets) {
-    const outcome = await withWindow({}, (win) =>
-      loadUrl(win, `https://${target.id}/`, { expectFailure: true, timeoutMs }),
+    const context = { checkId: target.id };
+    recorder?.record({ type: 'check:start', id: target.id, title: target.label });
+    const outcome = await withWindow(
+      {},
+      (win) => loadUrl(win, `https://${target.id}/`, { expectFailure: true, timeoutMs }, recorder, context),
+      recorder,
+      context,
     );
     results.push({
       id: target.id,
@@ -101,15 +155,38 @@ async function checkTlsFailures(timeoutMs) {
       critical: target.critical,
       durationMs: outcome.durationMs ?? null,
     });
+    recorder?.record({
+      type: 'check:result',
+      id: target.id,
+      title: target.label,
+      status: outcome.outcome === 'pass' ? 'pass' : outcome.outcome,
+      detail: outcome.detail ?? null,
+      durationMs: outcome.durationMs ?? null,
+      critical: target.critical,
+    });
     await delay(150);
   }
   return results;
 }
 
-async function checkBasicHttps(timeoutMs) {
-  const outcome = await withWindow({}, (win) =>
-    loadUrl(win, 'https://example.com/', { expectFailure: false, timeoutMs }),
+async function checkBasicHttps(timeoutMs, recorder) {
+  const context = { checkId: 'https-example' };
+  recorder?.record({ type: 'check:start', id: 'https-example', title: 'Load https://example.com' });
+  const outcome = await withWindow(
+    {},
+    (win) => loadUrl(win, 'https://example.com/', { expectFailure: false, timeoutMs }, recorder, context),
+    recorder,
+    context,
   );
+  recorder?.record({
+    type: 'check:result',
+    id: 'https-example',
+    title: 'Load https://example.com',
+    status: outcome.outcome === 'pass' ? 'pass' : outcome.outcome,
+    detail: outcome.detail ?? null,
+    durationMs: outcome.durationMs ?? null,
+    critical: false,
+  });
   return {
     id: 'https-example',
     title: 'Load https://example.com',
@@ -120,16 +197,20 @@ async function checkBasicHttps(timeoutMs) {
   };
 }
 
-async function checkStorage(timeoutMs) {
+async function checkStorage(timeoutMs, recorder) {
   const url = 'https://example.com/';
-  const result = await withWindow({ webPreferences: { partition: 'persist:diagnostics' } }, async (win) => {
-    const loadResult = await loadUrl(win, url, { expectFailure: false, timeoutMs });
-    if (loadResult.outcome !== 'pass') {
-      return { status: loadResult.outcome, detail: loadResult.detail ?? null, durationMs: loadResult.durationMs ?? null };
-    }
-    try {
-      const evaluation = await win.webContents.executeJavaScript(
-        `(() => {
+  const context = { checkId: 'storage-basics' };
+  recorder?.record({ type: 'check:start', id: 'storage-basics', title: 'Cookies and localStorage' });
+  const result = await withWindow(
+    { webPreferences: { partition: 'persist:diagnostics' } },
+    async (win) => {
+      const loadResult = await loadUrl(win, url, { expectFailure: false, timeoutMs }, recorder, context);
+      if (loadResult.outcome !== 'pass') {
+        return { status: loadResult.outcome, detail: loadResult.detail ?? null, durationMs: loadResult.durationMs ?? null };
+      }
+      try {
+        const evaluation = await win.webContents.executeJavaScript(
+          `(() => {
           try {
             const key = 'diagnostics-' + Date.now();
             localStorage.setItem(key, 'ok');
@@ -141,24 +222,36 @@ async function checkStorage(timeoutMs) {
             return { error: error && error.message ? String(error.message) : 'storage error' };
           }
         })();`,
-        true,
-      );
-      if (evaluation && typeof evaluation === 'object') {
-        if (evaluation.error) {
-          return { status: 'fail', detail: String(evaluation.error) };
+          true,
+        );
+        if (evaluation && typeof evaluation === 'object') {
+          if (evaluation.error) {
+            return { status: 'fail', detail: String(evaluation.error) };
+          }
+          if (evaluation.localStorage && evaluation.cookie) {
+            return { status: 'pass' };
+          }
+          return {
+            status: 'warn',
+            detail: `Storage results: localStorage=${evaluation.localStorage}, cookie=${evaluation.cookie}`,
+          };
         }
-        if (evaluation.localStorage && evaluation.cookie) {
-          return { status: 'pass' };
-        }
-        return {
-          status: 'warn',
-          detail: `Storage results: localStorage=${evaluation.localStorage}, cookie=${evaluation.cookie}`,
-        };
+      } catch (error) {
+        return { status: 'fail', detail: error?.message ?? 'executeJavaScript failed' };
       }
-    } catch (error) {
-      return { status: 'fail', detail: error?.message ?? 'executeJavaScript failed' };
-    }
-    return { status: 'warn', detail: 'No evaluation result' };
+      return { status: 'warn', detail: 'No evaluation result' };
+    },
+    recorder,
+    context,
+  );
+  recorder?.record({
+    type: 'check:result',
+    id: 'storage-basics',
+    title: 'Cookies and localStorage',
+    status: result.status,
+    detail: result.detail ?? null,
+    durationMs: result.durationMs ?? null,
+    critical: false,
   });
   return {
     id: 'storage-basics',
@@ -170,28 +263,44 @@ async function checkStorage(timeoutMs) {
   };
 }
 
-async function checkServiceWorker(timeoutMs) {
+async function checkServiceWorker(timeoutMs, recorder) {
   const url = 'https://mdn.github.io/dom-examples/service-worker/simple-service-worker/';
-  const result = await withWindow({}, async (win) => {
-    const loadResult = await loadUrl(win, url, { expectFailure: false, timeoutMs });
-    if (loadResult.outcome !== 'pass') {
-      return { status: loadResult.outcome, detail: loadResult.detail ?? null, durationMs: loadResult.durationMs ?? null };
-    }
-    try {
-      const registration = await win.webContents.executeJavaScript(
-        `navigator.serviceWorker.getRegistrations().then(list => ({ count: list.length }))`,
-        true,
-      );
-      if (registration && typeof registration.count === 'number') {
-        if (registration.count >= 1) {
-          return { status: 'pass' };
-        }
-        return { status: 'warn', detail: 'No service workers registered' };
+  const context = { checkId: 'service-worker' };
+  recorder?.record({ type: 'check:start', id: 'service-worker', title: 'Service worker registration' });
+  const result = await withWindow(
+    {},
+    async (win) => {
+      const loadResult = await loadUrl(win, url, { expectFailure: false, timeoutMs }, recorder, context);
+      if (loadResult.outcome !== 'pass') {
+        return { status: loadResult.outcome, detail: loadResult.detail ?? null, durationMs: loadResult.durationMs ?? null };
       }
-      return { status: 'warn', detail: 'Unexpected registration result' };
-    } catch (error) {
-      return { status: 'fail', detail: error?.message ?? 'service worker query failed' };
-    }
+      try {
+        const registration = await win.webContents.executeJavaScript(
+          `navigator.serviceWorker.getRegistrations().then(list => ({ count: list.length }))`,
+          true,
+        );
+        if (registration && typeof registration.count === 'number') {
+          if (registration.count >= 1) {
+            return { status: 'pass' };
+          }
+          return { status: 'warn', detail: 'No service workers registered' };
+        }
+        return { status: 'warn', detail: 'Unexpected registration result' };
+      } catch (error) {
+        return { status: 'fail', detail: error?.message ?? 'service worker query failed' };
+      }
+    },
+    recorder,
+    context,
+  );
+  recorder?.record({
+    type: 'check:result',
+    id: 'service-worker',
+    title: 'Service worker registration',
+    status: result.status,
+    detail: result.detail ?? null,
+    durationMs: result.durationMs ?? null,
+    critical: false,
   });
   return {
     id: 'service-worker',
@@ -239,26 +348,53 @@ async function runBrowserDiagnostics(options = {}) {
     await app.whenReady();
   }
 
+  const startedAt = Date.now();
+  const recorder = createRecorder();
+  recorder.log('info', 'Starting browser diagnostics', { timeoutMs });
+  recorder.record({ type: 'diagnostics:start', timeoutMs });
+
   const checks = [];
-  const httpsCheck = await checkBasicHttps(timeoutMs);
+  const httpsCheck = await checkBasicHttps(timeoutMs, recorder);
   checks.push(httpsCheck);
-  const tlsChecks = await checkTlsFailures(timeoutMs);
+  const tlsChecks = await checkTlsFailures(timeoutMs, recorder);
   checks.push(...tlsChecks);
-  const storageCheck = await checkStorage(timeoutMs);
+  const storageCheck = await checkStorage(timeoutMs, recorder);
   checks.push(storageCheck);
-  const swCheck = await checkServiceWorker(timeoutMs);
+  const swCheck = await checkServiceWorker(timeoutMs, recorder);
   checks.push(swCheck);
 
   const summary = summarizeChecks(checks);
+  recorder.record({
+    type: 'diagnostics:summary',
+    status: summary.status,
+    criticalFailures: summary.criticalFailures,
+  });
+
+  const metadata = {
+    electron: process.versions?.electron ?? null,
+    chrome: process.versions?.chrome ?? null,
+    node: process.versions?.node ?? null,
+    platform: process.platform,
+    arch: process.arch,
+    release: os.release(),
+    appVersion: typeof app.getVersion === 'function' ? app.getVersion() : null,
+  };
+
+  const finishedAt = Date.now();
   const report = {
-    generatedAt: new Date().toISOString(),
+    generatedAt: nowIso(),
     timeoutMs,
     checks,
     summary,
+    durationMs: finishedAt - startedAt,
+    trace: recorder.trace,
+    logs: recorder.logs,
+    metadata,
   };
 
   if (options.write !== false) {
-    writeReport(report);
+    const artifactPath = writeReport(report);
+    report.artifactPath = artifactPath ?? null;
   }
 
   if (options.log) {
