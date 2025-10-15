@@ -9,8 +9,10 @@ class StubRuntime:
     def __init__(self) -> None:
         self.enqueued: list[dict] = []
         self.fetched: list[str] = []
+        self.search_calls: list[dict] = []
 
     def search_index(self, query: str, *, k: int, use_embeddings: bool):
+        self.search_calls.append({"query": query, "k": k, "use_embeddings": use_embeddings})
         return [
             {"url": "https://example.com", "title": "Example", "snippet": "snippet", "score": 1.0}
         ]
@@ -43,10 +45,26 @@ def _app(runtime: StubRuntime) -> Flask:
 def test_search_endpoint():
     runtime = StubRuntime()
     client = _app(runtime).test_client()
-    response = client.post("/api/tools/search_index", json={"query": "test"})
+    response = client.post(
+        "/api/tools/search_index", json={"query": "test", "k": 50, "use_embeddings": "false"}
+    )
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["results"][0]["url"] == "https://example.com"
+    assert runtime.search_calls[-1] == {"query": "test", "k": 50, "use_embeddings": False}
+
+
+def test_search_validation_errors():
+    runtime = StubRuntime()
+    client = _app(runtime).test_client()
+
+    missing_query = client.post("/api/tools/search_index", json={"query": "   "})
+    assert missing_query.status_code == 400
+    assert missing_query.get_json()["error"] == "query is required"
+
+    bad_k = client.post("/api/tools/search_index", json={"query": "x", "k": "nope"})
+    assert bad_k.status_code == 400
+    assert bad_k.get_json()["error"] == "k must be an integer between 1 and 100"
 
 
 def test_enqueue_endpoint():
@@ -60,6 +78,21 @@ def test_enqueue_endpoint():
     assert runtime.enqueued[0]["topic"] == "docs"
 
 
+def test_enqueue_validation():
+    runtime = StubRuntime()
+    client = _app(runtime).test_client()
+
+    missing_url = client.post("/api/tools/enqueue_crawl", json={})
+    assert missing_url.status_code == 400
+
+    bad_priority = client.post(
+        "/api/tools/enqueue_crawl",
+        json={"url": "https://example.com", "priority": "bad"},
+    )
+    assert bad_priority.status_code == 400
+    assert bad_priority.get_json()["error"] == "priority must be a number"
+
+
 def test_fetch_and_reindex():
     runtime = StubRuntime()
     client = _app(runtime).test_client()
@@ -68,6 +101,19 @@ def test_fetch_and_reindex():
     reindex_response = client.post("/api/tools/reindex", json={"batch": ["https://example.com"]})
     assert reindex_response.status_code == 200
     assert reindex_response.get_json()["changed"] == 1
+
+
+def test_reindex_validation():
+    runtime = StubRuntime()
+    client = _app(runtime).test_client()
+
+    not_array = client.post("/api/tools/reindex", json={"batch": "https://example.com"})
+    assert not_array.status_code == 400
+    assert not_array.get_json()["error"] == "batch must be an array"
+
+    empty = client.post("/api/tools/reindex", json={"batch": ["  ", ""]})
+    assert empty.status_code == 400
+    assert empty.get_json()["error"] == "batch must contain at least one url"
 
 
 def test_status_and_turn():
