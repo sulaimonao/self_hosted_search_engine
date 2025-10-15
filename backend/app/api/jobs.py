@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any, Dict
 
 from flask import Blueprint, current_app, jsonify, request, send_file
@@ -17,9 +18,14 @@ bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 def _compose_job_status(job_id: str) -> dict[str, Any]:
     worker = current_app.config.get("REFRESH_WORKER")
     if worker is not None:
-        snapshot = worker.status(job_id=job_id).get("job")
-        if snapshot:
-            payload = _format_refresh_job(snapshot)
+        status_snapshot = worker.status(job_id=job_id)
+        job_snapshot: Mapping[str, Any] | None = None
+        if isinstance(status_snapshot, Mapping):
+            candidate = status_snapshot.get("job")
+            if isinstance(candidate, Mapping):
+                job_snapshot = candidate
+        if job_snapshot:
+            payload = _format_refresh_job(dict(job_snapshot))
             return payload
     runner: JobRunner = current_app.config["JOB_RUNNER"]
     payload = runner.status(job_id)
