@@ -58,7 +58,9 @@ def test_candidate_urls_filters_invalid_hits(runtime: AgentRuntime) -> None:
     assert candidates == ["https://example.com/path"]
 
 
-def test_candidate_urls_fallback_runtime_sources(runtime: AgentRuntime, tmp_path: Path) -> None:
+def test_candidate_urls_fallback_runtime_sources(
+    runtime: AgentRuntime, tmp_path: Path
+) -> None:
     doc = StoredDocument(
         url="https://docs.example.com/guide",
         title="Guide",
@@ -73,11 +75,7 @@ def test_candidate_urls_fallback_runtime_sources(runtime: AgentRuntime, tmp_path
 
     from server.seeds_loader import load_seed_registry
 
-    registry_urls = {
-        url
-        for entry in load_seed_registry()
-        for url in entry.entrypoints
-    }
+    registry_urls = {url for entry in load_seed_registry() for url in entry.entrypoints}
     assert registry_urls.intersection(candidates)
 
     heuristic_expected = "https://en.wikipedia.org/wiki/Quantum_Computing"

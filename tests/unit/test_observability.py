@@ -30,7 +30,9 @@ def test_start_span_emits_start_and_end_events(monkeypatch):
 
     end_event_meta = events[1][2].get("meta")
     assert isinstance(end_event_meta, dict)
-    attributes = end_event_meta.get("attributes") if isinstance(end_event_meta, dict) else None
+    attributes = (
+        end_event_meta.get("attributes") if isinstance(end_event_meta, dict) else None
+    )
     assert isinstance(attributes, dict)
     assert attributes.get("extra") == "value"
     assert attributes.get("foo") == "bar"

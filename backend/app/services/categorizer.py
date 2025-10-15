@@ -6,7 +6,9 @@ from typing import Tuple
 from urllib.parse import urlparse
 
 
-def deterministic_categories(url: str, text: str | None) -> Tuple[list[str], str | None]:
+def deterministic_categories(
+    url: str, text: str | None
+) -> Tuple[list[str], str | None]:
     """Return (categories, site) derived from the URL and content heuristics."""
 
     categories: set[str] = set()

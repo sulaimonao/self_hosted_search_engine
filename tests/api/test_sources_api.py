@@ -45,7 +45,9 @@ def test_sources_config_get_and_post(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     assert persisted.allowed_domains == ["example.com"]
 
 
-def test_sources_config_rejects_invalid_payload(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_sources_config_rejects_invalid_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     app, client, _ = _setup_app(monkeypatch, tmp_path)
     resp = client.post("/api/sources/config", json=["invalid"])
     assert resp.status_code == 400

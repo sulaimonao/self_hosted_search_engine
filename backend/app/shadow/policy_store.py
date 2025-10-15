@@ -42,7 +42,10 @@ class RateLimit:
     delay_ms: int = 250
 
     def to_dict(self) -> Dict[str, int]:
-        return {"concurrency": max(1, int(self.concurrency)), "delay_ms": max(0, int(self.delay_ms))}
+        return {
+            "concurrency": max(1, int(self.concurrency)),
+            "delay_ms": max(0, int(self.delay_ms)),
+        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -80,32 +83,52 @@ class ShadowPolicy:
         include_patterns: tuple[str, ...] = self.include_patterns
         exclude_patterns: tuple[str, ...] = self.exclude_patterns
         if isinstance(include, (list, tuple)):
-            include_patterns = tuple(str(item).strip() for item in include if str(item).strip())
+            include_patterns = tuple(
+                str(item).strip() for item in include if str(item).strip()
+            )
         elif isinstance(include, str) and include.strip():
             include_patterns = (include.strip(),)
         if isinstance(exclude, (list, tuple)):
-            exclude_patterns = tuple(str(item).strip() for item in exclude if str(item).strip())
+            exclude_patterns = tuple(
+                str(item).strip() for item in exclude if str(item).strip()
+            )
         elif isinstance(exclude, str) and exclude.strip():
             exclude_patterns = (exclude.strip(),)
 
         rate_payload = payload.get("rate_limit") or payload.get("rateLimit") or {}
         if isinstance(rate_payload, Mapping):
-            concurrency = _coerce_int(rate_payload.get("concurrency"), self.rate_limit.concurrency)
-            delay_ms = _coerce_int(rate_payload.get("delay_ms"), self.rate_limit.delay_ms)
-            rate_limit = RateLimit(concurrency=max(1, concurrency), delay_ms=max(0, delay_ms))
+            concurrency = _coerce_int(
+                rate_payload.get("concurrency"), self.rate_limit.concurrency
+            )
+            delay_ms = _coerce_int(
+                rate_payload.get("delay_ms"), self.rate_limit.delay_ms
+            )
+            rate_limit = RateLimit(
+                concurrency=max(1, concurrency), delay_ms=max(0, delay_ms)
+            )
         else:
             rate_limit = self.rate_limit
 
         return replace(
             self,
             enabled=_coerce_bool(payload.get("enabled"), self.enabled),
-            obey_robots=_coerce_bool(payload.get("obey_robots") or payload.get("obeyRobots"), self.obey_robots),
+            obey_robots=_coerce_bool(
+                payload.get("obey_robots") or payload.get("obeyRobots"),
+                self.obey_robots,
+            ),
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
-            js_render=_coerce_bool(payload.get("js_render") or payload.get("jsRender"), self.js_render),
+            js_render=_coerce_bool(
+                payload.get("js_render") or payload.get("jsRender"), self.js_render
+            ),
             rag=_coerce_bool(payload.get("rag"), self.rag),
             training=_coerce_bool(payload.get("training"), self.training),
-            ttl_days=max(1, _coerce_int(payload.get("ttl_days") or payload.get("ttlDays"), self.ttl_days)),
+            ttl_days=max(
+                1,
+                _coerce_int(
+                    payload.get("ttl_days") or payload.get("ttlDays"), self.ttl_days
+                ),
+            ),
             rate_limit=rate_limit,
         )
 
@@ -141,7 +164,9 @@ class ShadowPolicyStore:
                 domain = self._normalize_domain(key)
                 if not domain:
                     continue
-                self._domains[domain] = ShadowPolicy(policy_id=domain).with_updates(value)
+                self._domains[domain] = ShadowPolicy(policy_id=domain).with_updates(
+                    value
+                )
         updated_at = content.get("updated_at")
         try:
             self._updated_at = float(updated_at)
@@ -152,7 +177,9 @@ class ShadowPolicyStore:
         payload = {
             "updated_at": self._updated_at,
             "global": self._global.to_dict(),
-            "domains": {domain: policy.to_dict() for domain, policy in self._domains.items()},
+            "domains": {
+                domain: policy.to_dict() for domain, policy in self._domains.items()
+            },
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +199,9 @@ class ShadowPolicyStore:
             return {
                 "updated_at": self._updated_at,
                 "global": self._global.to_dict(),
-                "domains": {domain: policy.to_dict() for domain, policy in self._domains.items()},
+                "domains": {
+                    domain: policy.to_dict() for domain, policy in self._domains.items()
+                },
             }
 
     def get_global(self) -> ShadowPolicy:
@@ -202,10 +231,11 @@ class ShadowPolicyStore:
         if not normalized:
             raise ValueError("invalid_domain")
         with self._lock:
-            existing = self._domains.get(normalized) or ShadowPolicy(policy_id=normalized)
+            existing = self._domains.get(normalized) or ShadowPolicy(
+                policy_id=normalized
+            )
             updated = existing.with_updates(payload)
             self._domains[normalized] = updated
             self._updated_at = time.time()
             self._persist()
             return updated
-

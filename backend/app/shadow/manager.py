@@ -79,7 +79,11 @@ class ShadowIndexer:
         return f"{tab_id if tab_id is not None else 'global'}|{url}"
 
     def _prune_recent(self, now: float) -> None:
-        expired = [key for key, (_, ts) in self._recent_requests.items() if now - ts > self._dedupe_window]
+        expired = [
+            key
+            for key, (_, ts) in self._recent_requests.items()
+            if now - ts > self._dedupe_window
+        ]
         for key in expired:
             self._recent_requests.pop(key, None)
 
@@ -104,7 +108,12 @@ class ShadowIndexer:
             docs_patch = patch.pop("docs", None)
             errors_patch = patch.pop("errors", None)
             for key, value in patch.items():
-                if value is not None or key in {"message", "etaSeconds", "reason", "pendingEmbedding"}:
+                if value is not None or key in {
+                    "message",
+                    "etaSeconds",
+                    "reason",
+                    "pendingEmbedding",
+                }:
                     current[key] = value
             if metrics_patch is not None:
                 base_metrics = dict(current.get("metrics") or {})
@@ -126,7 +135,9 @@ class ShadowIndexer:
             raise ValueError("job_id_required")
         phase = str(record.get("phase") or "queued")
         steps_total = int(record.get("steps_total") or record.get("stepsTotal") or 0)
-        steps_completed = int(record.get("steps_completed") or record.get("stepsCompleted") or 0)
+        steps_completed = int(
+            record.get("steps_completed") or record.get("stepsCompleted") or 0
+        )
         progress = None
         if steps_total > 0:
             progress = max(0.0, min(1.0, steps_completed / float(steps_total)))
@@ -338,7 +349,9 @@ class ShadowIndexer:
 
     def _persist_state(self) -> None:
         # retained for backwards compatibility; persistence handled in set_enabled
-        self._state_db.set_setting("shadow_enabled", "true" if self._enabled else "false")
+        self._state_db.set_setting(
+            "shadow_enabled", "true" if self._enabled else "false"
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -510,7 +523,9 @@ class ShadowIndexer:
             progress=progress,
             retries=retries,
         )
-        self._transition(url, {"phase": phase, "status_message": message, "job_id": job_id})
+        self._transition(
+            url, {"phase": phase, "status_message": message, "job_id": job_id}
+        )
 
     def _fetch_and_index(self, url: str, job_id: str) -> ShadowJobOutcome:
         title, text, metadata, timing = self._fetch_with_playwright(url)
@@ -595,7 +610,9 @@ class ShadowIndexer:
             metrics=metrics,
         )
 
-    def _fetch_with_playwright(self, url: str) -> tuple[str, str, Dict[str, Any], Dict[str, float]]:
+    def _fetch_with_playwright(
+        self, url: str
+    ) -> tuple[str, str, Dict[str, Any], Dict[str, float]]:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(ignore_https_errors=True)
@@ -642,7 +659,9 @@ class ShadowIndexer:
                 text, metadata = self._extract_text(html)
                 extract_ms = (time.time() - extract_start) * 1000.0
                 if not text.strip():
-                    fallback = page.evaluate("document.body ? document.body.innerText : ''")
+                    fallback = page.evaluate(
+                        "document.body ? document.body.innerText : ''"
+                    )
                     if isinstance(fallback, str):
                         text = fallback
             finally:

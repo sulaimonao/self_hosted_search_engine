@@ -11,7 +11,9 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
-ARXIV_RE = re.compile(r"arxiv\.org/(abs|pdf)/[0-9]{4}\.[0-9]{4,5}(v\d+)?", re.IGNORECASE)
+ARXIV_RE = re.compile(
+    r"arxiv\.org/(abs|pdf)/[0-9]{4}\.[0-9]{4,5}(v\d+)?", re.IGNORECASE
+)
 ISBN_RE = re.compile(r"(97(8|9))?\d{9}(\d|X)", re.IGNORECASE)
 
 
@@ -45,17 +47,27 @@ class SourceFollowConfig:
         if isinstance(allowed_domains_raw, str):
             allowed_domains = [allowed_domains_raw]
         elif isinstance(allowed_domains_raw, Sequence):
-            allowed_domains = [str(item).strip().lower() for item in allowed_domains_raw if str(item).strip()]
+            allowed_domains = [
+                str(item).strip().lower()
+                for item in allowed_domains_raw
+                if str(item).strip()
+            ]
         else:
             allowed_domains = []
         file_types_raw = payload.get("file_types", [])
         if isinstance(file_types_raw, str):
             file_types = [file_types_raw.lower()]
         elif isinstance(file_types_raw, Sequence):
-            file_types = [str(item).strip().lower() for item in file_types_raw if str(item).strip()]
+            file_types = [
+                str(item).strip().lower()
+                for item in file_types_raw
+                if str(item).strip()
+            ]
         else:
             file_types = ["html", "pdf"]
-        max_bytes_per_source = int(payload.get("max_bytes_per_source", 200 * 1024 * 1024))
+        max_bytes_per_source = int(
+            payload.get("max_bytes_per_source", 200 * 1024 * 1024)
+        )
         session_id = payload.get("session_id")
         return cls(
             enabled=enabled,
@@ -65,7 +77,11 @@ class SourceFollowConfig:
             allowed_domains=allowed_domains,
             file_types=file_types,
             max_bytes_per_source=max_bytes_per_source,
-            session_id=str(session_id) if isinstance(session_id, str) and session_id.strip() else None,
+            session_id=(
+                str(session_id)
+                if isinstance(session_id, str) and session_id.strip()
+                else None
+            ),
         )
 
     def to_json(self) -> str:
@@ -100,7 +116,9 @@ class SourceBudget:
     def note_parent(self, url: str, depth: int) -> None:
         self.parent_depths[url] = max(0, depth)
 
-    def can_follow(self, parent_url: str, candidate_url: str, *, kind: str, depth: int) -> bool:
+    def can_follow(
+        self, parent_url: str, candidate_url: str, *, kind: str, depth: int
+    ) -> bool:
         if not self.config.enabled:
             return False
         if depth > self.config.max_depth:
@@ -122,7 +140,9 @@ class SourceBudget:
             extension = path.rsplit(".", 1)[-1] if "." in path else ""
             if extension and extension in allowed_types:
                 return True
-            if "html" in allowed_types and (not extension or extension in {"html", "htm"}):
+            if "html" in allowed_types and (
+                not extension or extension in {"html", "htm"}
+            ):
                 return True
             return False
         return True
@@ -131,9 +151,13 @@ class SourceBudget:
         self.total_followed += 1
 
 
-def classify_source(href: str, text: str | None = None, *, content_type_hint: str | None = None) -> str:
+def classify_source(
+    href: str, text: str | None = None, *, content_type_hint: str | None = None
+) -> str:
     lowered = href.lower()
-    if lowered.endswith(".pdf") or (content_type_hint and "pdf" in content_type_hint.lower()):
+    if lowered.endswith(".pdf") or (
+        content_type_hint and "pdf" in content_type_hint.lower()
+    ):
         return "pdf"
     if DOI_RE.search(href) or (text and DOI_RE.search(text)):
         return "doi"
@@ -143,12 +167,17 @@ def classify_source(href: str, text: str | None = None, *, content_type_hint: st
         return "isbn"
     if text and ISBN_RE.search(text):
         return "isbn"
-    if any(token in lowered for token in ["figshare", "zenodo", "huggingface.co/datasets", "data.gov"]):
+    if any(
+        token in lowered
+        for token in ["figshare", "zenodo", "huggingface.co/datasets", "data.gov"]
+    ):
         return "dataset"
     return "html"
 
 
-def extract_sources(html: str, base_url: str, *, content_type_hint: str | None = None) -> List[SourceLink]:
+def extract_sources(
+    html: str, base_url: str, *, content_type_hint: str | None = None
+) -> List[SourceLink]:
     soup = BeautifulSoup(html, "lxml")
     links: list[SourceLink] = []
     seen: set[str] = set()

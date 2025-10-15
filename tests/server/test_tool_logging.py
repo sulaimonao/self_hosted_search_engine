@@ -9,7 +9,9 @@ from server import tool_logging
 
 def _capture_events(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    monkeypatch.setattr(tool_logging, "write_event", lambda payload: events.append(payload))
+    monkeypatch.setattr(
+        tool_logging, "write_event", lambda payload: events.append(payload)
+    )
     monkeypatch.setattr(tool_logging, "add_run_log_line", lambda message: None)
     monkeypatch.setattr(tool_logging, "_get_context_attr", lambda name: None)
     return events

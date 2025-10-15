@@ -25,11 +25,14 @@ def diag_models() -> Any:
     engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
     primary = getattr(getattr(engine_config, "models", None), "llm_primary", "gpt-oss")
     fallback = getattr(getattr(engine_config, "models", None), "llm_fallback", "gemma3")
-    health = current_app.config.get("SHIPIT_MODEL_HEALTH", {
-        "primary_ok": True,
-        "fallback_ok": True,
-        "in_use": "primary",
-    })
+    health = current_app.config.get(
+        "SHIPIT_MODEL_HEALTH",
+        {
+            "primary_ok": True,
+            "fallback_ok": True,
+            "in_use": "primary",
+        },
+    )
     payload = {
         "ok": True,
         "data": {

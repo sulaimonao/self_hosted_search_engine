@@ -109,7 +109,9 @@ def hybrid_search() -> tuple[Any, int]:
     domain = _coerce_str(request.args.get("domain"))
     if domain:
         filters["domain"] = domain
-    policy_id = _coerce_str(request.args.get("policy_id") or request.args.get("policyId"))
+    policy_id = _coerce_str(
+        request.args.get("policy_id") or request.args.get("policyId")
+    )
     if policy_id:
         filters["policy_id"] = policy_id
     hash_filter = _coerce_str(request.args.get("hash"))
