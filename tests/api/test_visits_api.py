@@ -17,7 +17,9 @@ def test_record_visit_inserts_row(monkeypatch: pytest.MonkeyPatch, tmp_path):
     if shadow is not None:
         monkeypatch.setattr(shadow, "enqueue", lambda url: {"queued": url})
 
-    response = client.post("/api/visits", json={"url": "https://example.com", "enqueue": True})
+    response = client.post(
+        "/api/visits", json={"url": "https://example.com", "enqueue": True}
+    )
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["ok"] is True
@@ -25,5 +27,7 @@ def test_record_visit_inserts_row(monkeypatch: pytest.MonkeyPatch, tmp_path):
         assert payload["enqueue"]["queued"] == "https://example.com"
 
     state_db = app.config["APP_STATE_DB"]
-    rows = state_db._conn.execute("SELECT url FROM page_visits WHERE url=?", ("https://example.com",)).fetchall()
+    rows = state_db._conn.execute(
+        "SELECT url FROM page_visits WHERE url=?", ("https://example.com",)
+    ).fetchall()
     assert len(rows) == 1

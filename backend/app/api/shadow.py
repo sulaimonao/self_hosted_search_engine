@@ -87,7 +87,9 @@ def _policy_to_payload(policy: ShadowPolicy) -> dict[str, Any]:
     return data
 
 
-def _ensure_enabled_flag(manager, config: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
+def _ensure_enabled_flag(
+    manager, config: dict[str, Any] | None
+) -> tuple[dict[str, Any], bool]:
     if not isinstance(config, dict):
         config = {}
     enabled_value = config.get("enabled")
@@ -130,7 +132,9 @@ def update_shadow_config():
     if enabled_value is None:
         return jsonify({"error": "invalid_enabled"}), 400
 
-    config, enabled_state = _ensure_enabled_flag(manager, manager.set_enabled(enabled_value))
+    config, enabled_state = _ensure_enabled_flag(
+        manager, manager.set_enabled(enabled_value)
+    )
     config["enabled"] = enabled_state
     policy_store = _policy_store()
     if policy_store is not None:

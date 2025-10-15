@@ -14,7 +14,9 @@ def test_docs_listing_and_detail(monkeypatch: pytest.MonkeyPatch, tmp_path):
     client = app.test_client()
     state_db = app.config["APP_STATE_DB"]
 
-    state_db.record_crawl_job("job-1", query="test", normalized_path="/tmp/normalized.jsonl")
+    state_db.record_crawl_job(
+        "job-1", query="test", normalized_path="/tmp/normalized.jsonl"
+    )
     state_db.update_crawl_status("job-1", "success")
     state_db.upsert_document(
         job_id="job-1",

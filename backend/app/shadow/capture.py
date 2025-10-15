@@ -43,7 +43,9 @@ class ShadowCaptureService:
         self._vector_index = vector_index
         self._config = config
         self._state_db = state_db
-        self._snapshot_dir = (config.agent_data_dir / "documents" / "shadow" / "snapshots").resolve()
+        self._snapshot_dir = (
+            config.agent_data_dir / "documents" / "shadow" / "snapshots"
+        ).resolve()
         self._snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     def process_snapshot(self, payload: Mapping[str, Any]) -> SnapshotResult:
@@ -56,7 +58,11 @@ class ShadowCaptureService:
 
         parsed = urlparse(raw_url)
         domain = (parsed.hostname or "").lower()
-        policy = self._policy_store.get_domain(domain) if domain else self._policy_store.get_global()
+        policy = (
+            self._policy_store.get_domain(domain)
+            if domain
+            else self._policy_store.get_global()
+        )
 
         observed_at = time.time()
         document_id = uuid.uuid4().hex
@@ -65,7 +71,9 @@ class ShadowCaptureService:
             "url": raw_url,
             "canonical_url": raw_url,
             "domain": domain,
-            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(observed_at)),
+            "observed_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(observed_at)
+            ),
         }
 
         record = {
@@ -100,4 +108,3 @@ class ShadowCaptureService:
         except OSError:
             # Disk persistence is best-effort; log but continue.
             self._app.logger.debug("shadow.capture.persist_failed", exc_info=True)
-

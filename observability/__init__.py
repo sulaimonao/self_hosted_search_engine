@@ -129,7 +129,9 @@ def start_span(
         run_log.add(f"{name}: started")
 
     start_time = time.perf_counter()
-    _emit_span_event(span=span, suffix="start", level="DEBUG", duration_ms=None, inputs=inputs)
+    _emit_span_event(
+        span=span, suffix="start", level="DEBUG", duration_ms=None, inputs=inputs
+    )
 
     try:
         yield span

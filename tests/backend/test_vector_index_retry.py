@@ -4,7 +4,10 @@ import pytest
 
 from backend.app.config import AppConfig
 from backend.app.db import AppStateDB
-from backend.app.services.vector_index import EmbedderUnavailableError, VectorIndexService
+from backend.app.services.vector_index import (
+    EmbedderUnavailableError,
+    VectorIndexService,
+)
 from engine.config import (
     CrawlConfig,
     EngineConfig,
@@ -21,7 +24,9 @@ def _build_engine_config(tmp_path):
     persist_dir.mkdir(parents=True, exist_ok=True)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return EngineConfig(
-        models=ModelConfig(llm_primary="gpt-oss", llm_fallback=None, embed="embeddinggemma"),
+        models=ModelConfig(
+            llm_primary="gpt-oss", llm_fallback=None, embed="embeddinggemma"
+        ),
         ollama=OllamaConfig(base_url="http://127.0.0.1:11434"),
         retrieval=RetrievalConfig(k=5, min_hits=1, similarity_threshold=0.0),
         index=IndexConfig(persist_dir=persist_dir, db_path=db_path),
@@ -52,7 +57,9 @@ def vector_service(tmp_path, monkeypatch):
     state_db = AppStateDB(app_config.app_state_db_path)
 
     engine_config = _build_engine_config(tmp_path)
-    service = VectorIndexService(engine_config=engine_config, app_config=app_config, state_db=state_db)
+    service = VectorIndexService(
+        engine_config=engine_config, app_config=app_config, state_db=state_db
+    )
     return service, state_db
 
 
@@ -84,7 +91,9 @@ def test_upsert_document_queues_pending(vector_service, monkeypatch):
     monkeypatch.setattr(service, "_ensure_embedder_ready", lambda **_kwargs: None)
     monkeypatch.setattr(time, "sleep", lambda _: None)
 
-    result = service.upsert_document(text="Example document body", url="https://example.com", title="Example")
+    result = service.upsert_document(
+        text="Example document body", url="https://example.com", title="Example"
+    )
     assert result.chunks == 0
 
     now = time.time()

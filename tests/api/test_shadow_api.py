@@ -39,7 +39,15 @@ class DummyShadowManager:
     def status_by_url(self, url: str):
         if url == "https://example.com":
             return self.jobs["job-123"]
-        return {"url": url, "state": "idle", "phase": "idle", "docs": [], "errors": [], "metrics": {}, "jobId": None}
+        return {
+            "url": url,
+            "state": "idle",
+            "phase": "idle",
+            "docs": [],
+            "errors": [],
+            "metrics": {},
+            "jobId": None,
+        }
 
     def get_config(self):
         return {"enabled": self.enabled, "queued": len(self.enqueued), "running": 0}
@@ -63,7 +71,9 @@ def test_shadow_queue_and_status():
     missing = client.post("/api/shadow/crawl", json={})
     assert missing.status_code == 400
 
-    response = client.post("/api/shadow/crawl", json={"url": "https://example.com", "tabId": 7})
+    response = client.post(
+        "/api/shadow/crawl", json={"url": "https://example.com", "tabId": 7}
+    )
     assert response.status_code == 202
     data = response.get_json()
     assert data["state"] == "queued"

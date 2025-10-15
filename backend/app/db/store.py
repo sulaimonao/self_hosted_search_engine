@@ -153,7 +153,15 @@ class AppStateDB:
                 INSERT INTO history(tab_id, url, title, referrer, status_code, content_type, shadow_enqueued)
                 VALUES(?,?,?,?,?,?,?)
                 """,
-                (tab_id, url, title, referrer, status_code, content_type, int(bool(shadow_enqueued))),
+                (
+                    tab_id,
+                    url,
+                    title,
+                    referrer,
+                    status_code,
+                    content_type,
+                    int(bool(shadow_enqueued)),
+                ),
             )
             history_id = cursor.lastrowid
         return int(history_id)
@@ -322,7 +330,9 @@ class AppStateDB:
                 )
         return len(seeds)
 
-    def enabled_seed_urls(self, category_keys: Sequence[str] | None = None) -> list[str]:
+    def enabled_seed_urls(
+        self, category_keys: Sequence[str] | None = None
+    ) -> list[str]:
         sql = "SELECT url FROM seed_sources WHERE enabled = 1"
         params: list[Any] = []
         if category_keys:
@@ -454,11 +464,15 @@ class AppStateDB:
             return None
         return dict(row)
 
-    def enqueue_seed_jobs(self, category_keys: Sequence[str], *, priority: int = 0) -> list[str]:
+    def enqueue_seed_jobs(
+        self, category_keys: Sequence[str], *, priority: int = 0
+    ) -> list[str]:
         urls = self.enabled_seed_urls(category_keys)
         job_ids: list[str] = []
         for url in urls:
-            job_ids.append(self.enqueue_crawl_job(url, priority=priority, reason="seed"))
+            job_ids.append(
+                self.enqueue_crawl_job(url, priority=priority, reason="seed")
+            )
         return job_ids
 
     # ------------------------------------------------------------------
@@ -599,8 +613,16 @@ class AppStateDB:
                     parent_url=COALESCE(excluded.parent_url, crawl_jobs.parent_url),
                     is_source=excluded.is_source
                 """,
-                (job_id, seed, query, normalized_path, parent_url, int(bool(is_source))),
+                (
+                    job_id,
+                    seed,
+                    query,
+                    normalized_path,
+                    parent_url,
+                    int(bool(is_source)),
+                ),
             )
+
     def pending_crawl_jobs(self) -> list[dict[str, Any]]:
         with self._lock, self._conn:
             rows = self._conn.execute(
@@ -608,11 +630,16 @@ class AppStateDB:
             ).fetchall()
         return [dict(row) for row in rows]
 
-
-
-    def update_crawl_status(self, job_id: str, status: str, *, stats: Mapping[str, Any] | None = None,
-                             error: str | None = None, preview: Iterable[Mapping[str, Any]] | None = None,
-                             normalized_path: str | None = None) -> None:
+    def update_crawl_status(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        stats: Mapping[str, Any] | None = None,
+        error: str | None = None,
+        preview: Iterable[Mapping[str, Any]] | None = None,
+        normalized_path: str | None = None,
+    ) -> None:
         preview_payload = _serialize(list(preview)) if preview is not None else None
         stats_payload = _serialize(dict(stats)) if stats is not None else None
         with self._lock, self._conn:
@@ -626,10 +653,19 @@ class AppStateDB:
                        preview_json = COALESCE(?, preview_json)
                  WHERE id = ?
                 """,
-                (status, error, stats_payload, normalized_path, preview_payload, job_id),
+                (
+                    status,
+                    error,
+                    stats_payload,
+                    normalized_path,
+                    preview_payload,
+                    job_id,
+                ),
             )
 
-    def record_crawl_event(self, job_id: str, stage: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def record_crawl_event(
+        self, job_id: str, stage: str, payload: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
         event_payload = _serialize(payload or {})
         with self._lock, self._conn:
             self._conn.execute(
@@ -685,7 +721,9 @@ class AppStateDB:
     ) -> None:
         categories_json = _serialize(_ensure_list(categories or []))
         labels_json = _serialize(_ensure_list(labels or []))
-        verification_json = _serialize(verification) if verification is not None else None
+        verification_json = (
+            _serialize(verification) if verification is not None else None
+        )
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -745,7 +783,9 @@ class AppStateDB:
         snapshot = self._schema_validation
         return {
             "ok": snapshot.ok,
-            "tables": {table: dict(columns) for table, columns in snapshot.tables.items()},
+            "tables": {
+                table: dict(columns) for table, columns in snapshot.tables.items()
+            },
             "errors": list(snapshot.errors),
         }
 
@@ -923,7 +963,9 @@ class AppStateDB:
                 ),
             )
 
-    def resolve_missing_source(self, parent_url: str, source_url: str, *, notes: str | None = None) -> None:
+    def resolve_missing_source(
+        self, parent_url: str, source_url: str, *, notes: str | None = None
+    ) -> None:
         if not parent_url or not source_url:
             return
         with self._lock, self._conn:
@@ -1140,9 +1182,7 @@ class AppStateDB:
         last_error: str | None = None,
     ) -> None:
         now = int(time.time())
-        next_attempt = int(
-            math.ceil(now + max(1.0, float(delay)))
-        )
+        next_attempt = int(math.ceil(now + max(1.0, float(delay))))
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -1177,7 +1217,9 @@ class AppStateDB:
 
     def clear_pending_document(self, doc_id: str) -> None:
         with self._lock, self._conn:
-            self._conn.execute("DELETE FROM pending_documents WHERE doc_id = ?", (doc_id,))
+            self._conn.execute(
+                "DELETE FROM pending_documents WHERE doc_id = ?", (doc_id,)
+            )
 
     def list_pending_documents(self, limit: int = 200) -> list[dict[str, Any]]:
         with self._lock, self._conn:
@@ -1292,7 +1334,9 @@ class AppStateDB:
         ]
         return {key: row[index] for index, key in enumerate(keys)}
 
-    def list_documents(self, *, query: str | None = None, site: str | None = None, limit: int = 100) -> list[DocumentRecord]:
+    def list_documents(
+        self, *, query: str | None = None, site: str | None = None, limit: int = 100
+    ) -> list[DocumentRecord]:
         conditions: list[str] = []
         params: list[Any] = []
         if query:
@@ -1333,11 +1377,15 @@ class AppStateDB:
         return results
 
     def get_document(self, document_id: str) -> dict[str, Any] | None:
-        row = self._conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        row = self._conn.execute(
+            "SELECT * FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
         if not row:
             return None
         payload = dict(row)
-        payload["categories"] = _ensure_list(_deserialize(payload.get("categories"), []))
+        payload["categories"] = _ensure_list(
+            _deserialize(payload.get("categories"), [])
+        )
         payload["labels"] = _ensure_list(_deserialize(payload.get("labels"), []))
         payload["verification"] = _deserialize(payload.get("verification"), {})
         return payload
@@ -1365,7 +1413,9 @@ class AppStateDB:
     # ------------------------------------------------------------------
     # Visits
     # ------------------------------------------------------------------
-    def record_visit(self, url: str, *, referer: str | None, dur_ms: int | None, source: str) -> None:
+    def record_visit(
+        self, url: str, *, referer: str | None, dur_ms: int | None, source: str
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO page_visits(url, referer, dur_ms, source) VALUES(?, ?, ?, ?)",
@@ -1387,8 +1437,15 @@ class AppStateDB:
                 (thread_id, title),
             )
 
-    def add_chat_message(self, *, message_id: str | None, thread_id: str, role: str, content: str,
-                          tokens: int | None = None) -> str:
+    def add_chat_message(
+        self,
+        *,
+        message_id: str | None,
+        thread_id: str,
+        role: str,
+        content: str,
+        tokens: int | None = None,
+    ) -> str:
         msg_id = message_id or uuid.uuid4().hex
         with self._lock, self._conn:
             self._conn.execute(
@@ -1404,7 +1461,9 @@ class AppStateDB:
             )
         return msg_id
 
-    def recent_messages(self, thread_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    def recent_messages(
+        self, thread_id: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
             SELECT role, content, created_at, tokens
@@ -1424,7 +1483,9 @@ class AppStateDB:
         ).fetchone()
         return dict(row) if row else None
 
-    def upsert_summary(self, thread_id: str, *, summary: str, embedding_ref: str | None = None) -> None:
+    def upsert_summary(
+        self, thread_id: str, *, summary: str, embedding_ref: str | None = None
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -1465,14 +1526,24 @@ class AppStateDB:
                     strength = excluded.strength,
                     last_accessed = CURRENT_TIMESTAMP
                 """,
-                (memory_id, scope, scope_ref, key, value, _serialize(metadata or {}), strength),
+                (
+                    memory_id,
+                    scope,
+                    scope_ref,
+                    key,
+                    value,
+                    _serialize(metadata or {}),
+                    strength,
+                ),
             )
             self._conn.execute(
                 "INSERT INTO memory_audit(memory_id, action, detail) VALUES(?, 'upsert', ?)",
                 (memory_id, value[:2000]),
             )
 
-    def list_memories(self, *, scope: str, scope_ref: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+    def list_memories(
+        self, *, scope: str, scope_ref: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
             SELECT id, scope, scope_ref, key, value, metadata, strength, last_accessed, created_at
