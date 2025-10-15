@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 import threading
 import time
@@ -34,10 +35,27 @@ class Histogram:
     def percentiles(self) -> Dict[str, float]:
         if not self.samples:
             return {"p50": 0.0, "p95": 0.0}
+
         ordered = sorted(self.samples)
-        p50 = statistics.quantiles(ordered, n=100)[49] if len(ordered) >= 2 else ordered[0]
-        idx95 = max(0, int(round(0.95 * (len(ordered) - 1))))
-        return {"p50": ordered[len(ordered) // 2], "p95": ordered[idx95]}
+        median = statistics.median(ordered)
+
+        if len(ordered) == 1:
+            percentile_95 = float(ordered[0])
+        else:
+            position = 0.95 * (len(ordered) - 1)
+            lower_index = int(math.floor(position))
+            upper_index = int(math.ceil(position))
+            lower_value = ordered[lower_index]
+            upper_value = ordered[upper_index]
+            if lower_index == upper_index:
+                percentile_95 = float(lower_value)
+            else:
+                weight = position - lower_index
+                percentile_95 = float(
+                    lower_value + (upper_value - lower_value) * weight
+                )
+
+        return {"p50": float(median), "p95": percentile_95}
 
 
 class MetricsRegistry:
