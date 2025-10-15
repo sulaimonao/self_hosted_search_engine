@@ -162,6 +162,11 @@ npm run build:web  # build the Next.js app once; required for `npm run desktop`
 npm run desktop
 ```
 
+> [!NOTE]
+> The desktop orchestrator now checks for `frontend/.next/BUILD_ID` before
+> launching. Run `npm --prefix frontend run build:web` first, or set
+> `DESKTOP_SKIP_BUILD_CHECK=1` if you need to bypass the guard temporarily.
+
 The `desktop` script boots the Flask API on port `5050`, the Next.js renderer on
 port `3100`, waits for the UI to become reachable, and then launches Electron
 with live reload (`electronmon`) enabled. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to
