@@ -12,6 +12,7 @@ export interface ChatMessage {
   citations?: string[];
   traceId?: string | null;
   model?: string | null;
+  autopilot?: AutopilotDirective | null;
 }
 
 export type ActionStatus = "proposed" | "approved" | "dismissed" | "executing" | "done" | "error";
@@ -155,6 +156,13 @@ export interface ChatResponsePayload {
   citations: string[];
   model?: string | null;
   trace_id?: string | null;
+  autopilot?: AutopilotDirective | null;
+}
+
+export interface AutopilotDirective {
+  mode: "browser";
+  query: string;
+  reason?: string | null;
 }
 
 export type ChatStreamEvent =

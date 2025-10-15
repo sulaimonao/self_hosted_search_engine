@@ -32,9 +32,12 @@ _MAX_ERROR_PREVIEW = 500
 _MAX_CONTEXT_CHARS = 8_000
 _SCHEMA_PROMPT = (
     "You are a helpful assistant embedded in a self-hosted search engine. "
-    "Always reply with strict JSON containing only the keys reasoning, answer, and citations (an array of strings). "
+    "Always reply with strict JSON containing the keys reasoning, answer, and citations (an array of strings). "
     "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in answer. "
-    "Include citations when you reference external facts; omit when not applicable."
+    "Include citations when you reference external facts; omit when not applicable. "
+    "If the knowledge cutoff prevents a confident answer, include an autopilot object with the shape "
+    "{\"mode\": \"browser\", \"query\": <string>, \"reason\": <string>}. "
+    "Only request autopilot when real-time browsing is required."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 
@@ -87,6 +90,20 @@ def _strip_code_fence(text: str) -> str:
         if "```" in stripped:
             stripped = stripped.split("```", 1)[0]
     return stripped.strip()
+
+
+def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    mode = str(payload.get("mode", "")).strip().lower()
+    query = str(payload.get("query", "")).strip()
+    if mode != "browser" or not query:
+        return None
+    reason_val = payload.get("reason")
+    reason = str(reason_val).strip() if isinstance(reason_val, str) else None
+    if reason == "":
+        reason = None
+    return {"mode": "browser", "query": query, "reason": reason}
 
 
 def _coerce_schema(text: str) -> dict[str, Any]:
@@ -144,10 +161,12 @@ def _coerce_schema(text: str) -> dict[str, Any]:
     else:
         citations_list = []
 
+    autopilot = _coerce_autopilot(data.get("autopilot"))
     return {
         "reasoning": reasoning.strip(),
         "answer": answer.strip(),
         "citations": citations_list,
+        "autopilot": autopilot,
     }
 
 
@@ -369,6 +388,7 @@ def _render_response_payload(
         citations=[str(item) for item in citations if isinstance(item, (str, int, float))],
         model=candidate,
         trace_id=trace_id,
+        autopilot=structured.get("autopilot"),
     )
     g.chat_model = candidate
     g.chat_fallback_used = attempt_index > 1

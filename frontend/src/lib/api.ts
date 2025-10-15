@@ -34,6 +34,7 @@ import type {
   ShadowPolicyResponse,
   ShadowSnapshotResponse,
   SystemCheckResponse,
+  AutopilotDirective,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -1109,6 +1110,12 @@ export async function sendChat(
       : [],
     model: typeof data.model === "string" ? data.model : servedModel,
     trace_id: typeof data.trace_id === "string" ? data.trace_id : traceIdHeader ?? null,
+    autopilot:
+      data.autopilot === undefined
+        ? undefined
+        : typeof data.autopilot === "object" && data.autopilot !== null
+        ? (data.autopilot as AutopilotDirective)
+        : null,
   };
 
   return {
@@ -1151,6 +1158,63 @@ export async function startCrawlJob(request: CrawlJobRequest): Promise<CrawlJobR
     throw new Error(reason || "Unable to queue crawl job");
   }
   return response.json();
+}
+
+export interface AgentTurnResultItem {
+  url?: string;
+  title?: string;
+  snippet?: string;
+  score?: number | null;
+}
+
+export interface AgentTurnResponse {
+  answer: string;
+  citations: string[];
+  coverage: number;
+  actions: unknown[];
+  results: AgentTurnResultItem[];
+}
+
+export async function runAgentTurn(query: string): Promise<AgentTurnResponse> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    throw new Error("Query is required for agent turn");
+  }
+  const response = await fetch(api("/api/tools/agent/turn"), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ query: trimmed }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Agent turn failed (${response.status})`);
+  }
+  const payload = (await response.json()) as Record<string, unknown>;
+  const answer = typeof payload.answer === "string" ? payload.answer : "";
+  const citationsRaw = Array.isArray(payload.citations) ? payload.citations : [];
+  const citations = citationsRaw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+  const coverageValue = Number(payload.coverage ?? 0);
+  const coverage = Number.isFinite(coverageValue) ? coverageValue : 0;
+  const actions = Array.isArray(payload.actions) ? payload.actions : [];
+  const resultsRaw = Array.isArray(payload.results) ? payload.results : [];
+  const results: AgentTurnResultItem[] = resultsRaw
+    .map((item) => {
+      if (typeof item !== "object" || item === null) {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      return {
+        url: typeof record.url === "string" ? record.url : undefined,
+        title: typeof record.title === "string" ? record.title : undefined,
+        snippet: typeof record.snippet === "string" ? record.snippet : undefined,
+        score: typeof record.score === "number" ? record.score : null,
+      } satisfies AgentTurnResultItem;
+    })
+    .filter((entry): entry is AgentTurnResultItem => Boolean(entry));
+
+  return { answer, citations, coverage, actions, results };
 }
 
 export interface RefreshOptions {

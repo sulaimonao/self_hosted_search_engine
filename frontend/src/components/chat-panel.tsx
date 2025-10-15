@@ -163,6 +163,18 @@ export function ChatPanel({
                               </ul>
                             </div>
                           ) : null}
+                          {message.autopilot ? (
+                            <div className="rounded-md border border-dashed border-primary/30 bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
+                              <p className="font-semibold uppercase tracking-wide text-foreground/80">Autopilot mode</p>
+                              <p className="mt-1 break-words text-foreground/80">
+                                Query:
+                                <span className="ml-1 font-mono text-foreground">{message.autopilot.query}</span>
+                              </p>
+                              {message.autopilot.reason ? (
+                                <p className="mt-1 text-foreground/70">{message.autopilot.reason}</p>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {hasReasoning ? (
                             <details className="group rounded-md border bg-muted/40 px-3 py-2 text-xs text-foreground/90">
                               <summary className="flex cursor-pointer items-center justify-between font-medium text-foreground">
