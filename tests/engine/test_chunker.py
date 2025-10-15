@@ -16,3 +16,15 @@ def test_chunker_generates_overlapping_chunks():
         assert chunk.token_count <= 50
     # Ensure overlap by checking that the second chunk begins before the first chunk ends.
     assert chunks[1].start <= chunks[0].end
+
+
+def test_chunker_character_offsets_ignore_trimmed_whitespace():
+    text = "  hello world  "
+    chunker = TokenChunker(chunk_size=20, overlap=0)
+
+    chunks = chunker.chunk_text(text)
+
+    assert chunks, "expected at least one chunk to be produced"
+    chunk = chunks[0]
+    assert chunk.text == "hello world"
+    assert text[chunk.start : chunk.end] == chunk.text

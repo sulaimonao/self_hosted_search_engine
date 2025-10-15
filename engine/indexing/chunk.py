@@ -42,8 +42,9 @@ class TokenChunker:
             return tiktoken.get_encoding("cl100k_base")
 
     def chunk_text(self, text: str) -> list[Chunk]:
-        text = text.strip()
         if not text:
+            return []
+        if not text.strip():
             return []
         token_ids = self._encoding.encode(text)
         total_tokens = len(token_ids)
@@ -52,15 +53,17 @@ class TokenChunker:
 
         chunks: list[Chunk] = []
         start_token = 0
-        prefix_text = ""
+        prefix_char_cache: dict[int, int] = {0: 0}
+        prefix_char_count = 0
         while start_token < total_tokens:
             end_token = min(start_token + self.chunk_size, total_tokens)
             chunk_tokens = token_ids[start_token:end_token]
             chunk_text = self._encoding.decode(chunk_tokens)
             chunk_text_stripped = chunk_text.strip()
-            start_char = len(prefix_text)
-            end_char = start_char + len(chunk_text)
             if chunk_text_stripped:
+                leading_ws = len(chunk_text) - len(chunk_text.lstrip())
+                start_char = prefix_char_count + leading_ws
+                end_char = start_char + len(chunk_text_stripped)
                 chunks.append(
                     Chunk(
                         text=chunk_text_stripped,
@@ -72,7 +75,10 @@ class TokenChunker:
             if end_token >= total_tokens:
                 break
             start_token = max(0, end_token - self.overlap)
-            prefix_text = self._encoding.decode(token_ids[:start_token])
+            prefix_char_count = prefix_char_cache.get(start_token, -1)
+            if prefix_char_count < 0:
+                prefix_char_count = len(self._encoding.decode(token_ids[:start_token]))
+                prefix_char_cache[start_token] = prefix_char_count
         return chunks
 
 
