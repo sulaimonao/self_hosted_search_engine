@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -13,9 +14,12 @@ from backend.app.db import AppStateDB
 bp = Blueprint("memory_api", __name__, url_prefix="/api")
 
 
-def _shipit_memory_store() -> tuple[list[dict[str, Any]], Any]:
+def _shipit_memory_store() -> tuple[list[dict[str, Any]], threading.Lock]:
     store = current_app.config.setdefault("SHIPIT_MEMORY", [])
-    lock = current_app.config.setdefault("SHIPIT_MEMORY_LOCK", None)
+    lock = current_app.config.get("SHIPIT_MEMORY_LOCK")
+    if lock is None:
+        lock = threading.Lock()
+        current_app.config["SHIPIT_MEMORY_LOCK"] = lock
     return store, lock
 
 
@@ -51,11 +55,8 @@ def upsert_memory():
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         store, lock = _shipit_memory_store()
-        if lock is None:
+        with lock:
             store.append(entry)
-        else:
-            with lock:
-                store.append(entry)
         return jsonify({"ok": True}), 201
     memory_id = str(payload.get("id") or "").strip() or None
     scope = str(payload.get("scope") or "").strip() or None
