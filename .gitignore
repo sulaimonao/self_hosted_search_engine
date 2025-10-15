@@ -81,6 +81,7 @@ diagnostics/
 !tests/api/test_docs_api.py
 !tests/api/test_meta_api.py
 !tests/api/test_sources_api.py
+!tests/api/test_extract_api.py
 !tests/api/test_jobs_status.py
 !tests/api/test_research_api.py
 !tests/e2e/test_agent_browser.py

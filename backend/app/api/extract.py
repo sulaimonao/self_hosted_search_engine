@@ -64,6 +64,12 @@ def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
         page.set_default_navigation_timeout(_DEFAULT_TIMEOUT_MS)
         page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
 
+        page_title: str | None = None
+        lang: str | None = None
+        text: str = ""
+        meta: dict[str, Any] = {}
+        screenshot_b64: str | None = None
+
         try:
             page.goto(url, wait_until="domcontentloaded")
             html = page.content()
@@ -76,7 +82,6 @@ def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
                 )
                 if isinstance(fallback_text, str):
                     text = fallback_text
-            screenshot_b64: str | None = None
             if capture_vision:
                 with suppress(Exception):
                     image = page.screenshot(full_page=True, type="png")
