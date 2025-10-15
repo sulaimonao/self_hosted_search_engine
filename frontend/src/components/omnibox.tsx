@@ -6,6 +6,7 @@ import { Globe, Search, Settings, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 interface OmniBoxProps {
   value: string;
@@ -13,18 +14,24 @@ interface OmniBoxProps {
   onSubmit: (value: string) => void;
   onOpenSettings: () => void;
   onOpenCommand: () => void;
+  className?: string;
 }
 
 export const OmniBox = forwardRef<HTMLInputElement, OmniBoxProps>(
-  ({ value, onChange, onSubmit, onOpenSettings, onOpenCommand }, ref) => {
+  ({ value, onChange, onSubmit, onOpenSettings, onOpenCommand, className }, ref) => {
     const [isFocused, setIsFocused] = useState(false);
 
     return (
-      <div className="flex flex-col gap-2 border-b bg-background/95 p-3 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      <div
+        className={cn(
+          "flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/80",
+          className,
+        )}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <Wand2 className="h-4 w-4" />
-            <span>Copilot workspace</span>
+            <span>Desktop workspace</span>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -44,7 +51,7 @@ export const OmniBox = forwardRef<HTMLInputElement, OmniBoxProps>(
             event.preventDefault();
             onSubmit(value.trim());
           }}
-          className="flex items-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition focus-within:border-primary"
+          className="flex items-center gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2 shadow-inner transition focus-within:border-primary"
         >
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
