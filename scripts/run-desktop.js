@@ -22,6 +22,7 @@ const electronBin = path.join(
   '.bin',
   process.platform === 'win32' ? 'electron.cmd' : 'electron',
 );
+const nextBuildSentinel = path.join(frontendDir, '.next', 'BUILD_ID');
 
 if (!fs.existsSync(electronBin)) {
   console.error('[desktop] Electron binary not found. Did you run `npm install`?');
@@ -39,6 +40,21 @@ let shuttingDown = false;
 let port;
 let frontendUrl;
 let waitResource;
+
+function ensureNextBuild() {
+  if (process.env.DESKTOP_SKIP_BUILD_CHECK === '1') {
+    return;
+  }
+  if (fs.existsSync(nextBuildSentinel)) {
+    return;
+  }
+  console.error('[desktop] No Next.js production build detected.');
+  console.error(
+    '[desktop] Run `npm --prefix frontend run build:web` before `npm run desktop`, ' +
+      'or set DESKTOP_SKIP_BUILD_CHECK=1 to bypass this check.',
+  );
+  process.exit(1);
+}
 
 function sanitizeBaseUrl(value) {
   return value ? value.replace(/\/$/, '') : value;
@@ -271,6 +287,7 @@ function startElectron() {
 }
 
 async function main() {
+  ensureNextBuild();
   await resolveConfiguration();
   startFrontend();
 
