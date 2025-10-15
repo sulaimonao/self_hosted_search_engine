@@ -89,6 +89,7 @@ diagnostics/
 !tests/backend/test_app_state_browser.py
 !tests/backend/test_agent_runtime.py
 !tests/backend/test_source_follow.py
+!tests/test_crawl_client.py
 /.venv
 .venv/
 logs/backend.pid

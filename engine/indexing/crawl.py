@@ -65,9 +65,14 @@ class CrawlClient:
         self.request_timeout = request_timeout
         self.read_timeout = read_timeout
         self.min_delay = min_delay
-        self._session = session or requests.Session()
+        self._session = session
+        self._session_lock = threading.Lock()
         self._last_fetch = 0.0
-        self._session.headers.update(self._default_headers())
+        self._throttle_lock = threading.Lock()
+        if self._session is None:
+            self._session = self._build_session()
+        else:
+            self._session.headers.update(self._default_headers())
         self._browser_enabled = bool(enable_browser_fallback) and sync_playwright is not None
         self._browser_type = (browser_type or "chromium").lower()
         self._browser_headless = bool(browser_headless)
@@ -80,22 +85,29 @@ class CrawlClient:
             atexit.register(self.close)
 
     def _throttle(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last_fetch
-        if elapsed < self.min_delay:
-            time.sleep(self.min_delay - elapsed)
-        self._last_fetch = time.monotonic()
+        with self._throttle_lock:
+            now = time.monotonic()
+            wait_time = self.min_delay - (now - self._last_fetch)
+            if wait_time > 0:
+                time.sleep(wait_time)
+                now = time.monotonic()
+            self._last_fetch = now
 
     def fetch(self, url: str) -> CrawlResult | None:
         self._throttle()
         request_exc: requests.RequestException | None = None
         result: CrawlResult | None = None
         try:
-            response = self._session.get(
-                url,
-                timeout=(self.request_timeout, self.read_timeout),
-                allow_redirects=True,
-            )
+            with self._session_lock:
+                session = self._session
+                if session is None:
+                    session = self._build_session()
+                    self._session = session
+                response = session.get(
+                    url,
+                    timeout=(self.request_timeout, self.read_timeout),
+                    allow_redirects=True,
+                )
         except requests.RequestException as exc:  # pragma: no cover - network failure
             LOGGER.debug("requests fetch failed for url=%s: %s", url, exc)
             response = None
@@ -155,6 +167,14 @@ class CrawlClient:
                 playwright.stop()
             except Exception:  # pragma: no cover - best effort cleanup
                 pass
+        with self._session_lock:
+            session = self._session
+            self._session = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:  # pragma: no cover - best effort cleanup
+                pass
 
     def _default_headers(self) -> dict[str, str]:
         return {
@@ -163,6 +183,11 @@ class CrawlClient:
             "Accept-Language": "en-US,en;q=0.9",
             "Cache-Control": "no-cache",
         }
+
+    def _build_session(self) -> requests.Session:
+        session = requests.Session()
+        session.headers.update(self._default_headers())
+        return session
 
     def _build_result_from_response(self, response: requests.Response) -> CrawlResult | None:
         status = response.status_code
