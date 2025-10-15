@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Mapping, MutableMapping, Sequence
 from urllib.parse import urljoin, urlparse
 
@@ -28,8 +27,8 @@ class SourceFollowConfig:
     max_depth: int = 1
     max_sources_per_page: int = 20
     max_total_sources: int = 200
-    allowed_domains: Sequence[str] = dataclasses.field(default_factory=list)
-    file_types: Sequence[str] = dataclasses.field(default_factory=lambda: ["html", "pdf"])
+    allowed_domains: Sequence[str] = field(default_factory=list)
+    file_types: Sequence[str] = field(default_factory=lambda: ["html", "pdf"])
     max_bytes_per_source: int = 200 * 1024 * 1024
     session_id: str | None = None
 
