@@ -154,13 +154,18 @@ class VectorIndexService:
         with start_span(
             "vector_index.upsert",
             attributes={"doc.length": len(cleaned)},
-            inputs={"url": url, "metadata_keys": sorted(metadata.keys()) if metadata else []},
+            inputs={
+                "url": url,
+                "metadata_keys": sorted(metadata.keys()) if metadata else [],
+            },
         ) as span:
             with self._lock:
                 duplicate_key = self._simhash_index.nearest(sim_signature)
                 if duplicate_key and duplicate_key != storage_key:
                     LOGGER.debug(
-                        "dedupe skip for %s (duplicate of %s)", storage_key, duplicate_key
+                        "dedupe skip for %s (duplicate of %s)",
+                        storage_key,
+                        duplicate_key,
                     )
                     return IndexResult(
                         doc_id=storage_key,
@@ -168,11 +173,15 @@ class VectorIndexService:
                         dims=self._last_dims,
                         duplicate_of=duplicate_key,
                     )
-                needs_update = self._vector_store.needs_update(storage_key, None, doc_hash)
+                needs_update = self._vector_store.needs_update(
+                    storage_key, None, doc_hash
+                )
                 if not needs_update:
                     self._simhash_index.update(storage_key, sim_signature)
                     self._persist_dedupe()
-                    return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
+                    return IndexResult(
+                        doc_id=storage_key, chunks=0, dims=self._last_dims
+                    )
 
             chunker = self._get_chunker()
             chunks = chunker.chunk_text(cleaned)
@@ -336,7 +345,9 @@ class VectorIndexService:
             start = int(data.get("start", 0)) if isinstance(data, Mapping) else 0
             end = int(data.get("end", 0)) if isinstance(data, Mapping) else 0
             tokens = int(data.get("token_count", 0)) if isinstance(data, Mapping) else 0
-            chunk_objects.append(Chunk(text=text, start=start, end=end, token_count=tokens))
+            chunk_objects.append(
+                Chunk(text=text, start=start, end=end, token_count=tokens)
+            )
             texts.append(text)
 
         if not chunk_objects:
@@ -345,7 +356,9 @@ class VectorIndexService:
 
         vectors = self._embed_with_retry(texts)
         if len(vectors) != len(chunk_objects):
-            raise EmbedderUnavailableError(self._embed_model, detail="embedding count mismatch")
+            raise EmbedderUnavailableError(
+                self._embed_model, detail="embedding count mismatch"
+            )
 
         self._persist_vectors(
             doc_id,
@@ -369,7 +382,9 @@ class VectorIndexService:
             try:
                 available = self._client.has_model(self._embed_model)
             except OllamaClientError as exc:
-                raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
+                raise EmbedderUnavailableError(
+                    self._embed_model, detail=str(exc)
+                ) from exc
 
             if available:
                 try:
@@ -404,13 +419,10 @@ class VectorIndexService:
 
             elapsed = time.monotonic() - start
             if elapsed >= max_wait:
-                detail = (
-                    last_error
-                    or (
-                        "embedding model is not available locally"
-                        if not self._dev_allow_autopull and not self._autopull_started
-                        else "embedding model is warming up"
-                    )
+                detail = last_error or (
+                    "embedding model is not available locally"
+                    if not self._dev_allow_autopull and not self._autopull_started
+                    else "embedding model is warming up"
                 )
                 raise EmbedderUnavailableError(
                     self._embed_model,
@@ -438,7 +450,9 @@ class VectorIndexService:
             try:
                 vectors = self._embedder.embed_documents(texts)
             except EmbeddingError as exc:
-                raise EmbedderUnavailableError(self._embed_model, detail=str(exc)) from exc
+                raise EmbedderUnavailableError(
+                    self._embed_model, detail=str(exc)
+                ) from exc
         if not vectors:
             raise EmbedderUnavailableError(
                 self._embed_model,
@@ -479,7 +493,9 @@ class VectorIndexService:
                 time.sleep(min(delay, 10.0))
                 delay = min(delay * 2.0, 10.0)
         if last_exc is None:
-            raise EmbedderUnavailableError(self._embed_model, detail="embedding retry exhausted")
+            raise EmbedderUnavailableError(
+                self._embed_model, detail="embedding retry exhausted"
+            )
         raise last_exc
 
     def _queue_pending_vectors(
@@ -496,7 +512,9 @@ class VectorIndexService:
         last_error: str | None = None,
     ) -> None:
         if self._state_db is None:
-            raise EmbedderUnavailableError(self._embed_model, detail="pending queue unavailable")
+            raise EmbedderUnavailableError(
+                self._embed_model, detail="pending queue unavailable"
+            )
         chunk_payload: list[tuple[int, str, Mapping[str, Any]]] = []
         for index, chunk in enumerate(chunks):
             chunk_payload.append(

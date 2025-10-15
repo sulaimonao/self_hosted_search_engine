@@ -14,9 +14,15 @@ bp = Blueprint("meta_api", __name__, url_prefix="/api/meta")
 
 
 def _build_openapi_document() -> dict[str, Any]:
-    chat_request_schema = ChatRequest.model_json_schema(ref_template="#/components/schemas/{model}")
-    chat_response_schema = ChatResponsePayload.model_json_schema(ref_template="#/components/schemas/{model}")
-    search_response_schema = SearchResponsePayload.model_json_schema(ref_template="#/components/schemas/{model}")
+    chat_request_schema = ChatRequest.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    chat_response_schema = ChatResponsePayload.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    search_response_schema = SearchResponsePayload.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
 
     components = {
         "schemas": {
@@ -109,7 +115,9 @@ def _build_openapi_document() -> dict[str, Any]:
                         "description": "Search results",
                         "content": {
                             "application/json": {
-                                "schema": {"$ref": "#/components/schemas/SearchResponse"}
+                                "schema": {
+                                    "$ref": "#/components/schemas/SearchResponse"
+                                }
                             }
                         },
                     }

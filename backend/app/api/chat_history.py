@@ -46,7 +46,9 @@ def chat_context(thread_id: str):
     user_id = request.args.get("user", "local").strip() or "local"
     query = request.args.get("q")
     state_db: AppStateDB = current_app.config["APP_STATE_DB"]
-    context = assemble_context(state_db, user_id=user_id, thread_id=thread_id, query=query)
+    context = assemble_context(
+        state_db, user_id=user_id, thread_id=thread_id, query=query
+    )
     return jsonify(context)
 
 

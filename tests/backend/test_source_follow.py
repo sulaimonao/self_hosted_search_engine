@@ -107,7 +107,9 @@ def test_missing_sources_tracking(tmp_path: Path) -> None:
 def test_handle_sources_enqueues_and_limits(tmp_path: Path) -> None:
     recorded: list[tuple[str, list[SourceLink], bool]] = []
 
-    def _record_links(parent: str, links: list[SourceLink], mark_enqueued: bool) -> None:
+    def _record_links(
+        parent: str, links: list[SourceLink], mark_enqueued: bool
+    ) -> None:
         recorded.append((parent, list(links), mark_enqueued))
 
     missing_records: list[tuple] = []
@@ -120,7 +122,9 @@ def test_handle_sources_enqueues_and_limits(tmp_path: Path) -> None:
         next_action: str | None,
         notes: str | None,
     ) -> None:
-        missing_records.append((parent, source_url, reason, http_status, next_action, notes))
+        missing_records.append(
+            (parent, source_url, reason, http_status, next_action, notes)
+        )
 
     config = SourceFollowConfig(
         enabled=True,
@@ -160,6 +164,7 @@ def test_handle_sources_enqueues_and_limits(tmp_path: Path) -> None:
         is_source=False,
         parent_url=None,
     )
+
     async def _run() -> Candidate:
         queue: asyncio.Queue[Candidate] = asyncio.Queue()
         await crawler._handle_sources(candidate, result, queue)

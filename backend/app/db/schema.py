@@ -64,9 +64,7 @@ def _ensure_migration_table(connection: sqlite3.Connection) -> None:
 
 
 def _load_applied_migrations(connection: sqlite3.Connection) -> set[str]:
-    rows = connection.execute(
-        "SELECT filename FROM schema_migrations"
-    ).fetchall()
+    rows = connection.execute("SELECT filename FROM schema_migrations").fetchall()
     return {row[0] for row in rows}
 
 
@@ -84,9 +82,9 @@ def _migration_already_applied(
     message = str(error).lower()
     if "duplicate column name" in message:
         if name == "003_job_status_settings.sql":
-            return _column_exists(connection, "pending_documents", "last_error") and _column_exists(
-                connection, "pending_documents", "retry_count"
-            )
+            return _column_exists(
+                connection, "pending_documents", "last_error"
+            ) and _column_exists(connection, "pending_documents", "retry_count")
         if name == "005_browser_features.sql":
             crawl_job_columns_ok = all(
                 _column_exists(connection, "crawl_jobs", column)
@@ -108,19 +106,19 @@ def _migration_already_applied(
             )
             return crawl_job_columns_ok and browser_tables_ok
         if name == "006_sources.sql":
-            return _column_exists(connection, "crawl_jobs", "parent_url") and _column_exists(
-                connection, "crawl_jobs", "is_source"
-            )
+            return _column_exists(
+                connection, "crawl_jobs", "parent_url"
+            ) and _column_exists(connection, "crawl_jobs", "is_source")
     if "already exists" in message and name == "003_job_status_settings.sql":
         return _table_exists(connection, "job_status")
     if "already exists" in message and name == "006_sources.sql":
-        return _table_exists(connection, "source_links") and _table_exists(connection, "missing_sources")
+        return _table_exists(connection, "source_links") and _table_exists(
+            connection, "missing_sources"
+        )
     return False
 
 
-def _column_exists(
-    connection: sqlite3.Connection, table: str, column: str
-) -> bool:
+def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
     table_name = table.replace("'", "''")
     query = f"PRAGMA table_info('{table_name}')"
     rows = connection.execute(query).fetchall()

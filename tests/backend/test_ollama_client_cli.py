@@ -27,7 +27,9 @@ def test_resolve_base_url_prefers_explicit(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
-def test_resolve_base_url_falls_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_base_url_falls_back_to_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When no explicit value is provided, ``OLLAMA_URL`` should be used."""
 
     monkeypatch.setenv("OLLAMA_URL", "http://env-host:2345")
@@ -40,9 +42,7 @@ def test_pull_model_injects_ollama_host(monkeypatch: pytest.MonkeyPatch) -> None
     fake_env = {"SOME_FLAG": "1"}
     popen_mock = mock.Mock()
     monkeypatch.setenv("OLLAMA_URL", "http://cli-host:8080")
-    monkeypatch.setattr(
-        ollama_client.subprocess, "Popen", popen_mock, raising=True
-    )
+    monkeypatch.setattr(ollama_client.subprocess, "Popen", popen_mock, raising=True)
 
     ollama_client.pull_model("test-model", env=fake_env)
 

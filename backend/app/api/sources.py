@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
 from backend.app.db import AppStateDB
-from backend.app.services.source_follow import SourceFollowConfig
 
 bp = Blueprint("sources", __name__, url_prefix="/api/sources")
 

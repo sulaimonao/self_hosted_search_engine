@@ -51,7 +51,9 @@ def test_shadow_settings_and_enqueue(tmp_path) -> None:
     state_db.set_shadow_settings(enabled=True, mode="visited_only")
     assert state_db.get_shadow_settings()["enabled"] is True
     assert state_db.effective_shadow_mode(None) == "visited_only"
-    job_id = state_db.enqueue_crawl_job("https://crawl.example", priority=5, reason="test")
+    job_id = state_db.enqueue_crawl_job(
+        "https://crawl.example", priority=5, reason="test"
+    )
     status = state_db.crawl_job_status(job_id)
     assert status and status["reason"] == "test"
     overview = state_db.crawl_overview()

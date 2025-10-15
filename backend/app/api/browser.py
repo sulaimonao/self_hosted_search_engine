@@ -75,7 +75,12 @@ def post_history():
         job_id = state_db.enqueue_crawl_job(url, priority=priority, reason="visited")
         state_db.mark_history_shadow_enqueued(history_id)
         enqueued = True
-    response = {"id": history_id, "shadow_enqueued": enqueued, "shadow_job_id": job_id, "mode": mode}
+    response = {
+        "id": history_id,
+        "shadow_enqueued": enqueued,
+        "shadow_job_id": job_id,
+        "mode": mode,
+    }
     return jsonify(response), 201
 
 
@@ -132,7 +137,9 @@ def post_bookmark_folder():
     if not name:
         abort(400, "name is required")
     parent_id = payload.get("parent_id")
-    folder_id = state_db.create_bookmark_folder(name, parent_id=int(parent_id) if parent_id is not None else None)
+    folder_id = state_db.create_bookmark_folder(
+        name, parent_id=int(parent_id) if parent_id is not None else None
+    )
     return jsonify({"id": folder_id}), 201
 
 
@@ -192,14 +199,25 @@ def post_seed_suggest():
     user_sites = payload.get("user_sites") or []
     if not category_key:
         abort(400, "category_key required")
-    existing = {seed["url"] for seed in state_db.list_seed_sources() if seed["category_key"] == category_key}
+    existing = {
+        seed["url"]
+        for seed in state_db.list_seed_sources()
+        if seed["category_key"] == category_key
+    }
     provided = {str(url).strip() for url in user_sites if str(url).strip()}
     baseline = _SUGGESTED_SITES.get(category_key, [])
     suggestions: list[dict[str, Any]] = []
     for url, title in baseline:
         if url in existing or url in provided:
             continue
-        suggestions.append({"url": url, "title": title, "category_key": category_key, "added_by": "llm"})
+        suggestions.append(
+            {
+                "url": url,
+                "title": title,
+                "category_key": category_key,
+                "added_by": "llm",
+            }
+        )
         if len(suggestions) >= 10:
             break
     return jsonify({"suggestions": suggestions})
@@ -259,7 +277,9 @@ def post_crawl_enqueue_seeds():
     if not isinstance(category_keys, list):
         abort(400, "category_keys must be a list")
     priority = int(payload.get("priority") or 0)
-    job_ids = state_db.enqueue_seed_jobs([str(key) for key in category_keys], priority=priority)
+    job_ids = state_db.enqueue_seed_jobs(
+        [str(key) for key in category_keys], priority=priority
+    )
     return jsonify({"job_ids": job_ids})
 
 

@@ -15,7 +15,9 @@ class _DummyPage:
         self.closed = False
         self.goto_url: str | None = None
 
-    def set_default_navigation_timeout(self, _timeout: int) -> None:  # pragma: no cover - no-op
+    def set_default_navigation_timeout(
+        self, _timeout: int
+    ) -> None:  # pragma: no cover - no-op
         return None
 
     def set_default_timeout(self, _timeout: int) -> None:  # pragma: no cover - no-op
@@ -116,7 +118,9 @@ def test_playwright_extract_returns_payload(monkeypatch: pytest.MonkeyPatch) -> 
         lambda _html: ("", {}),
     )
 
-    payload = extract_mod._playwright_extract("https://example.com", capture_vision=True)
+    payload = extract_mod._playwright_extract(
+        "https://example.com", capture_vision=True
+    )
 
     assert payload["url"] == "https://example.com"
     assert payload["title"] == "Example Page"
@@ -124,4 +128,3 @@ def test_playwright_extract_returns_payload(monkeypatch: pytest.MonkeyPatch) -> 
     assert payload["lang"] == "en"
     expected_b64 = base64.b64encode(screenshot).decode("ascii")
     assert payload["screenshot_b64"] == expected_b64
-

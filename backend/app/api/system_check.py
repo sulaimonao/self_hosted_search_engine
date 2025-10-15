@@ -88,7 +88,11 @@ def _run_diagnostics_light(config: AppConfig, runner: JobRunner) -> dict[str, An
         snapshot = runner.status(job_id)
         state = str(snapshot.get("state") or "unknown").lower()
         if state == "done":
-            result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else None
+            result = (
+                snapshot.get("result")
+                if isinstance(snapshot.get("result"), dict)
+                else None
+            )
             break
         if state == "error":
             error = str(snapshot.get("error") or "diagnostics job failed")
@@ -198,7 +202,10 @@ def run_system_check():
     diag_critical = diag_status in {"fail", "timeout"}
 
     llm = _check_llm()
-    llm_critical = bool(llm.get("critical")) and llm.get("status") not in {"pass", "skip"}
+    llm_critical = bool(llm.get("critical")) and llm.get("status") not in {
+        "pass",
+        "skip",
+    }
 
     critical_failures = backend_critical or diag_critical or llm_critical
 

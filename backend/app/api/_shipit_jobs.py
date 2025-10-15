@@ -8,7 +8,9 @@ import threading
 import time
 import uuid
 
-StatusBuilder = Callable[[str, float, float, "SimulatedJob"], MutableMapping[str, object]]
+StatusBuilder = Callable[
+    [str, float, float, "SimulatedJob"], MutableMapping[str, object]
+]
 
 
 @dataclass(frozen=True)

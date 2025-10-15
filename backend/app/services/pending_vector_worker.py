@@ -8,7 +8,10 @@ import time
 from typing import Any, Mapping
 
 from backend.app.db import AppStateDB
-from backend.app.services.vector_index import EmbedderUnavailableError, VectorIndexService
+from backend.app.services.vector_index import (
+    EmbedderUnavailableError,
+    VectorIndexService,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +34,9 @@ class PendingVectorWorker:
         self._batch_size = max(1, int(batch_size))
         self._max_backoff = max(30.0, float(max_backoff))
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="pending-vector-worker", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="pending-vector-worker", daemon=True
+        )
 
     def start(self) -> None:
         if self._thread.is_alive():
@@ -86,18 +91,24 @@ class PendingVectorWorker:
                     self._vector_index.index_from_pending(
                         doc_id=doc_id,
                         title=str(record.get("title") or ""),
-                        resolved_title=str(record.get("resolved_title") or record.get("title") or ""),
+                        resolved_title=str(
+                            record.get("resolved_title") or record.get("title") or ""
+                        ),
                         doc_hash=str(record.get("doc_hash") or ""),
                         sim_signature=record.get("sim_signature"),
                         url=str(record.get("url") or ""),
                         metadata=self._ensure_mapping(record.get("metadata")),
                         chunks=[
-                            (int(chunk.get("index", idx)), str(chunk.get("text", "")), self._ensure_mapping(chunk.get("metadata")))
+                            (
+                                int(chunk.get("index", idx)),
+                                str(chunk.get("text", "")),
+                                self._ensure_mapping(chunk.get("metadata")),
+                            )
                             for idx, chunk in enumerate(chunks)
                         ],
                     )
                 except EmbedderUnavailableError as exc:
-                    backoff = min(self._max_backoff, self._interval * (2 ** attempts))
+                    backoff = min(self._max_backoff, self._interval * (2**attempts))
                     LOGGER.info(
                         "embedder unavailable; rescheduling pending doc %s in %.1fs (%s)",
                         doc_id,
@@ -126,7 +137,9 @@ class PendingVectorWorker:
                     LOGGER.exception("failed to index pending document %s", doc_id)
                     self._state_db.reschedule_pending_document(
                         doc_id,
-                        delay=min(self._max_backoff, self._interval * (2 ** (attempts + 1))),
+                        delay=min(
+                            self._max_backoff, self._interval * (2 ** (attempts + 1))
+                        ),
                         attempts=attempts + 1,
                         last_error="exception",
                     )

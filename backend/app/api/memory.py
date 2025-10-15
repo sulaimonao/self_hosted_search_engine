@@ -42,7 +42,9 @@ def upsert_memory():
         tags: list[str] | None
         if tags_raw is None:
             tags = None
-        elif isinstance(tags_raw, list) and all(isinstance(tag, str) for tag in tags_raw):
+        elif isinstance(tags_raw, list) and all(
+            isinstance(tag, str) for tag in tags_raw
+        ):
             tags = [tag for tag in tags_raw if tag]
         else:
             return jsonify({"ok": False, "error": "invalid_tags"}), 400

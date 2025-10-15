@@ -19,7 +19,9 @@ class LabelWorker(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
-    def run(self) -> None:  # pragma: no cover - background thread exercised in integration tests
+    def run(
+        self,
+    ) -> None:  # pragma: no cover - background thread exercised in integration tests
         while not self._stop.is_set():
             docs = self._state_db.fetch_documents_for_labeling(limit=10)
             if not docs:
@@ -54,7 +56,9 @@ class LabelWorker(threading.Thread):
 class MemoryAgingWorker(threading.Thread):
     """Background worker that periodically decays memory strength."""
 
-    def __init__(self, state_db: AppStateDB, *, interval: float = 86_400.0, decay: float = 0.9) -> None:
+    def __init__(
+        self, state_db: AppStateDB, *, interval: float = 86_400.0, decay: float = 0.9
+    ) -> None:
         super().__init__(name="memory-aging-worker", daemon=True)
         self._state_db = state_db
         self._interval = max(60.0, float(interval))
@@ -64,7 +68,9 @@ class MemoryAgingWorker(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
-    def run(self) -> None:  # pragma: no cover - background thread exercised in integration tests
+    def run(
+        self,
+    ) -> None:  # pragma: no cover - background thread exercised in integration tests
         while not self._stop.is_set():
             self._state_db.age_memories(decay=self._decay)
             self._stop.wait(self._interval)
