@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -37,13 +38,21 @@ def execute_plan() -> Response:
         except Exception as exc:  # pragma: no cover - defensive logging
             current_app.logger.exception("planner execution failed")
             return jsonify({"ok": False, "error": str(exc)}), 500
+
     duration = time.perf_counter() - start
+    result_payload = result if isinstance(result, Mapping) else {}
+    events = result_payload.get("events")
+    if isinstance(events, Sequence) and not isinstance(events, (str, bytes, bytearray)):
+        events_list = list(events)
+    else:
+        events_list = []
     response = {
         "ok": True,
         "duration": duration,
         "result": result,
-        "events": result.get("events", []),
+        "events": events_list,
     }
-    if result.get("langsmith_run_id"):
-        response["langsmith_run_id"] = result["langsmith_run_id"]
+    langsmith_run_id = result_payload.get("langsmith_run_id")
+    if isinstance(langsmith_run_id, str) and langsmith_run_id:
+        response["langsmith_run_id"] = langsmith_run_id
     return jsonify(response), 200
