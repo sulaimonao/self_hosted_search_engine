@@ -16,9 +16,23 @@ def research_endpoint():
     payload = request.get_json(silent=True) or {}
     query = (payload.get("query") or "").strip()
     model = (payload.get("model") or "").strip() or None
-    budget = int(payload.get("budget") or 20)
+
+    budget_raw = payload.get("budget")
+    budget = 20
+    if budget_raw not in (None, ""):
+        try:
+            if isinstance(budget_raw, str):
+                trimmed = budget_raw.strip()
+                if trimmed:
+                    budget = int(trimmed)
+            else:
+                budget = int(budget_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid_budget"}), 400
+
     if not query:
         return jsonify({"error": "query is required"}), 400
+
     budget = max(1, min(100, budget))
 
     config: AppConfig = current_app.config["APP_CONFIG"]
