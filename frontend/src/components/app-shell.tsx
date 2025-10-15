@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -2903,237 +2904,311 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const modelSelectDisabled = backendHealth.loading || !backendHealthy;
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <OmniBox
-        ref={omniboxRef}
-        value={omniboxValue}
-        onChange={setOmniboxValue}
-        onSubmit={handleOmniSubmit}
-        onOpenCommand={() => setCommandOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
-      <NavProgressHud />
-      {!backendHealthy && backendOfflineMessage ? (
-        <div className="flex items-center justify-between gap-3 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          <span>{backendOfflineMessage}</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              void backendHealth.refresh();
-            }}
-            disabled={backendHealth.loading}
-          >
-            {backendHealth.loading ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
+    <div className="flex min-h-screen flex-col bg-slate-950 text-foreground">
+      <header className="border-b border-border/60 bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+        <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-4 py-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <span>Self-hosted copilot workspace</span>
+              <Badge variant={backendHealthy ? "default" : "destructive"}>
+                {backendHealthy ? "Backend connected" : "Backend offline"}
+              </Badge>
+            </div>
+            {timeSummary ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>Server ({timeSummary.serverZone})</span>
+                <span className="font-medium text-foreground">{timeSummary.serverLocal}</span>
+                <span>UTC {timeSummary.serverUtc}</span>
+                <span>Client ({timeSummary.clientZone})</span>
+              </div>
             ) : null}
-            Retry
-          </Button>
+          </div>
+          <OmniBox
+            ref={omniboxRef}
+            value={omniboxValue}
+            onChange={setOmniboxValue}
+            onSubmit={handleOmniSubmit}
+            onOpenCommand={() => setCommandOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+          {!backendHealthy && backendOfflineMessage ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <span>{backendOfflineMessage}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void backendHealth.refresh();
+                }}
+                disabled={backendHealth.loading}
+              >
+                {backendHealth.loading ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
+                ) : null}
+                Retry
+              </Button>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-muted/30 px-4 py-3 text-xs">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="font-semibold uppercase tracking-wide text-muted-foreground">Shadow mode</span>
+              <Badge variant={shadowModeEnabled ? "default" : "outline"}>
+                {shadowModeEnabled ? "Enabled" : "Disabled"}
+              </Badge>
+              {shadowConfigLoading || shadowConfigSaving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
+              ) : null}
+              {shadowStatusText ? (
+                <span
+                  className={`max-w-[18rem] truncate ${
+                    shadowConfigError ? "text-destructive" : "text-muted-foreground"
+                  }`}
+                  title={shadowStatusText}
+                >
+                  {shadowStatusText}
+                </span>
+              ) : null}
+              <Badge variant="outline">Pending {pendingDocs.length}</Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!shadowModeEnabled ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleManualShadowCrawl}
+                  disabled={shadowConfigLoading || shadowConfigSaving}
+                >
+                  Crawl this page
+                </Button>
+              ) : null}
+              <ShadowToggle
+                enabled={shadowModeEnabled}
+                onToggle={handleShadowToggle}
+                disabled={
+                  shadowConfigLoading ||
+                  shadowConfigSaving ||
+                  backendHealth.loading ||
+                  !backendHealthy
+                }
+                loading={shadowConfigSaving}
+                error={
+                  backendHealthy
+                    ? shadowConfigError
+                    : backendOfflineMessage ?? "Backend offline (5050)"
+                }
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm">
+                    Help
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      systemCheck.setOpen(true);
+                      void systemCheck.rerun();
+                    }}
+                  >
+                    Run System Check…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      void systemCheck.downloadReport();
+                    }}
+                  >
+                    Download last report
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      void systemCheck.openReport();
+                    }}
+                  >
+                    Open last report
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </div>
+      </header>
+      <NavProgressHud />
+      {shadowJobSummary ? (
+        <div className="mx-auto w-full max-w-[1600px] px-4">
+          <ShadowProgress job={shadowJobSummary} />
         </div>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2 text-xs">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="font-semibold text-foreground">Shadow mode</span>
-          <Badge variant={shadowModeEnabled ? "default" : "outline"}>
-            {shadowModeEnabled ? "Enabled" : "Disabled"}
-          </Badge>
-          {shadowConfigLoading || shadowConfigSaving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
-          ) : null}
-          {shadowStatusText ? (
-            <span
-              className={`max-w-[16rem] truncate ${
-                shadowConfigError ? "text-destructive" : "text-muted-foreground"
-              }`}
-              title={shadowStatusText}
-            >
-              {shadowStatusText}
-            </span>
-          ) : null}
-          <Badge variant="outline">Pending {pendingDocs.length}</Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          {!shadowModeEnabled ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleManualShadowCrawl}
-              disabled={shadowConfigLoading || shadowConfigSaving}
-            >
-              Crawl this page
-            </Button>
-          ) : null}
-          <ShadowToggle
-            enabled={shadowModeEnabled}
-            onToggle={handleShadowToggle}
-            disabled={
-              shadowConfigLoading ||
-              shadowConfigSaving ||
-              backendHealth.loading ||
-              !backendHealthy
-            }
-            loading={shadowConfigSaving}
-            error={
-              backendHealthy
-                ? shadowConfigError
-                : backendOfflineMessage ?? "Backend offline (5050)"
-            }
-          />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm">
-                Help
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  systemCheck.setOpen(true);
-                  void systemCheck.rerun();
-                }}
-              >
-                Run System Check…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  void systemCheck.openReport();
-                }}
-              >
-                Open last report
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-      {shadowJobSummary ? <ShadowProgress job={shadowJobSummary} /> : null}
-      <main className="flex-1 min-h-0">
-        <div className="flex h-full min-h-0 flex-col lg:flex-row">
-          <SearchResultsPanel
-            className="order-1 h-[40vh] flex-1 border-b lg:h-auto lg:max-w-md lg:flex-[1.1] lg:border-r"
-            query={searchState.query}
-            hits={searchState.hits}
-            status={searchState.status}
-            isLoading={searchState.isLoading}
-            error={searchState.error}
-            detail={searchState.detail}
-            onOpenHit={handleNavigate}
-            onAskAgent={agentEnabled ? handleAskAgent : undefined}
-            onRefresh={searchState.query ? refreshSearch : undefined}
-            onQueryChange={handleSearchQueryChange}
-            onSubmitQuery={handleLocalSearchSubmit}
-            inputDisabled={!hasDocuments}
-            currentUrl={currentUrl}
-            confidence={searchState.confidence}
-            llmUsed={searchState.llmUsed}
-            triggerReason={searchState.triggerReason}
-            seedCount={searchState.seedCount}
-            jobId={searchState.jobId}
-            lastFetchedAt={searchState.lastFetchedAt}
-            actionLabel={searchState.action}
-            code={searchState.code}
-            candidates={searchState.candidates}
-          />
-          <section className="order-2 h-[45vh] flex-1 border-b lg:order-2 lg:h-auto lg:flex-[1.4] lg:border-r">
-            {livePreviewEnabled ? (
-              <WebPreview
-                url={currentUrl}
-                history={previewState.history}
-                historyIndex={previewState.index}
-                isLoading={isPreviewLoading}
-                reloadKey={reloadKey}
-                onNavigate={handleNavigate}
-                onHistoryBack={handleBack}
-                onHistoryForward={handleForward}
-                onReload={handleReload}
-                onOpenInNewTab={handleOpenInNewTab}
-                onCrawlDomain={handleCrawlDomain}
-                crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
-                crawlStatus={crawlMonitor}
-                crawlLabel={crawlButtonLabel}
-              />
-            ) : inAppBrowserEnabled && liveFallbackActive ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-                <p className="max-w-md">
-                  Live preview is unavailable for this site due to content security restrictions. Reader
-                  mode has been activated automatically.
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    if (currentUrl) {
-                      void openLiveUrl(currentUrl);
-                    }
-                  }}
-                >
-                  Retry live preview
-                </Button>
-              </div>
-            ) : (
-              <div className="flex h-full items-center justify-center bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-                In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.
-              </div>
-            )}
-          </section>
-          <aside className="order-3 flex flex-1 flex-col lg:order-3 lg:flex-[1.4]">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
-              <TabsList className="grid grid-cols-2 bg-muted/60">
-                <TabsTrigger value="chat">Chat</TabsTrigger>
-                <TabsTrigger value="agent">Agent ops</TabsTrigger>
-              </TabsList>
-              <TabsContent value="chat" className="flex-1 flex flex-col">
-                <div className="flex flex-1 flex-col gap-3 p-3">
-                  <ProgressPanel jobId={searchState.jobId} />
-                  <DocInspector doc={docMetadata} />
-                  <ContextPanel
-                    url={currentUrl}
-                    context={pageContext}
-                    includeContext={includeContext}
-                    onIncludeChange={setIncludeContext}
-                    onExtract={handleExtractContext}
-                    extracting={isExtractingContext}
-                    supportsVision={supportsVision}
-                    onManualSubmit={handleManualContext}
-                    onClear={handleClearContext}
-                    manualOpenTrigger={manualContextTrigger}
-                  />
-                  <ChatPanel
-                    header={
-                      <CopilotHeader
-                        chatModels={chatModelOptions}
-                        selectedModel={chatModel}
-                        onModelChange={handleModelSelect}
-                        installing={isAutopulling}
-                        onInstallModel={handleAutopull}
-                        installMessage={autopullMessage}
-                        reachable={Boolean(ollamaStatus?.running)}
-                        statusLabel={isChatLoading ? "Generating response" : undefined}
-                        timeSummary={timeSummary}
-                        controlsDisabled={modelSelectDisabled}
-                      />
-                    }
-                    messages={chatMessages}
-                    input={chatInput}
-                    onInputChange={setChatInput}
-                    onSend={handleSendChat}
-                    isBusy={isChatLoading}
-                    onCancel={isChatLoading ? handleCancelChat : undefined}
-                    onApproveAction={handleApproveAction}
-                    onEditAction={handleEditAction}
-                    onDismissAction={handleDismissAction}
-                    disableInput={chatModels.length === 0 || isAutopulling}
-                    onLinkClick={handleChatLink}
-                  />
+      <main className="flex-1 overflow-hidden">
+        <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col overflow-hidden px-4 py-6">
+          <div className="grid h-full min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1.2fr)_minmax(20rem,26rem)]">
+            <ScrollArea className="h-full rounded-2xl border border-border/60 bg-card/80 shadow-inner">
+              <div className="flex flex-col gap-4 p-4">
+                <SearchResultsPanel
+                  className="overflow-hidden rounded-xl border border-border/60 bg-background/90 shadow-sm"
+                  query={searchState.query}
+                  hits={searchState.hits}
+                  status={searchState.status}
+                  isLoading={searchState.isLoading}
+                  error={searchState.error}
+                  detail={searchState.detail}
+                  onOpenHit={handleNavigate}
+                  onAskAgent={agentEnabled ? handleAskAgent : undefined}
+                  onRefresh={searchState.query ? refreshSearch : undefined}
+                  onQueryChange={handleSearchQueryChange}
+                  onSubmitQuery={handleLocalSearchSubmit}
+                  inputDisabled={!hasDocuments}
+                  currentUrl={currentUrl}
+                  confidence={searchState.confidence}
+                  llmUsed={searchState.llmUsed}
+                  triggerReason={searchState.triggerReason}
+                  seedCount={searchState.seedCount}
+                  jobId={searchState.jobId}
+                  lastFetchedAt={searchState.lastFetchedAt}
+                  actionLabel={searchState.action}
+                  code={searchState.code}
+                  candidates={searchState.candidates}
+                />
+                <div className="rounded-xl border border-dashed border-border/60 bg-background/80 p-4 text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-foreground">Operations snapshot</span>
+                    <Badge variant="outline">Agent</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+                    <div className="rounded-lg border border-border/50 bg-card/80 px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Jobs</p>
+                      <p className="mt-1 text-lg font-semibold text-foreground">{jobSummaries.length}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/50 bg-card/80 px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Queue</p>
+                      <p className="mt-1 text-lg font-semibold text-foreground">{crawlQueue.length}</p>
+                    </div>
+                    <div className="rounded-lg border border-border/50 bg-card/80 px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Pending</p>
+                      <p className="mt-1 text-lg font-semibold text-foreground">{pendingDocs.length}</p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-4 w-full"
+                    onClick={() => setActiveTab("agent")}
+                  >
+                    Open agent operations
+                  </Button>
                 </div>
-              </TabsContent>
-              <TabsContent value="agent" className="flex-1">
-                <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-2">
-                  <AgentLog entries={agentLog} isStreaming={isChatLoading} />
-                  <div className="flex flex-col gap-3">
+              </div>
+            </ScrollArea>
+            <div className="flex h-full min-h-0 flex-col gap-4">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-lg">
+                {livePreviewEnabled ? (
+                  <WebPreview
+                    url={currentUrl}
+                    history={previewState.history}
+                    historyIndex={previewState.index}
+                    isLoading={isPreviewLoading}
+                    reloadKey={reloadKey}
+                    onNavigate={handleNavigate}
+                    onHistoryBack={handleBack}
+                    onHistoryForward={handleForward}
+                    onReload={handleReload}
+                    onOpenInNewTab={handleOpenInNewTab}
+                    onCrawlDomain={handleCrawlDomain}
+                    crawlDisabled={!currentUrlIsHttp || crawlMonitor.running}
+                    crawlStatus={crawlMonitor}
+                    crawlLabel={crawlButtonLabel}
+                  />
+                ) : inAppBrowserEnabled && liveFallbackActive ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/40 p-6 text-center text-sm text-muted-foreground">
+                    <p className="max-w-md">
+                      Live preview is unavailable for this site due to content security restrictions. Reader mode has been activated automatically.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        if (currentUrl) {
+                          void openLiveUrl(currentUrl);
+                        }
+                      }}
+                    >
+                      Retry live preview
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center bg-muted/40 p-6 text-center text-sm text-muted-foreground">
+                    In-app preview disabled. Set `NEXT_PUBLIC_IN_APP_BROWSER=true` to browse pages inside the workspace.
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-lg">
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col overflow-hidden">
+                <TabsList className="grid grid-cols-2 rounded-none border-b bg-background/70 p-1">
+                  <TabsTrigger value="chat">Conversation</TabsTrigger>
+                  <TabsTrigger value="agent">Agent ops</TabsTrigger>
+                </TabsList>
+                <TabsContent value="chat" className="flex-1 overflow-hidden p-0">
+                  <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4">
+                    <ProgressPanel jobId={searchState.jobId} />
+                    {docMetadata ? (
+                      <DocInspector doc={docMetadata} />
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-border/60 bg-muted/30 p-4 text-xs text-muted-foreground">
+                        Load a page to inspect document metadata.
+                      </div>
+                    )}
+                    <ContextPanel
+                      url={currentUrl}
+                      context={pageContext}
+                      includeContext={includeContext}
+                      onIncludeChange={setIncludeContext}
+                      onExtract={handleExtractContext}
+                      extracting={isExtractingContext}
+                      supportsVision={supportsVision}
+                      onManualSubmit={handleManualContext}
+                      onClear={handleClearContext}
+                      manualOpenTrigger={manualContextTrigger}
+                    />
+                    <div className="flex min-h-0 flex-1">
+                      <ChatPanel
+                        header={
+                          <CopilotHeader
+                            chatModels={chatModelOptions}
+                            selectedModel={chatModel}
+                            onModelChange={handleModelSelect}
+                            installing={isAutopulling}
+                            onInstallModel={handleAutopull}
+                            installMessage={autopullMessage}
+                            reachable={Boolean(ollamaStatus?.running)}
+                            statusLabel={isChatLoading ? "Generating response" : undefined}
+                            timeSummary={timeSummary}
+                            controlsDisabled={modelSelectDisabled}
+                          />
+                        }
+                        messages={chatMessages}
+                        input={chatInput}
+                        onInputChange={setChatInput}
+                        onSend={handleSendChat}
+                        isBusy={isChatLoading}
+                        onCancel={isChatLoading ? handleCancelChat : undefined}
+                        onApproveAction={handleApproveAction}
+                        onEditAction={handleEditAction}
+                        onDismissAction={handleDismissAction}
+                        disableInput={chatModels.length === 0 || isAutopulling}
+                        onLinkClick={handleChatLink}
+                      />
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value="agent" className="flex-1 overflow-hidden p-0">
+                  <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 pb-6">
+                    <AgentLog entries={agentLog} isStreaming={isChatLoading} />
                     <JobStatus jobs={jobSummaries} />
                     <PendingEmbedsCard docs={pendingDocs} />
                     <CrawlManager
@@ -3149,10 +3224,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                       currentUrl={currentUrl}
                     />
                   </div>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </aside>
+                </TabsContent>
+              </Tabs>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -3283,9 +3358,9 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                             {model.isPrimary ? " · primary" : ""}
                           </p>
                         </div>
-                      <Badge variant={model.available !== false ? "default" : "destructive"}>
-                        {model.available !== false ? "Available" : "Unavailable"}
-                      </Badge>
+                        <Badge variant={model.available !== false ? "default" : "destructive"}>
+                          {model.available !== false ? "Available" : "Unavailable"}
+                        </Badge>
                       </div>
                     ))}
                   </div>
@@ -3303,8 +3378,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
             </TabsContent>
             <TabsContent value="safety" className="space-y-3 py-3 text-sm text-muted-foreground">
               <p>
-                Crawls require explicit approval. Large crawls prompt for scope confirmation and
-                page budgets before running.
+                Crawls require explicit approval. Large crawls prompt for scope confirmation and page budgets before running.
               </p>
             </TabsContent>
             <TabsContent value="about" className="space-y-3 py-3 text-sm text-muted-foreground">
