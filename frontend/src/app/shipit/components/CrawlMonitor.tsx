@@ -1,35 +1,127 @@
 "use client";
 
-import useSWR from "swr";
+import { useEffect, useState } from "react";
 
-import { api } from "@/app/shipit/lib/api";
+import { api, openProgressStream } from "@/app/shipit/lib/api";
 
-type CrawlStatusResponse = {
-  ok: boolean;
-  data?: {
-    phase: string;
-    pct: number;
-    urls_processed?: number;
-    last_url?: string | null;
-  };
-};
+interface CrawlStatusState {
+  phase: string;
+  pct: number;
+  urlsProcessed: number;
+  lastUrl: string | null;
+}
 
 interface CrawlMonitorProps {
   jobId: string;
 }
 
 export default function CrawlMonitor({ jobId }: CrawlMonitorProps): JSX.Element {
-  const { data } = useSWR<CrawlStatusResponse>(
-    `/api/crawl/status?job_id=${encodeURIComponent(jobId)}`,
-    api,
-    { refreshInterval: 1_000 }
-  );
-  const status = data?.data;
-  const pct = Math.round(status?.pct ?? 0);
+  const [status, setStatus] = useState<CrawlStatusState>({
+    phase: "queued",
+    pct: 0,
+    urlsProcessed: 0,
+    lastUrl: null,
+  });
+
+  useEffect(() => {
+    if (!jobId) {
+      return;
+    }
+    let active = true;
+    let source: EventSource | null = null;
+
+    const updateState = (payload: Record<string, unknown>) => {
+      setStatus((prev) => {
+        const phase = typeof payload.phase === "string" ? payload.phase : prev.phase;
+        const pctValue =
+          typeof payload.pct === "number"
+            ? payload.pct
+            : typeof payload.progress === "number"
+            ? payload.progress * 100
+            : undefined;
+        const pct = pctValue !== undefined ? Math.max(0, Math.min(100, Math.round(pctValue))) : prev.pct;
+        const urlsProcessed =
+          typeof payload.urls_processed === "number"
+            ? payload.urls_processed
+            : typeof payload.urlsProcessed === "number"
+            ? payload.urlsProcessed
+            : prev.urlsProcessed;
+        const lastUrl =
+          typeof payload.last_url === "string"
+            ? payload.last_url
+            : typeof payload.lastUrl === "string"
+            ? payload.lastUrl
+            : prev.lastUrl;
+        return { phase, pct, urlsProcessed, lastUrl: lastUrl ?? null };
+      });
+    };
+
+    const handleEvent = (eventData: unknown) => {
+      if (!eventData || typeof eventData !== "object") {
+        return;
+      }
+      const record = eventData as Record<string, unknown>;
+      if (record.status && typeof record.status === "object") {
+        updateState(record.status as Record<string, unknown>);
+        return;
+      }
+      updateState(record);
+    };
+
+    const startPolling = async () => {
+      while (active) {
+        try {
+          const response = await api<{ ok: boolean; data?: Record<string, unknown> }>(
+            `/api/crawl/status?job_id=${encodeURIComponent(jobId)}`,
+          );
+          if (response.data) {
+            updateState(response.data);
+          }
+          const done = response.data?.phase === "completed" || response.data?.phase === "finished";
+          if (done) {
+            break;
+          }
+        } catch {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
+    };
+
+    try {
+      source = openProgressStream(jobId);
+      source.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+          const parsed = JSON.parse(event.data) as unknown;
+          handleEvent(parsed);
+        } catch {
+          // ignore malformed chunk
+        }
+      };
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (active) {
+          void startPolling();
+        }
+      };
+    } catch {
+      void startPolling();
+    }
+
+    return () => {
+      active = false;
+      source?.close();
+    };
+  }, [jobId]);
+
+  const pct = Math.round(status.pct);
+
   return (
     <div className="p-3 rounded-2xl border space-y-2">
       <div className="flex justify-between text-sm">
-        <span>Phase: {status?.phase ?? "queued"}</span>
+        <span>Phase: {status.phase}</span>
         <span>{pct}%</span>
       </div>
       <div className="w-full h-2 bg-gray-100 rounded">
@@ -40,11 +132,9 @@ export default function CrawlMonitor({ jobId }: CrawlMonitorProps): JSX.Element 
         />
       </div>
       <div className="text-xs mt-1 truncate">
-        Last URL: {status?.last_url ?? "n/a"}
+        Last URL: {status.lastUrl ?? "n/a"}
       </div>
-      <div className="text-xs text-gray-500">
-        Processed: {status?.urls_processed ?? 0}
-      </div>
+      <div className="text-xs text-gray-500">Processed: {status.urlsProcessed}</div>
     </div>
   );
 }

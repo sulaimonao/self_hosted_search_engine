@@ -5,42 +5,23 @@ import { parseEvent } from "@/lib/events";
 
 type Closeable = { close: () => void };
 
-const EVENT_ENDPOINT = process.env.NEXT_PUBLIC_EVENTS_URL ?? "ws://127.0.0.1:5050/api/events";
-const SSE_ENDPOINT = process.env.NEXT_PUBLIC_EVENTS_SSE_URL ?? "http://127.0.0.1:5050/api/events/sse";
-
-function isWebSocketSupported() {
-  return typeof window !== "undefined" && "WebSocket" in window;
-}
+const DISCOVERY_STREAM_ENDPOINT =
+  process.env.NEXT_PUBLIC_DISCOVERY_STREAM_URL ?? "http://127.0.0.1:5050/api/discovery/stream_events";
+const LEGACY_EVENTS_ENDPOINT =
+  process.env.NEXT_PUBLIC_EVENTS_SSE_URL ?? "http://127.0.0.1:5050/api/events/sse";
 
 export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable | undefined {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || typeof EventSource === "undefined") {
     return undefined;
   }
 
-  if (isWebSocketSupported()) {
-    const socket = new WebSocket(EVENT_ENDPOINT);
-    socket.onmessage = (message) => {
-      try {
-        const parsed = parseEvent(JSON.parse(message.data));
-        if (parsed) {
-          onEvent(parsed);
-        }
-      } catch {
-        // ignore malformed payloads
-      }
-    };
-    socket.onclose = () => {
-      setTimeout(() => connectEvents(onEvent), 1000);
-    };
-    socket.onerror = () => {
-      socket.close();
-    };
-    return socket;
-  }
+  const endpoints = [DISCOVERY_STREAM_ENDPOINT, LEGACY_EVENTS_ENDPOINT];
+  let source: EventSource | null = null;
+  let attempt = 0;
+  let closed = false;
 
-  if (typeof EventSource !== "undefined") {
-    const source = new EventSource(SSE_ENDPOINT);
-    source.onmessage = (event) => {
+  const attach = (stream: EventSource) => {
+    stream.onmessage = (event) => {
       try {
         const payload = event.data ? JSON.parse(event.data) : null;
         const parsed = parseEvent(payload);
@@ -51,12 +32,57 @@ export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable
         // swallow malformed data
       }
     };
-    source.onerror = () => {
-      source.close();
-      setTimeout(() => connectEvents(onEvent), 1000);
+    stream.onerror = () => {
+      stream.close();
+      if (closed) {
+        return;
+      }
+      if (attempt < endpoints.length) {
+        connectNext();
+      } else {
+        attempt = 0;
+        setTimeout(() => {
+          if (!closed) {
+            connectNext();
+          }
+        }, 1000);
+      }
     };
-    return { close: () => source.close() };
-  }
+  };
 
-  return undefined;
+  const connectNext = () => {
+    if (closed) {
+      return;
+    }
+    if (attempt >= endpoints.length) {
+      attempt = endpoints.length;
+      return;
+    }
+    const url = endpoints[attempt++];
+    try {
+      const stream = new EventSource(url);
+      source = stream;
+      attach(stream);
+    } catch {
+      if (attempt < endpoints.length) {
+        connectNext();
+      } else {
+        attempt = 0;
+        setTimeout(() => {
+          if (!closed) {
+            connectNext();
+          }
+        }, 1000);
+      }
+    }
+  };
+
+  connectNext();
+
+  return {
+    close: () => {
+      closed = true;
+      source?.close();
+    },
+  };
 }

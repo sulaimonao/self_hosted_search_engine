@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import ModelPicker from "./ModelPicker";
@@ -9,7 +10,7 @@ import { fetchShadowGlobalPolicy, updateShadowGlobalPolicy } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 
 export default function HeaderBar(): JSX.Element {
-  const { mode, shadow, setMode, setShadow } = useApp();
+  const { mode, shadow, setMode, setShadow, autopilot, setAutopilot, features } = useApp();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -30,6 +31,8 @@ export default function HeaderBar(): JSX.Element {
       setBusy(false);
     }
   };
+
+  const autopilotDisabled = features.llm === "unavailable";
 
   return (
     <div className="w-full flex items-center justify-between p-4 border-b">
@@ -56,8 +59,15 @@ export default function HeaderBar(): JSX.Element {
         )}
       </div>
       <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <Switch checked={autopilot} onCheckedChange={setAutopilot} disabled={autopilotDisabled} />
+          <span>Autopilot</span>
+        </label>
         <ModelPicker />
         <SystemStatusButton />
+        <Link href="/shipit/diagnostics" className="px-3 py-1 rounded-2xl border text-sm">
+          Diagnostics
+        </Link>
       </div>
     </div>
   );

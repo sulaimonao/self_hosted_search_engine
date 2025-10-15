@@ -1,15 +1,12 @@
+const DEFAULT_API_BASE_URL = "http://127.0.0.1:5050";
+
 const API_BASE_URL = (() => {
   const explicit = process.env.NEXT_PUBLIC_API_BASE_URL;
   if (explicit && explicit.trim().length > 0) {
     return explicit;
   }
 
-  const backendPort = process.env.BACKEND_PORT;
-  if (backendPort && backendPort.trim().length > 0) {
-    return `http://127.0.0.1:${backendPort}`;
-  }
-
-  return "http://127.0.0.1:5050";
+  return DEFAULT_API_BASE_URL;
 })();
 
 const normalizedApiBaseUrl = API_BASE_URL.replace(/\/$/, "");

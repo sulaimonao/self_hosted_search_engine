@@ -1,30 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 
-import { api } from "@/app/shipit/lib/api";
+import type { HybridSearchResult } from "@/app/shipit/lib/api";
+import { runHybridSearch } from "@/app/shipit/lib/api";
+import { useApp } from "@/app/shipit/store/useApp";
 
-import FacetRail, { FacetRecord } from "./FacetRail";
-
-type HybridSearchHit = {
-  url: string;
-  title: string;
-  snippet?: string;
-  score?: number;
-  source: "vector" | "keyword";
-};
-
-type HybridSearchResponse = {
-  query: string;
-  combined: HybridSearchHit[];
-  vector_top_score: number;
-  keyword_fallback: boolean;
-  facets?: FacetRecord;
-  data?: {
-    facets?: FacetRecord;
-  };
-};
+import FacetRail from "./FacetRail";
 
 function formatHostname(url: string): string {
   try {
@@ -36,13 +19,31 @@ function formatHostname(url: string): string {
 
 export default function SearchPanel(): JSX.Element {
   const [query, setQuery] = useState<string>("");
-  const searchPath: string | null = query
-    ? `/api/index/search?q=${encodeURIComponent(query)}&k=12`
-    : null;
-  const { data, isLoading } = useSWR<HybridSearchResponse>(searchPath, api);
+  const { features } = useApp();
+  const backendAvailable = features.serverTime !== "unavailable";
+  const trimmedQuery = query.trim();
+  const searchKey = backendAvailable && trimmedQuery.length > 0 ? ["hybrid-search", trimmedQuery] : null;
+  const { data, isValidating, error } = useSWR<HybridSearchResult>(
+    searchKey,
+    ([, value]) => runHybridSearch(value, { limit: 12 }),
+    { keepPreviousData: true },
+  );
 
-  const hits = data?.combined ?? [];
-  const facets = data?.facets ?? data?.data?.facets;
+  const hits = data?.hits ?? [];
+  const facets = data?.facets;
+  const keywordFallback = data?.keywordFallback ?? false;
+  const disabled = !backendAvailable;
+  const statusMessage = useMemo(() => {
+    if (!backendAvailable) {
+      return "Backend offline";
+    }
+    if (error) {
+      return error instanceof Error ? error.message : "Search failed";
+    }
+    return null;
+  }, [backendAvailable, error]);
+
+  const isLoading = Boolean(searchKey && !data && !error) || isValidating;
 
   return (
     <div className="grid grid-cols-[16rem_1fr] gap-4">
@@ -54,10 +55,12 @@ export default function SearchPanel(): JSX.Element {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search…"
+            disabled={disabled}
           />
         </div>
+        {statusMessage ? <div className="text-sm text-muted-foreground mb-2">{statusMessage}</div> : null}
         {isLoading && <div>Loading…</div>}
-        {data?.keyword_fallback ? (
+        {keywordFallback ? (
           <div className="mb-2 text-xs text-muted-foreground">
             Vector results were sparse; showing keyword matches.
           </div>

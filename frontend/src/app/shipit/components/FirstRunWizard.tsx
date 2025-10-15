@@ -1,18 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
 
 import { api } from "@/app/shipit/lib/api";
+import { useApp } from "@/app/shipit/store/useApp";
 
 import CrawlMonitor from "./CrawlMonitor";
-
-type HealthResponse = {
-  ok: boolean;
-  data?: {
-    reachable: boolean;
-  };
-};
 
 type CrawlResponse = {
   ok: boolean;
@@ -22,7 +15,7 @@ type CrawlResponse = {
 };
 
 export default function FirstRunWizard(): JSX.Element {
-  const { data } = useSWR<HealthResponse>("/api/llm/health", api);
+  const { features } = useApp();
   const [seeds, setSeeds] = useState<string>("https://example.com");
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +46,8 @@ export default function FirstRunWizard(): JSX.Element {
     }
   }
 
-  const reachable = data?.data?.reachable ?? false;
+  const reachable = features.llm !== "unavailable";
+  const startDisabled = !reachable;
 
   return (
     <div className="p-4 border rounded-2xl space-y-3">
@@ -64,7 +58,12 @@ export default function FirstRunWizard(): JSX.Element {
         value={seeds}
         onChange={(event) => setSeeds(event.target.value)}
       />
-      <button className="px-3 py-2 rounded-2xl border" type="button" onClick={start}>
+      <button
+        className="px-3 py-2 rounded-2xl border disabled:opacity-50"
+        type="button"
+        onClick={start}
+        disabled={startDisabled}
+      >
         Start crawl
       </button>
       {error && <div className="text-sm text-red-600">{error}</div>}
