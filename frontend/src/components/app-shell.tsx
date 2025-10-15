@@ -70,6 +70,7 @@ import {
   createDomainSeed,
   triggerRefresh,
   fetchPendingDocuments,
+  runAgentTurn,
 } from "@/lib/api";
 import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
@@ -93,6 +94,7 @@ import type {
   ShadowConfig,
   ShadowStatus,
   PendingDocument,
+  AutopilotDirective,
 } from "@/lib/types";
 import { PendingEmbedsCard } from "@/components/pending-embeds-card";
 import { ShadowProgress } from "@/components/shadow-progress";
@@ -497,6 +499,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
+  const autopilotInFlightRef = useRef<Set<string>>(new Set());
   const jobSubscriptions = useRef(new Map<string, () => void>());
   const chatHistoryRef = useRef<ChatMessage[]>(chatMessages);
   const crawlQueueRef = useRef<CrawlQueueItem[]>(crawlQueue);
@@ -1659,6 +1662,127 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     }
   }, [handleSearch, searchState.query]);
 
+  const handleAutopilotDirective = useCallback(
+    async (directive: AutopilotDirective, messageId: string) => {
+      const trimmedQuery = directive.query.trim();
+      if (!trimmedQuery) {
+        return;
+      }
+      if (autopilotInFlightRef.current.has(messageId)) {
+        return;
+      }
+      autopilotInFlightRef.current.add(messageId);
+      const startTimestamp = new Date().toISOString();
+      setChatMessages((messages) =>
+        messages.map((message) =>
+          message.id === messageId
+            ? { ...message, autopilot: directive, streaming: true }
+            : message,
+        ),
+      );
+      appendLog({
+        id: uid(),
+        label: "Autopilot engaged",
+        detail: directive.reason ? `${directive.reason} (${directive.query})` : directive.query,
+        status: "info",
+        timestamp: startTimestamp,
+      });
+      devlog({ evt: "ui.autopilot.start", query: directive.query });
+      try {
+        const result = await runAgentTurn(trimmedQuery);
+        const autopilotAnswer = (result.answer ?? "").trim();
+        const autopilotCitations = collectUniqueHttpCitations(result.citations);
+        setChatMessages((messages) =>
+          messages.map((message) => {
+            if (message.id !== messageId) {
+              return message;
+            }
+            const existingAnswer = (message.answer ?? message.content ?? "").trim();
+            const nextAnswer = autopilotAnswer || existingAnswer;
+            const nextCitations = autopilotCitations.length > 0 ? autopilotCitations : message.citations ?? [];
+            return {
+              ...message,
+              autopilot: directive,
+              streaming: false,
+              answer: nextAnswer,
+              content: nextAnswer,
+              citations: nextCitations,
+            };
+          }),
+        );
+        if (autopilotCitations.length > 0) {
+          void indexCitationUrls(autopilotCitations, {
+            shadowModeEnabled,
+            queueShadowIndex,
+            handleQueueAdd,
+            setStatus: setCitationIndexStatus,
+            appendLog,
+            pushToast,
+          });
+        }
+        const coverageValue = Number.isFinite(result.coverage) ? Number(result.coverage) : 0;
+        const boundedCoverage = Math.max(0, Math.min(1, coverageValue));
+        const coverageLabel = `${Math.round(boundedCoverage * 100)}%`;
+        const primaryHit = result.results.find(
+          (item) => item?.url && typeof item.url === "string" && item.url.trim().length > 0,
+        );
+        let openedHost: string | null = null;
+        if (primaryHit?.url) {
+          const targetUrl = primaryHit.url.trim();
+          try {
+            openedHost = new URL(targetUrl).host;
+          } catch {
+            openedHost = null;
+          }
+          handleNavigate(targetUrl);
+        }
+        appendLog({
+          id: uid(),
+          label: "Autopilot complete",
+          detail: openedHost ? `Coverage ${coverageLabel} · opened ${openedHost}` : `Coverage ${coverageLabel}`,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        });
+        devlog({
+          evt: "ui.autopilot.done",
+          query: directive.query,
+          coverage: boundedCoverage,
+          opened: primaryHit?.url ?? null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Autopilot failed");
+        appendLog({
+          id: uid(),
+          label: "Autopilot failed",
+          detail: message,
+          status: "error",
+          timestamp: new Date().toISOString(),
+        });
+        setChatMessages((messages) =>
+          messages.map((entry) =>
+            entry.id === messageId
+              ? { ...entry, autopilot: directive, streaming: false }
+              : entry,
+          ),
+        );
+        pushToast(message, { variant: "destructive" });
+        devlog({ evt: "ui.autopilot.fail", query: directive.query, message });
+      } finally {
+        autopilotInFlightRef.current.delete(messageId);
+      }
+    },
+    [
+      appendLog,
+      handleNavigate,
+      pushToast,
+      shadowModeEnabled,
+      queueShadowIndex,
+      handleQueueAdd,
+      setCitationIndexStatus,
+      setChatMessages,
+    ],
+  );
+
   const handleSendChat = useCallback(
     async (content: string) => {
       const trimmed = content.trim();
@@ -1780,6 +1904,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           });
         }
 
+        if (result.payload.autopilot) {
+          void handleAutopilotDirective(result.payload.autopilot, assistantId);
+        }
+
         devlog({
           evt: "ui.chat.ok",
           trace: streamedTrace ?? result.traceId,
@@ -1868,6 +1996,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       handleQueueAdd,
       setCitationIndexStatus,
       shadowModeEnabled,
+      handleAutopilotDirective,
     ]
   );
 

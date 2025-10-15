@@ -91,6 +91,24 @@ class ChatRequest(BaseModel):
         return self
 
 
+class AutopilotDirective(BaseModel):
+    """Directive requesting the UI to run follow-up autonomous actions."""
+
+    mode: Literal["browser"]
+    query: str
+    reason: str | None = None
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("query")
+    @classmethod
+    def _normalize_query(cls, value: Any) -> str:
+        trimmed = str(value or "").strip()
+        if not trimmed:
+            raise ValueError("query must be provided")
+        return trimmed
+
+
 class ChatResponsePayload(BaseModel):
     """Canonical chat response returned to the frontend."""
 
@@ -99,6 +117,7 @@ class ChatResponsePayload(BaseModel):
     citations: list[str] = Field(default_factory=list)
     model: str | None = None
     trace_id: str | None = None
+    autopilot: AutopilotDirective | None = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -310,6 +329,7 @@ class SearchQueryParams(BaseModel):
 
 
 __all__ = [
+    "AutopilotDirective",
     "ChatMessage",
     "ChatRequest",
     "ChatResponsePayload",
