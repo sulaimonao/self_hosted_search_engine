@@ -87,6 +87,26 @@ def _migration_already_applied(
             return _column_exists(connection, "pending_documents", "last_error") and _column_exists(
                 connection, "pending_documents", "retry_count"
             )
+        if name == "005_browser_features.sql":
+            crawl_job_columns_ok = all(
+                _column_exists(connection, "crawl_jobs", column)
+                for column in ("priority", "reason", "enqueued_at", "finished_at")
+            )
+            browser_tables_ok = all(
+                _table_exists(connection, table)
+                for table in (
+                    "tabs",
+                    "history",
+                    "bookmark_folders",
+                    "bookmarks",
+                    "source_categories",
+                    "seed_sources",
+                    "shadow_settings",
+                    "pages",
+                    "link_edges",
+                )
+            )
+            return crawl_job_columns_ok and browser_tables_ok
         if name == "006_sources.sql":
             return _column_exists(connection, "crawl_jobs", "parent_url") and _column_exists(
                 connection, "crawl_jobs", "is_source"
