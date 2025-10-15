@@ -12,6 +12,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 
 from .. import EMBEDDING_MODEL_PATTERNS
 from ..services import ollama_client
+from ..metrics import metrics
 from server.json_logger import log_event
 
 if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
@@ -301,6 +302,22 @@ def llm_status() -> Any:
         models=len(available),
     )
     return jsonify(payload)
+
+
+@bp.post("/guess-seeds")
+def llm_guess() -> Any:
+    from llm.seed_guesser import guess_urls as llm_guess_urls
+
+    payload = request.get_json(silent=True) or {}
+    query = (payload.get("q") or "").strip()
+    model = (payload.get("model") or "").strip() or None
+    if not query:
+        return jsonify({"error": "Missing 'q' parameter"}), 400
+
+    start = time.perf_counter()
+    urls = llm_guess_urls(query, model=model)
+    metrics.record_llm_seed_time((time.perf_counter() - start) * 1000)
+    return jsonify({"urls": urls})
 
 
 __all__ = ["bp"]
