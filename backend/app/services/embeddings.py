@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
+from array import array
 from collections.abc import Sequence
 
-import numpy as np
 import requests
 
 
@@ -23,13 +24,16 @@ def _hash_key(text: str) -> str:
 def to_blob(vec: Sequence[float]) -> bytes:
     """Serialize a vector into a ``BLOB`` suitable for SQLite storage."""
 
-    return np.asarray(tuple(vec), dtype=np.float32).tobytes()
+    buffer = array("f", (float(value) for value in vec))
+    return buffer.tobytes()
 
 
-def from_blob(blob: bytes) -> np.ndarray:
+def from_blob(blob: bytes) -> list[float]:
     """Deserialize a ``BLOB`` created via :func:`to_blob`."""
 
-    return np.frombuffer(blob, dtype=np.float32)
+    buffer = array("f")
+    buffer.frombytes(blob)
+    return list(buffer)
 
 
 def embed_texts(texts: Sequence[str]) -> list[list[float]]:
@@ -73,7 +77,7 @@ def _extract_blob(row: sqlite3.Row | tuple[bytes] | tuple[bytes, ...]) -> bytes:
     return row[0]
 
 
-def get_or_embed(conn: sqlite3.Connection, key: str, text: str) -> np.ndarray:
+def get_or_embed(conn: sqlite3.Connection, key: str, text: str) -> list[float]:
     """Return an embedding for ``text`` using ``key`` as the cache identifier."""
 
     row = conn.execute("SELECT vec FROM embedding_cache WHERE key=?", (key,)).fetchone()
@@ -86,15 +90,16 @@ def get_or_embed(conn: sqlite3.Connection, key: str, text: str) -> np.ndarray:
         (key, len(vec), to_blob(vec)),
     )
     conn.commit()
-    return np.asarray(vec, dtype=np.float32)
+    return [float(value) for value in vec]
 
 
-def cosine(a: np.ndarray, b: np.ndarray) -> float:
+def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     """Compute cosine similarity with defensive normalisation."""
 
-    aa = float(np.linalg.norm(a) + 1e-8)
-    bb = float(np.linalg.norm(b) + 1e-8)
-    return float(np.dot(a, b) / (aa * bb))
+    aa = math.sqrt(sum(float(x) * float(x) for x in a)) + 1e-8
+    bb = math.sqrt(sum(float(x) * float(x) for x in b)) + 1e-8
+    numerator = sum(float(x) * float(y) for x, y in zip(a, b))
+    return float(numerator / (aa * bb))
 
 
 def content_fingerprint(text: str) -> str:

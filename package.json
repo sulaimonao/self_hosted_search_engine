@@ -10,7 +10,7 @@
     "dev:desktop": "concurrently -k -n WEB,API,ELECTRON \"npm:dev:web\" \"npm:dev:api\" \"npm:dev:electron\"",
     "desktop": "node scripts/run-desktop.js",
     "build:web": "npm --prefix frontend run build:web && npm --prefix frontend exec next export || npm --prefix frontend run build:web",
-    "build:desktop": "npm run build:web && electron-builder",
+    "build:desktop": "npm run build:web && electron-builder && open \"dist/mac/Personal Search Engine.app\"",
     "diagnose:browser": "electron scripts/diagnoseBrowser.js",
     "diagnose:browser:fast": "DIAG_TIMEOUT=10000 electron scripts/diagnoseBrowser.js"
   },
