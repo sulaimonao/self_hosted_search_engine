@@ -36,6 +36,7 @@ export interface DesktopBridge {
       | "system-check:skipped",
     handler: (payload: unknown) => void,
   ) => (() => void) | void;
+  onShadowToggle?: (handler: () => void) => (() => void) | void;
 }
 
 export const desktop: DesktopBridge | undefined =

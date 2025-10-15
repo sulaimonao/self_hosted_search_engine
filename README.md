@@ -158,6 +158,7 @@ Electron support lets you work in a native window without opening Safari/Chrome.
 
 ```bash
 npm install
+npm run build:web  # build the Next.js app once; required for `npm run desktop`
 npm run desktop
 ```
 
