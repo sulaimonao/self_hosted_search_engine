@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { runSystemCheck } from '@/lib/api';
 import type { BrowserDiagnosticsReport, SystemCheckResponse } from '@/lib/types';
-import { desktop } from '@/lib/desktop';
+import { desktop, type DesktopSystemCheckChannel } from '@/lib/desktop';
 
 interface RunOptions {
   forceBrowser?: boolean;
@@ -142,7 +142,7 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
     }
     const unsubscribes: Array<() => void> = [];
 
-    const add = (channel: string, handler: (payload: unknown) => void) => {
+    const add = (channel: DesktopSystemCheckChannel, handler: (payload: unknown) => void) => {
       const unsubscribe = desktop.onSystemCheckEvent?.(channel, handler);
       if (typeof unsubscribe === 'function') {
         unsubscribes.push(unsubscribe);

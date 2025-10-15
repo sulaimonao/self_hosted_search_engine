@@ -2720,7 +2720,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         try {
           await desktop.shadowCapture({
             url: navEvent.url,
-            tab_id: typeof navEvent.tabId === 'number' ? navEvent.tabId : undefined,
+            tab_id: typeof navEvent.tabId === 'number' ? String(navEvent.tabId) : undefined,
           });
         } catch (error) {
           console.warn('Desktop shadow capture failed', error);
@@ -2867,7 +2867,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           <span>{backendOfflineMessage}</span>
           <Button
             type="button"
-            size="xs"
+            size="sm"
             variant="outline"
             onClick={() => {
               void backendHealth.refresh();

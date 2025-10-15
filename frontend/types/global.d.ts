@@ -22,7 +22,11 @@ declare global {
       runSystemCheck?: (options?: { timeoutMs?: number }) => Promise<unknown>;
       getLastSystemCheck?: () => Promise<unknown>;
       openSystemCheckReport?: () => Promise<unknown>;
+      exportSystemCheckReport?: (options?: { timeoutMs?: number; write?: boolean }) => Promise<unknown>;
+      shadowCapture?: (payload: Record<string, unknown>) => Promise<unknown>;
+      indexSearch?: (query: string) => Promise<unknown>;
       onSystemCheckEvent?: (channel: string, handler: (payload: unknown) => void) => (() => void) | void;
+      onShadowToggle?: (handler: () => void) => (() => void) | void;
     };
   }
 }

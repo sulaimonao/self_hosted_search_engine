@@ -935,6 +935,12 @@ interface ChatStreamConsumeOptions {
   fallbackModel: string | null;
 }
 
+type ChatErrorEvent = Extract<ChatStreamEvent, { type: "error" }>;
+
+function isChatErrorEvent(event: ChatStreamEvent): event is ChatErrorEvent {
+  return event.type === "error";
+}
+
 async function consumeChatStream(
   response: Response,
   options: ChatStreamConsumeOptions,
@@ -942,6 +948,7 @@ async function consumeChatStream(
   const reader = response.body?.getReader();
   if (!reader) {
     throw new ChatRequestError("Streaming response is not supported in this environment", {
+      status: response.status ?? 500,
       traceId: options.fallbackTraceId,
     });
   }
@@ -950,6 +957,19 @@ async function consumeChatStream(
   let buffer = "";
   let metadata: ChatStreamEvent | null = null;
   let finalPayload: ChatResponsePayload | null = null;
+
+  const getMetadataTraceId = (): string | null => {
+    if (!metadata) {
+      return null;
+    }
+    if (metadata.type === "metadata") {
+      return metadata.trace_id ?? null;
+    }
+    if (isChatErrorEvent(metadata)) {
+      return metadata.trace_id ?? null;
+    }
+    return null;
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -973,9 +993,13 @@ async function consumeChatStream(
             // handled by callback
           } else if (event.type === "complete") {
             finalPayload = event.payload;
-          } else if (event.type === "error") {
-            const trace = event.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
-            throw new ChatRequestError(event.error || "chat stream error", { traceId: trace });
+          } else if (isChatErrorEvent(event)) {
+            const errorEvent: ChatErrorEvent = event;
+            const trace = errorEvent.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
+            throw new ChatRequestError(event.error || "chat stream error", {
+              status: response.status ?? 500,
+              traceId: trace,
+            });
           }
         } catch (error) {
           console.warn("Skipping malformed stream chunk", error);
@@ -998,9 +1022,13 @@ async function consumeChatStream(
         metadata = event;
       } else if (event.type === "complete") {
         finalPayload = event.payload;
-      } else if (event.type === "error") {
-        const trace = event.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
-        throw new ChatRequestError(event.error || "chat stream error", { traceId: trace });
+      } else if (isChatErrorEvent(event)) {
+        const errorEvent: ChatErrorEvent = event;
+        const trace = errorEvent.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
+        throw new ChatRequestError(event.error || "chat stream error", {
+          status: response.status ?? 500,
+          traceId: trace,
+        });
       }
     } catch (error) {
       console.warn("Ignoring trailing stream chunk", error);
@@ -1009,14 +1037,17 @@ async function consumeChatStream(
 
   if (!finalPayload) {
     throw new ChatRequestError("Chat stream ended without completion", {
-      traceId: metadata?.trace_id ?? options.fallbackTraceId,
+      status: response.status ?? 500,
+      traceId: getMetadataTraceId() ?? options.fallbackTraceId,
     });
   }
 
+  const metadataModel = metadata && metadata.type === "metadata" ? metadata.model : null;
+
   return {
     payload: finalPayload,
-    traceId: finalPayload.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId,
-    model: finalPayload.model ?? metadata?.model ?? options.fallbackModel,
+    traceId: finalPayload.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId,
+    model: finalPayload.model ?? metadataModel ?? options.fallbackModel,
   };
 }
 
@@ -1199,8 +1230,7 @@ export async function runAgentTurn(query: string): Promise<AgentTurnResponse> {
   const coverage = Number.isFinite(coverageValue) ? coverageValue : 0;
   const actions = Array.isArray(payload.actions) ? payload.actions : [];
   const resultsRaw = Array.isArray(payload.results) ? payload.results : [];
-  const results: AgentTurnResultItem[] = resultsRaw
-    .map((item) => {
+  const mappedResults: Array<AgentTurnResultItem | undefined> = resultsRaw.map((item) => {
       if (typeof item !== "object" || item === null) {
         return undefined;
       }
@@ -1211,8 +1241,9 @@ export async function runAgentTurn(query: string): Promise<AgentTurnResponse> {
         snippet: typeof record.snippet === "string" ? record.snippet : undefined,
         score: typeof record.score === "number" ? record.score : null,
       } satisfies AgentTurnResultItem;
-    })
-    .filter((entry): entry is AgentTurnResultItem => Boolean(entry));
+    });
+
+  const results: AgentTurnResultItem[] = mappedResults.filter(Boolean) as AgentTurnResultItem[];
 
   return { answer, citations, coverage, actions, results };
 }
