@@ -1,10 +1,10 @@
-"""Registry loader that coordinates discovery strategies."""
+"""Registry-backed discovery helpers for cold-start crawling."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List
 from urllib.parse import urlparse
 
 from server.seeds_loader import SeedRegistryEntry, load_seed_registry
@@ -127,7 +127,7 @@ def _collect_candidates(
         return []
 
 
-def gather_from_registry(query: str, max_candidates: int = 10) -> List[RegistryCandidate]:
+def gather_from_registry(query: str, max_candidates: int = 10) -> list[RegistryCandidate]:
     """Run configured registry strategies for ``query`` and dedupe results."""
 
     clean_query = (query or "").strip()
@@ -138,7 +138,7 @@ def gather_from_registry(query: str, max_candidates: int = 10) -> List[RegistryC
     if not entries:
         return []
 
-    deduped: Dict[str, RegistryCandidate] = {}
+    deduped: dict[str, RegistryCandidate] = {}
     for entry in entries:
         raw_candidates = _collect_candidates(entry=entry, query=clean_query, limit=cap)
         if not raw_candidates:
