@@ -19,15 +19,23 @@ def progress_stream(job_id: str) -> Response:
 
     @stream_with_context
     def _generate():
-        yield "retry: 2000\n\n"
-        while True:
-            try:
-                event = q.get(timeout=25)
-            except queue.Empty:
-                yield "event: ping\ndata: {}\n\n"
-                continue
-            payload = json.dumps(event, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
+        try:
+            yield "retry: 2000\n\n"
+            while True:
+                try:
+                    event = q.get(timeout=25)
+                except queue.Empty:
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                if event is None:
+                    break
+                try:
+                    payload = json.dumps(event, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    payload = json.dumps(event, ensure_ascii=False, default=str)
+                yield f"data: {payload}\n\n"
+        finally:
+            bus.unsubscribe(job_id, q)
 
     response = Response(_generate(), mimetype="text/event-stream")
     response.headers["Cache-Control"] = "no-store"

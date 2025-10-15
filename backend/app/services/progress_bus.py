@@ -31,5 +31,20 @@ class ProgressBus:
         with self._lock:
             self._queues.setdefault(job_id, queue.Queue())
 
+    def unsubscribe(
+        self,
+        job_id: str,
+        queue_ref: queue.Queue[dict[str, Any]] | None = None,
+    ) -> None:
+        """Remove the queue for *job_id* when a subscriber disconnects."""
+
+        with self._lock:
+            existing = self._queues.get(job_id)
+            if existing is None:
+                return
+            if queue_ref is not None and existing is not queue_ref:
+                return
+            self._queues.pop(job_id, None)
+
 
 __all__ = ["ProgressBus"]
