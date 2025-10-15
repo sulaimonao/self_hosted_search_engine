@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
+from urllib.parse import urlunparse
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -112,7 +113,27 @@ def trigger_refresh():
     if missing_ids:
         return jsonify({"error": "unknown_seed", "missing": missing_ids}), 400
     manual_seed_urls.extend(resolved_seed_urls)
-    manual_seed_urls = _dedupe_preserve_order([url.strip() for url in manual_seed_urls if isinstance(url, str) and url.strip()])
+    manual_seed_urls = _dedupe_preserve_order(
+        [url.strip() for url in manual_seed_urls if isinstance(url, str) and url.strip()]
+    )
+
+    normalized_seeds: list[str] = []
+    invalid_seeds: list[str] = []
+    for url in manual_seed_urls:
+        try:
+            parsed = seeds_api.parse_http_url(url)
+        except ValueError:
+            invalid_seeds.append(url)
+            continue
+        normalized = urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path or "", "", parsed.query, "")
+        )
+        normalized_seeds.append(normalized)
+
+    if invalid_seeds:
+        return jsonify({"error": "invalid_seed_url", "invalid": invalid_seeds}), 400
+
+    manual_seed_urls = _dedupe_preserve_order(normalized_seeds)
 
     if query_text is None or not query_text.strip():
         if manual_seed_ids:

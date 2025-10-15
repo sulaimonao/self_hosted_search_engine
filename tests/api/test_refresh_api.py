@@ -185,3 +185,72 @@ def test_refresh_deduplicates_active_jobs(monkeypatch: pytest.MonkeyPatch):
         time.sleep(0.05)
     else:
         pytest.fail("refresh job did not complete in time")
+
+
+class _RecordingRefreshWorker:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def enqueue(
+        self,
+        query: str,
+        *,
+        use_llm: bool,
+        model: str | None,
+        budget: int | None,
+        depth: int | None,
+        force: bool,
+        seeds: list[str] | None,
+    ) -> tuple[str, dict[str, object], bool]:
+        self.calls.append(
+            {
+                "query": query,
+                "use_llm": use_llm,
+                "model": model,
+                "budget": budget,
+                "depth": depth,
+                "force": force,
+                "seeds": seeds,
+            }
+        )
+        return "job-1", {"message": "queued"}, True
+
+
+def test_trigger_refresh_rejects_invalid_manual_seed_url() -> None:
+    app = create_app()
+    worker = _RecordingRefreshWorker()
+    app.config["REFRESH_WORKER"] = worker
+
+    client = app.test_client()
+    response = client.post(
+        "/api/refresh",
+        json={"query": "docs", "seeds": ["javascript:alert(1)"]},
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "invalid_seed_url"
+    assert worker.calls == []
+
+
+def test_trigger_refresh_normalizes_manual_seed_urls() -> None:
+    app = create_app()
+    worker = _RecordingRefreshWorker()
+    app.config["REFRESH_WORKER"] = worker
+
+    client = app.test_client()
+    response = client.post(
+        "/api/refresh",
+        json={
+            "query": "docs",
+            "seeds": [
+                "HTTPS://Example.com/path?a=1#section",
+                "https://example.com/path?a=1",
+            ],
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(worker.calls) == 1
+    seeds = worker.calls[0]["seeds"]
+    assert seeds == ["https://Example.com/path?a=1", "https://example.com/path?a=1"]
