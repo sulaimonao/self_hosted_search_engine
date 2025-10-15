@@ -17,7 +17,7 @@ from markupsafe import escape
 from engine.agents.rag import RagAgent
 from engine.agents.rag import RagResult
 from engine.config import EngineConfig
-from engine.data.store import VectorStore
+from engine.data.store import RetrievedChunk, VectorStore
 from engine.indexing.embed import EmbeddingError, OllamaEmbedder
 from engine.indexing.coldstart import ColdStartIndexer
 from engine.llm.ollama_client import OllamaClientError
