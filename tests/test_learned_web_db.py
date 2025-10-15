@@ -100,3 +100,27 @@ def test_similar_discovery_seeds(tmp_path) -> None:
 
     assert "https://packaging.python.org" in seeds
     assert len(seeds) >= 1
+
+
+def test_record_page_preserves_query_params(tmp_path) -> None:
+    db_path = tmp_path / "learned.sqlite3"
+    db = LearnedWebDB(db_path)
+
+    page_id = db.record_page(
+        None,
+        url="https://example.com/docs?lang=en&topic=ai",
+        status=200,
+        title="Docs",
+        fetched_at=100.0,
+    )
+
+    assert page_id is not None
+
+    with sqlite3.connect(db_path) as conn:
+        stored_url = conn.execute(
+            "SELECT url FROM pages WHERE id = ?",
+            (page_id,),
+        ).fetchone()
+
+    assert stored_url is not None
+    assert stored_url[0] == "https://example.com/docs?lang=en&topic=ai"
