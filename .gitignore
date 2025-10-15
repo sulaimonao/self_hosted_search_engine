@@ -93,6 +93,7 @@ diagnostics/
 !tests/backend/test_metrics_histogram.py
 !tests/test_crawl_client.py
 !tests/unit/test_agent_tools_repo.py
+!tests/unit/test_observability.py
 !tests/server/test_tool_logging.py
 !tests/server/test_llm.py
 /.venv

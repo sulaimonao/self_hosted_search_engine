@@ -39,9 +39,9 @@ def configure_tracing(
     _PROJECT_NAME = project_name or _PROJECT_NAME
     _SERVICE_NAME = service_name or _SERVICE_NAME
 
-    app.config.setdefault("OBS_TRACE_ENABLED", _TRACE_ENABLED)
-    app.config.setdefault("OBS_TRACE_PROJECT", _PROJECT_NAME)
-    app.config.setdefault("OBS_TRACE_SERVICE", _SERVICE_NAME)
+    app.config["OBS_TRACE_ENABLED"] = _TRACE_ENABLED
+    app.config["OBS_TRACE_PROJECT"] = _PROJECT_NAME
+    app.config["OBS_TRACE_SERVICE"] = _SERVICE_NAME
 
     if not _TRACE_ENABLED:
         LOGGER.info("Observability tracing disabled (LANGSMITH_ENABLED=0)")
@@ -51,7 +51,7 @@ def configure_tracing(
         from langsmith import Client  # type: ignore
 
         client = Client()
-        app.config.setdefault("OBS_TRACE_CLIENT", client)
+        app.config["OBS_TRACE_CLIENT"] = client
         LOGGER.info(
             "LangSmith tracing enabled for project=%s service=%s",
             _PROJECT_NAME,
