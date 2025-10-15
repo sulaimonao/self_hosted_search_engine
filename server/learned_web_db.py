@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from backend.app.search.embedding import cosine_similarity
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 __all__ = [
     "LearnedWebDB",
@@ -45,15 +45,32 @@ def _normalize_url(url: str) -> Optional[str]:
     candidate = (url or "").strip()
     if not candidate:
         return None
-    if not candidate.startswith(("http://", "https://")):
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif not candidate.startswith(("http://", "https://")):
         candidate = f"https://{candidate.lstrip('/')}"
+
     parsed = urlparse(candidate)
     if not parsed.scheme or not parsed.netloc:
         return None
+
     path = parsed.path or "/"
     if not path.startswith("/"):
         path = "/" + path
-    return f"{parsed.scheme}://{parsed.netloc}{path}".rstrip("/")
+    if path == "/":
+        normalized_path = "/"
+    else:
+        normalized_path = path.rstrip("/") or "/"
+
+    normalized = parsed._replace(
+        path=normalized_path,
+        params="",
+        fragment="",
+    )
+    normalized_url = urlunparse(normalized)
+    if normalized_path == "/" and not parsed.query and not parsed.params:
+        return normalized_url.rstrip("/")
+    return normalized_url
 
 
 def _ts(value: Optional[float]) -> float:
