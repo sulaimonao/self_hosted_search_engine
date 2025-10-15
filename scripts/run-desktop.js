@@ -8,6 +8,7 @@
  */
 
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
 const waitOn = require('wait-on');
@@ -28,17 +29,108 @@ if (!fs.existsSync(electronBin)) {
 }
 
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const port = String(process.env.PORT || process.env.DESKTOP_PORT || '3100');
 const browserRoute = process.env.DESKTOP_BROWSER_ROUTE || '/browser';
 const normalizedRoute = browserRoute.startsWith('/') ? browserRoute : `/${browserRoute}`;
-const frontendBase = process.env.DESKTOP_FRONTEND_BASE || `http://127.0.0.1:${port}`;
-const frontendUrl = process.env.FRONTEND_URL || `${frontendBase.replace(/\/$/, '')}${normalizedRoute}`;
-const waitResource = process.env.DESKTOP_WAIT_RESOURCE || `${frontendBase.replace(/\/$/, '')}${normalizedRoute}`;
 const waitTimeoutMs = Number(process.env.DESKTOP_WAIT_TIMEOUT_MS) || 60000;
 
 let nextProcess;
 let electronProcess;
 let shuttingDown = false;
+let port;
+let frontendUrl;
+let waitResource;
+
+function sanitizeBaseUrl(value) {
+  return value ? value.replace(/\/$/, '') : value;
+}
+
+function parsePort(value) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    throw new Error(`Invalid port value: ${value}`);
+  }
+  return parsed;
+}
+
+async function isPortAvailable(candidatePort) {
+  return new Promise((resolve, reject) => {
+    const tester = net.createServer();
+    tester.unref();
+
+    tester.once('error', (error) => {
+      if (error && (error.code === 'EADDRINUSE' || error.code === 'EACCES')) {
+        resolve(false);
+        return;
+      }
+      reject(error);
+    });
+
+    tester.once('listening', () => {
+      tester.close(() => {
+        resolve(true);
+      });
+    });
+
+    tester.listen({ port: candidatePort, host: '127.0.0.1' });
+  });
+}
+
+async function resolvePort(preferredPort, { allowFallback }) {
+  const startPort = parsePort(preferredPort);
+  const maxOffset = allowFallback ? 100 : 0;
+
+  for (let offset = 0; offset <= maxOffset; offset += 1) {
+    const candidate = startPort + offset;
+    // Clamp to valid range before probing.
+    if (candidate > 65535) {
+      break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const available = await isPortAvailable(candidate);
+    if (available) {
+      return candidate;
+    }
+  }
+
+  if (allowFallback) {
+    throw new Error(
+      `Unable to find a free port starting at ${startPort}. ` +
+        'Set DESKTOP_PORT or PORT to an available port and try again.',
+    );
+  }
+
+  throw new Error(`Requested port ${startPort} is already in use.`);
+}
+
+async function resolveConfiguration() {
+  const explicitPort = [process.env.PORT, process.env.DESKTOP_PORT].find(
+    (value) => typeof value === 'string' && value.trim() !== '',
+  );
+  const preferredPort = explicitPort || '3100';
+
+  const resolvedPortNumber = await resolvePort(preferredPort, {
+    allowFallback: !explicitPort,
+  }).catch((error) => {
+    console.error('[desktop] Failed to resolve port configuration:', error.message || error);
+    throw error;
+  });
+
+  if (!explicitPort && String(resolvedPortNumber) !== String(preferredPort)) {
+    console.log(
+      `[desktop] Port ${preferredPort} unavailable, using ${resolvedPortNumber} instead.`,
+    );
+  }
+
+  port = String(resolvedPortNumber);
+  process.env.PORT = port;
+
+  const baseOverride = process.env.DESKTOP_FRONTEND_BASE;
+  const normalizedBase = sanitizeBaseUrl(baseOverride || `http://127.0.0.1:${port}`);
+
+  const defaultRouteUrl = `${normalizedBase}${normalizedRoute}`;
+  frontendUrl = process.env.FRONTEND_URL || defaultRouteUrl;
+  waitResource = process.env.DESKTOP_WAIT_RESOURCE || defaultRouteUrl;
+}
 
 function spawnProcess(command, args, options = {}) {
   return spawn(command, args, {
@@ -171,6 +263,7 @@ function startElectron() {
 }
 
 async function main() {
+  await resolveConfiguration();
   startFrontend();
 
   try {
