@@ -75,7 +75,7 @@ import {
 import type { MetaTimeResponse } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import { recordVisit, requestShadowCrawl } from "@/lib/shadow";
-import { desktop } from "@/lib/desktop";
+import { desktop, desktopSupports } from "@/lib/desktop";
 import type {
   AgentLogEntry,
   ChatMessage,
@@ -1108,7 +1108,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, [shadowModeEnabled]);
 
   useEffect(() => {
-    if (!desktop || typeof desktop.onShadowToggle !== "function") {
+    if (!desktopSupports(desktop, "onShadowToggle")) {
       return;
     }
     const off = desktop.onShadowToggle(() => {
@@ -2715,7 +2715,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     if (shadowModeEnabled) {
       requestShadowCrawl(navEvent.tabId ?? null, navEvent.url, 'did-navigate');
     }
-    if (desktop && typeof desktop.shadowCapture === 'function') {
+    if (desktopSupports(desktop, "shadowCapture")) {
       void (async () => {
         try {
           await desktop.shadowCapture({

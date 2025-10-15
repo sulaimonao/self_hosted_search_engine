@@ -56,3 +56,41 @@ export interface DesktopBridge {
 
 export const desktop: DesktopBridge | undefined =
   typeof window !== "undefined" ? (window as { desktop?: DesktopBridge }).desktop : undefined;
+
+const noopUnsubscribe = () => undefined;
+
+export const desktopFallback: DesktopBridge = {
+  runSystemCheck: async () => ({ skipped: true }),
+  getLastSystemCheck: async () => ({ skipped: true }),
+  openSystemCheckReport: async () => ({ ok: false, missing: true }),
+  exportSystemCheckReport: async () => ({ ok: false, skipped: true }),
+  shadowCapture: async () => undefined,
+  indexSearch: async () => undefined,
+  onSystemCheckEvent: (channel, handler) => {
+    void channel;
+    void handler;
+    return noopUnsubscribe;
+  },
+  onShadowToggle: (handler) => {
+    void handler;
+    return noopUnsubscribe;
+  },
+};
+
+export function resolveDesktopBridge(): DesktopBridge {
+  if (typeof window === "undefined") {
+    return desktopFallback;
+  }
+  const candidate = (window as { desktop?: DesktopBridge }).desktop;
+  if (!candidate || typeof candidate !== "object") {
+    return desktopFallback;
+  }
+  return { ...desktopFallback, ...candidate };
+}
+
+export function desktopSupports<K extends keyof DesktopBridge>(
+  bridge: DesktopBridge | undefined,
+  key: K,
+): bridge is DesktopBridge & Required<Pick<DesktopBridge, K>> {
+  return typeof bridge?.[key] === "function";
+}
