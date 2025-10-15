@@ -1,9 +1,13 @@
-import { app, BrowserWindow, BrowserView, ipcMain, session, webContents } from 'electron';
+import { app, BrowserWindow, BrowserView, ipcMain, session, shell, webContents } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import waitOn from 'wait-on';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const DEV_BROWSER_PATH = '/browser';
+const FRONTEND_WAIT_TIMEOUT_MS = Number(process.env.ELECTRON_WAIT_TIMEOUT_MS ?? '60000');
 
 const sharedWebPreferences = Object.freeze({
   preload: path.join(__dirname, 'preload.js'),
@@ -25,12 +29,66 @@ function isShadowModeEnabled(win) {
   return Boolean(shadowModeByWindow.get(win.id));
 }
 
-function resolveAppUrl() {
+function resolveBaseUrl() {
   const defaultUrl = 'http://localhost:3100';
   const envUrl = [process.env.APP_URL, process.env.ELECTRON_START_URL].find(
     (value) => typeof value === 'string' && value.trim().length > 0,
   );
   return envUrl ?? defaultUrl;
+}
+
+function isHttpUrl(candidate) {
+  if (typeof candidate !== 'string') {
+    return false;
+  }
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function resolveBrowserStartUrl() {
+  const base = resolveBaseUrl();
+  if (!isHttpUrl(base)) {
+    return base;
+  }
+  try {
+    const parsed = new URL(base);
+    parsed.pathname = DEV_BROWSER_PATH;
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    const sanitized = base.endsWith('/') ? base.slice(0, -1) : base;
+    return `${sanitized}${DEV_BROWSER_PATH}`;
+  }
+}
+
+function resolveAppOrigin(url = resolveBrowserStartUrl()) {
+  if (!isHttpUrl(url)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(url);
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForRenderer(url) {
+  if (app.isPackaged) {
+    return;
+  }
+  if (!isHttpUrl(url)) {
+    return;
+  }
+  await waitOn({
+    resources: [url],
+    timeout: FRONTEND_WAIT_TIMEOUT_MS,
+    validateStatus: (status) => status === 200,
+  });
 }
 
 function sanitizeSandboxHeaders() {
@@ -165,7 +223,9 @@ function attachView(window, view) {
 }
 
 function attachNavigationHandlers(window, view, initialUrl) {
-  const fallbackUrl = typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveAppUrl();
+  const fallbackUrl =
+    typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveBrowserStartUrl();
+  const appOrigin = resolveAppOrigin(fallbackUrl);
 
   view.webContents.on('did-fail-load', (_event, _code, _desc, failingUrl, isMainFrame) => {
     if (!isMainFrame) {
@@ -190,12 +250,19 @@ function attachNavigationHandlers(window, view, initialUrl) {
   });
 
   view.webContents.setWindowOpenHandler(({ url }) => {
-    const child = createBrowserWindow({
-      parent: window,
-      initialUrl: url,
-      shadowEnabled: isShadowModeEnabled(window),
-    });
-    postShadowCrawl(child, url, 'new-window');
+    if (appOrigin && isHttpUrl(url)) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.origin === appOrigin) {
+          view.webContents.loadURL(url).catch(() => {});
+          postShadowCrawl(window, url, 'new-window');
+          return { action: 'deny' };
+        }
+      } catch {
+        // fall through to external handler
+      }
+    }
+    shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
 
@@ -240,14 +307,25 @@ function createBrowserWindow({ parent = null, initialUrl = null, shadowEnabled =
     height: 820,
     title: 'Personal Search Engine',
     parent: parent ?? undefined,
-    show: true,
+    show: false,
     backgroundColor: '#0b0d17',
   });
 
   const view = new BrowserView({ webPreferences: { ...sharedWebPreferences } });
   const detachView = attachView(window, view);
 
-  const targetUrl = typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveAppUrl();
+  const targetUrl =
+    typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveBrowserStartUrl();
+
+  const revealWindow = () => {
+    if (!window.isDestroyed()) {
+      window.show();
+    }
+  };
+
+  window.once('ready-to-show', revealWindow);
+  view.webContents.once('did-finish-load', revealWindow);
+
   view.webContents.loadURL(targetUrl).catch((error) => {
     console.warn('initial load failed', error);
   });
@@ -264,11 +342,18 @@ function createBrowserWindow({ parent = null, initialUrl = null, shadowEnabled =
   return window;
 }
 
-function createWindow() {
-  mainWindow = createBrowserWindow();
+async function createWindow(options = {}) {
+  const requestedUrl = typeof options.initialUrl === 'string' ? options.initialUrl : null;
+  const targetUrl = requestedUrl && requestedUrl.trim().length > 0 ? requestedUrl : resolveBrowserStartUrl();
+  await waitForRenderer(targetUrl);
+  mainWindow = createBrowserWindow({
+    ...options,
+    initialUrl: targetUrl,
+  });
+  return mainWindow;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   ipcMain.on('shadow-mode:update', (event, payload) => {
     const sender = event?.sender;
     const win = sender ? BrowserWindow.fromWebContents(sender) : null;
@@ -278,10 +363,10 @@ app.whenReady().then(() => {
     shadowModeByWindow.set(win.id, Boolean(payload?.enabled));
   });
 
-  createWindow();
+  await createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      void createWindow();
     }
   });
 });
