@@ -35,9 +35,10 @@ _SCHEMA_PROMPT = (
     "Always reply with strict JSON containing the keys reasoning, answer, and citations (an array of strings). "
     "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in answer. "
     "Include citations when you reference external facts; omit when not applicable. "
-    "If the knowledge cutoff prevents a confident answer, include an autopilot object with the shape "
+    "If the knowledge cutoff prevents a confident answer, or the user explicitly grants you control of the browser "
+    "to continue researching on their behalf, include an autopilot object with the shape "
     "{\"mode\": \"browser\", \"query\": <string>, \"reason\": <string>}. "
-    "Only request autopilot when real-time browsing is required."
+    "Only request autopilot when real-time browsing is required or the user has asked you to take over."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 

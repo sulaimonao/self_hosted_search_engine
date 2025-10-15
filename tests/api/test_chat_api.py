@@ -20,6 +20,28 @@ class DummyResponse:
         yield from self._lines
 
 
+def test_schema_parser_allows_user_granted_browser_control():
+    payload = {
+        "reasoning": "Need live browsing.",
+        "answer": "Let me browse for you.",
+        "citations": [],
+        "autopilot": {
+            "mode": "browser",
+            "query": "Find latest release notes for Project Atlas",
+            "reason": "User granted browser control to help locate the information.",
+        },
+    }
+
+    serialized = json.dumps(payload)
+    parsed = chat_module._coerce_schema(serialized)
+
+    assert parsed["autopilot"] == {
+        "mode": "browser",
+        "query": "Find latest release notes for Project Atlas",
+        "reason": "User granted browser control to help locate the information.",
+    }
+
+
 def test_chat_logging_records_prompt(caplog, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(chat_bp)
