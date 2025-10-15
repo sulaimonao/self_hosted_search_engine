@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from backend.app.db import AppStateDB
 from backend.app.services.vector_index import EmbedderUnavailableError, VectorIndexService

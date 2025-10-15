@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional
 
 import trafilatura
 from flask import Flask
@@ -193,15 +194,6 @@ class ShadowIndexer:
             "jobId": None,
         }
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-        if stored_enabled is None:
-            state_db.set_setting("shadow_enabled", "true" if self._enabled else "false")
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
     def enqueue(
         self, url: str, *, tab_id: int | None = None, reason: str | None = None
     ) -> Dict[str, Any]:
