@@ -7,7 +7,6 @@ import os
 import re
 import subprocess
 import threading
-import time
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -79,7 +78,6 @@ def create_app() -> Flask:
     from .jobs.focused_crawl import FocusedCrawlManager
     from .jobs.runner import JobRunner
     from .shadow import ShadowCaptureService, ShadowIndexer, ShadowPolicyStore
-    from .metrics import metrics as metrics_module
     from .search.service import SearchService
     from .db import AppStateDB
     from .services.progress_bus import ProgressBus
@@ -89,7 +87,6 @@ def create_app() -> Flask:
     from .middleware import request_id as request_id_middleware
     from server import middleware_logging
 
-    metrics = metrics_module
 
     app = Flask(__name__)
 
@@ -471,74 +468,5 @@ def create_app() -> Flask:
             fallback = fallback_value or None
             embed = (engine_config.models.embed or embed).strip() or embed
         return {"primary": primary, "fallback": fallback, "embedder": embed}
-
-    @app.get("/api/llm/status")
-    def llm_status():
-        installed = _ollama_installed()
-        tags = _ollama_tags()
-        running = tags is not None
-        return jsonify({"installed": installed, "running": running, "host": _ollama_host()})
-
-    @app.get("/api/llm/models")
-    def llm_models():
-        tags = _ollama_tags()
-        available: list[str] = []
-        if tags:
-            seen: set[str] = set()
-            for entry in tags.get("models", []):
-                if isinstance(entry, str):
-                    name = entry.strip()
-                elif isinstance(entry, dict):
-                    raw = entry.get("name")
-                    name = raw.strip() if isinstance(raw, str) else ""
-                else:
-                    name = ""
-                if not name:
-                    continue
-                if name not in seen:
-                    available.append(name)
-                    seen.add(name)
-        available.sort(key=lambda value: value.lower())
-
-        configured = _configured_models()
-        return jsonify(
-            {
-                "available": available,
-                "configured": configured,
-                "ollama_host": _ollama_host(),
-            }
-        )
-
-    @app.get("/api/llm/health")
-    def llm_health():
-        start = time.perf_counter()
-        tags = _ollama_tags()
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        reachable = tags is not None
-        count = 0
-        if tags and isinstance(tags.get("models"), list):
-            count = len(tags["models"])  # type: ignore[index]
-        return jsonify(
-            {
-                "reachable": reachable,
-                "model_count": count,
-                "duration_ms": duration_ms,
-                "host": _ollama_host(),
-            }
-        )
-
-    @app.post("/api/llm/guess-seeds")
-    def llm_guess():
-        from llm.seed_guesser import guess_urls as llm_guess_urls
-
-        payload = request.get_json(silent=True) or {}
-        query = (payload.get("q") or "").strip()
-        model = (payload.get("model") or "").strip() or None
-        if not query:
-            return jsonify({"error": "Missing 'q' parameter"}), 400
-        start = time.perf_counter()
-        urls = llm_guess_urls(query, model=model)
-        metrics.record_llm_seed_time((time.perf_counter() - start) * 1000)
-        return jsonify({"urls": urls})
 
     return app
