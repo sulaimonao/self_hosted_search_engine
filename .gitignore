@@ -91,6 +91,7 @@ diagnostics/
 !tests/backend/test_source_follow.py
 !tests/backend/test_ollama_client_cli.py
 !tests/test_crawl_client.py
+!tests/unit/test_agent_tools_repo.py
 /.venv
 .venv/
 logs/backend.pid
