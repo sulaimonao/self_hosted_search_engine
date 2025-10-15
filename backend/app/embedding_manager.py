@@ -428,15 +428,29 @@ class EmbeddingManager:
                 self._active_model = active_name
             return self._update_status(state="ready", progress=100, model=active_name, error=None, alive=True)
 
-        if not self.auto_install and preferred_model is None:
-            return self._update_status(
+        if not self.auto_install:
+            detail_message = "Automatic installation disabled via configuration."
+            if preferred_model is not None and preferred_model != target:
+                detail_message = (
+                    f"{detail_message} Fallback '{preferred_model}' is not available."
+                )
+            status = self._update_status(
                 state="absent",
                 progress=0,
                 model=active_name,
                 error="auto_install_disabled",
-                detail="Automatic installation disabled via configuration.",
+                detail=detail_message,
                 alive=True,
             )
+            if preferred_model is not None:
+                return status
+            for fallback in self.fallbacks:
+                if not fallback or fallback == target:
+                    continue
+                status = self.ensure(preferred_model=fallback)
+                if status.get("state") == "ready":
+                    return status
+            return status
 
         with self._lock:
             if self._installing:
