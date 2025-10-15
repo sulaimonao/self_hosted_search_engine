@@ -100,7 +100,8 @@ class VectorIndexService:
         self._vector_store = VectorStore(
             engine_config.index.persist_dir, engine_config.index.db_path
         )
-        self._chunker = TokenChunker()
+        self._chunker: TokenChunker | None = None
+        self._chunker_lock = threading.RLock()
         self._client = OllamaClient(engine_config.ollama.base_url)
         self._embed_model = (engine_config.models.embed or "embeddinggemma").strip()
         self._similarity_threshold = float(engine_config.retrieval.similarity_threshold)
@@ -173,7 +174,8 @@ class VectorIndexService:
                     self._persist_dedupe()
                     return IndexResult(doc_id=storage_key, chunks=0, dims=self._last_dims)
 
-            chunks = self._chunker.chunk_text(cleaned)
+            chunker = self._get_chunker()
+            chunks = chunker.chunk_text(cleaned)
             if not chunks:
                 with self._lock:
                     self._simhash_index.update(storage_key, sim_signature)
@@ -287,6 +289,17 @@ class VectorIndexService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _get_chunker(self) -> TokenChunker:
+        chunker = self._chunker
+        if chunker is not None:
+            return chunker
+        with self._chunker_lock:
+            chunker = self._chunker
+            if chunker is None:
+                chunker = TokenChunker()
+                self._chunker = chunker
+        return chunker
+
     def _persist_dedupe(self) -> None:
         try:
             self._simhash_index.save(self._dedupe_path)
