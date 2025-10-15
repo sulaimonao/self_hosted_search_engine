@@ -5,7 +5,7 @@ from server.agent_tools_repo import Policy
 
 def _policy() -> Policy:
     return Policy(
-        write_paths=("backend/", "policy/allowlist.yml"),
+        write_paths=("backend/", "policy/allowlist.yml", "server/**"),
         deny_paths=(".env", "data/"),
         max_changed_files=5,
         max_changed_loc=100,
@@ -16,6 +16,7 @@ def test_policy_allows_configured_prefixes() -> None:
     policy = _policy()
     assert policy.is_path_allowed("backend/module.py")
     assert policy.is_path_allowed("policy/allowlist.yml")
+    assert policy.is_path_allowed("server/agent_tools_repo.py")
 
 
 def test_policy_rejects_similar_prefixes() -> None:

@@ -92,6 +92,8 @@ def _normalize_policy_prefix(path: str) -> str:
         return "*"
     while raw.startswith("./"):
         raw = raw[2:]
+    if raw.endswith("/**"):
+        raw = raw[:-3]
     if raw.endswith("/*"):
         raw = raw[:-2]
     raw = raw.rstrip("/")
