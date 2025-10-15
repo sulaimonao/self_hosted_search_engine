@@ -1,8 +1,6 @@
 "use client";
 
-type FacetEntry = [string, number];
-
-export type FacetRecord = Record<string, FacetEntry[]>;
+import type { FacetRecord } from "@/app/shipit/lib/api";
 
 interface FacetRailProps {
   facets: FacetRecord | undefined;

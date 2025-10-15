@@ -29,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { OmniBox } from "@/components/omnibox";
 import { WebPreview } from "@/components/web-preview";
 import { ChatPanel } from "@/components/chat-panel";
@@ -110,6 +111,7 @@ import { ShadowToggle } from "@/components/toolbar/ShadowToggle";
 
 const INITIAL_URL = "https://news.ycombinator.com";
 const MODEL_STORAGE_KEY = "chat:model";
+const AUTOPILOT_STORAGE_KEY = "chat:autopilot-enabled";
 const FEATURE_LOCAL_DISCOVERY = String(process.env.NEXT_PUBLIC_FEATURE_LOCAL_DISCOVERY ?? "");
 const LOCAL_DISCOVERY_ENABLED = ["1", "true", "yes", "on"].includes(
   FEATURE_LOCAL_DISCOVERY.trim().toLowerCase(),
@@ -444,6 +446,19 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const [, setModelWarning] = useState<string | null>(null);
   const [isAutopulling, setIsAutopulling] = useState(false);
   const [autopullMessage, setAutopullMessage] = useState<string | null>(null);
+  const [autopilotEnabled, setAutopilotEnabled] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    const stored = window.localStorage.getItem(AUTOPILOT_STORAGE_KEY);
+    if (stored === "1" || stored === "true") {
+      return true;
+    }
+    if (stored === "0" || stored === "false") {
+      return false;
+    }
+    return false;
+  });
   const [pageContext, setPageContext] = useState<PageExtractResponse | null>(initialContext ?? null);
   const [docMetadata, setDocMetadata] = useState<Record<string, unknown> | null>(null);
   const [includeContext, setIncludeContext] = useState(Boolean(initialContext));
@@ -515,6 +530,23 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const agentEnabled = AGENT_ENABLED;
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(() => liveFallbackUrl);
   const liveFallbackRef = useRef<string | null>(liveFallbackUrl);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const stored = window.localStorage.getItem(AUTOPILOT_STORAGE_KEY);
+    if (stored !== null) {
+      setAutopilotEnabled(stored === "1" || stored === "true");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(AUTOPILOT_STORAGE_KEY, autopilotEnabled ? "1" : "0");
+  }, [autopilotEnabled]);
 
   const buildWorkspaceHref = useCallback((url: string) => {
     const params = new URLSearchParams({ url });
@@ -1668,6 +1700,24 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       if (!trimmedQuery) {
         return;
       }
+      if (!autopilotEnabled) {
+        setChatMessages((messages) =>
+          messages.map((message) =>
+            message.id === messageId
+              ? { ...message, autopilot: directive, streaming: false }
+              : message,
+          ),
+        );
+        appendLog({
+          id: uid(),
+          label: "Autopilot suggestion",
+          detail: directive.reason ? `${directive.reason} (${directive.query})` : directive.query,
+          status: "info",
+          timestamp: new Date().toISOString(),
+        });
+        devlog({ evt: "ui.autopilot.skip", query: directive.query });
+        return;
+      }
       if (autopilotInFlightRef.current.has(messageId)) {
         return;
       }
@@ -1773,6 +1823,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     },
     [
       appendLog,
+      autopilotEnabled,
       handleNavigate,
       pushToast,
       shadowModeEnabled,
@@ -3237,6 +3288,15 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                       </Badge>
                       </div>
                     ))}
+                  </div>
+                  <div className="flex items-center justify-between rounded border p-3">
+                    <div>
+                      <h4 className="text-sm font-medium">Autopilot follow-ups</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Automatically run chat directives that schedule follow-up searches.
+                      </p>
+                    </div>
+                    <Switch checked={autopilotEnabled} onCheckedChange={setAutopilotEnabled} />
                   </div>
                 </div>
               )}

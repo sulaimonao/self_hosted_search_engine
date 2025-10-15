@@ -50,11 +50,23 @@ export interface MetaTimeResponse {
 }
 
 export async function fetchServerTime(): Promise<MetaTimeResponse> {
-  const response = await fetch(api("/api/meta/time"));
-  if (!response.ok) {
-    throw new Error(`Unable to fetch server time (${response.status})`);
+  const endpoints = ["/api/meta/server_time", "/api/meta/time"];
+  let lastError: Error | null = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(api(endpoint));
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || `Unable to fetch server time (${response.status})`);
+      }
+      return (await response.json()) as MetaTimeResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
   }
-  return response.json();
+
+  throw lastError ?? new Error("Unable to fetch server time");
 }
 
 export async function runSystemCheck(): Promise<SystemCheckResponse> {
@@ -604,7 +616,25 @@ export function subscribeDiscoveryEvents(
     return null;
   }
 
-  const source = new EventSource(api("/api/discovery/events"));
+  const endpoint = api("/api/discovery/stream_events");
+  const fallbackEndpoint = api("/api/discovery/events");
+  const buildSource = (url: string) => new EventSource(url);
+  let source: EventSource | null = null;
+
+  try {
+    source = buildSource(endpoint);
+  } catch {
+    try {
+      source = buildSource(fallbackEndpoint);
+    } catch (error) {
+      if (onError) onError(error);
+      return null;
+    }
+  }
+
+  if (!source) {
+    return null;
+  }
   source.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data) as DiscoveryPreview;
@@ -616,7 +646,30 @@ export function subscribeDiscoveryEvents(
     }
   };
   if (onError) {
-    source.onerror = (event) => onError(event);
+    source.onerror = (event) => {
+      source?.close();
+      if (source?.url !== fallbackEndpoint) {
+        try {
+          source = buildSource(fallbackEndpoint);
+          source.onmessage = (evt) => {
+            try {
+              const payload = JSON.parse(evt.data) as DiscoveryPreview;
+              if (payload && typeof payload.id === "string") {
+                onEvent(payload);
+              }
+            } catch (error) {
+              onError?.(error);
+            }
+          };
+          source.onerror = (err) => onError(err);
+          return;
+        } catch (err) {
+          onError(err);
+        }
+      } else {
+        onError(event);
+      }
+    };
   }
 
   return {
@@ -1430,37 +1483,198 @@ export interface JobSubscriptionHandlers {
 }
 
 export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
-  let active = true;
   const previousLogs = new Set<string>();
+  let cancelled = false;
+  let stopPolling: (() => void) | null = null;
+  let source: EventSource | null = null;
+  let fallbackStarted = false;
 
-  const poll = async () => {
-    while (active) {
-      try {
-        const payload = await fetchJobStatus(jobId);
-        handlers.onStatus(normalizeJobStatus(jobId, payload));
-        const logs = payload.logs_tail ?? [];
-        for (const line of logs) {
-          if (!previousLogs.has(line)) {
-            previousLogs.add(line);
-            handlers.onLog?.(line);
+  const emitLogs = (logs: unknown) => {
+    if (!logs) return;
+    const lines: string[] = [];
+    if (typeof logs === "string") {
+      lines.push(logs);
+    } else if (Array.isArray(logs)) {
+      logs.forEach((entry) => {
+        if (typeof entry === "string") {
+          lines.push(entry);
+        }
+      });
+    } else if (typeof logs === "object") {
+      const record = logs as Record<string, unknown>;
+      if (Array.isArray(record.logs)) {
+        record.logs.forEach((entry) => {
+          if (typeof entry === "string") {
+            lines.push(entry);
           }
-        }
-        const state = typeof payload.state === "string" ? payload.state.toLowerCase() : "unknown";
-        if (state === "done" || state === "error") {
-          break;
-        }
-      } catch (error) {
-        handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
-        break;
+        });
       }
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (Array.isArray(record.logs_tail)) {
+        record.logs_tail.forEach((entry) => {
+          if (typeof entry === "string") {
+            lines.push(entry);
+          }
+        });
+      }
+      const message = record.message ?? record.log ?? record.line;
+      if (typeof message === "string") {
+        lines.push(message);
+      }
+    }
+
+    for (const line of lines) {
+      if (!previousLogs.has(line)) {
+        previousLogs.add(line);
+        handlers.onLog?.(line);
+      }
     }
   };
 
-  poll();
+  const emitStatus = (payload: JobStatusPayload | null) => {
+    if (!payload) {
+      return;
+    }
+    const status = normalizeJobStatus(jobId, payload);
+    handlers.onStatus(status);
+    if (status.state === "done" || status.state === "error") {
+      cancelled = true;
+      if (source) {
+        source.close();
+      }
+      if (stopPolling) {
+        stopPolling();
+      }
+    }
+  };
+
+  const parseStatusPayload = (data: unknown): JobStatusPayload | null => {
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+    const record = data as Record<string, unknown>;
+    if (record.status && typeof record.status === "object" && record.status !== null) {
+      return record.status as JobStatusPayload;
+    }
+    if (record.data && typeof record.data === "object" && record.data !== null) {
+      const nested = parseStatusPayload(record.data);
+      if (nested) {
+        return nested;
+      }
+    }
+    if (
+      typeof record.job_id === "string" ||
+      typeof record.jobId === "string" ||
+      typeof record.state === "string" ||
+      typeof record.phase === "string" ||
+      typeof record.progress === "number"
+    ) {
+      return record as JobStatusPayload;
+    }
+    return null;
+  };
+
+  const handleEventPayload = (payload: unknown) => {
+    if (!payload) {
+      return;
+    }
+    emitLogs(payload);
+    const statusPayload = parseStatusPayload(payload);
+    if (statusPayload) {
+      emitStatus(statusPayload);
+    }
+  };
+
+  const startPolling = () => {
+    let active = true;
+    const poll = async () => {
+      while (active && !cancelled) {
+        try {
+          const payload = await fetchJobStatus(jobId);
+          emitLogs(payload.logs_tail);
+          emitStatus(payload);
+          const state = typeof payload.state === "string" ? payload.state.toLowerCase() : "unknown";
+          if (state === "done" || state === "error") {
+            break;
+          }
+        } catch (error) {
+          handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    };
+    poll();
+    return () => {
+      active = false;
+    };
+  };
+
+  const startSse = () => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") {
+      return null;
+    }
+    const url = api(`/api/progress/${encodeURIComponent(jobId)}/stream`);
+    try {
+      const evtSource = new EventSource(url);
+      source = evtSource;
+
+      const handleMessage = (event: MessageEvent<string>) => {
+        if (!event.data) {
+          return;
+        }
+        try {
+          const data = JSON.parse(event.data) as unknown;
+          handleEventPayload(data);
+        } catch (error) {
+          handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+
+      evtSource.onmessage = handleMessage;
+      evtSource.addEventListener("status", handleMessage);
+      evtSource.addEventListener("progress", handleMessage);
+      evtSource.addEventListener("log", (event) => {
+        if (!event.data) return;
+        try {
+          const data = JSON.parse(event.data) as unknown;
+          emitLogs(data);
+        } catch {
+          emitLogs(event.data);
+        }
+      });
+      evtSource.onerror = (event) => {
+        if (cancelled) {
+          return;
+        }
+        evtSource.close();
+        source = null;
+        if (!fallbackStarted) {
+          fallbackStarted = true;
+          stopPolling = startPolling();
+        }
+        handlers.onError?.(event instanceof ErrorEvent ? event.error : new Error("progress stream disconnected"));
+      };
+
+      return () => {
+        evtSource.close();
+        source = null;
+      };
+    } catch (error) {
+      handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
+      return null;
+    }
+  };
+
+  const stopSse = startSse();
+  if (!stopSse) {
+    fallbackStarted = true;
+    stopPolling = startPolling();
+  }
 
   return () => {
-    active = false;
+    cancelled = true;
+    stopSse?.();
+    stopPolling?.();
   };
 }
 
