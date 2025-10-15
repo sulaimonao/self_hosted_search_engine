@@ -91,7 +91,9 @@ class AppStateDB:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = connect(path)
+        LOGGER.info("Running state DB migrations", extra={"db_path": str(self.path)})
         migrate(self._conn)
+        LOGGER.info("State DB migrations finished", extra={"db_path": str(self.path)})
         self._lock = threading.RLock()
         self._schema_validation: SchemaValidation = self._validate_schema()
 

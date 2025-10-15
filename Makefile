@@ -4,6 +4,10 @@
 .PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
 .PHONY: desktop desktop-build dev-desktop
 .PHONY: api web
+.PHONY: lint-makefile
+
+lint-makefile:
+	@echo "Ensure all recipe lines use tabs (not spaces)."
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
