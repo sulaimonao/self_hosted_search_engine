@@ -133,6 +133,7 @@ async function resolveConfiguration() {
 }
 
 function spawnProcess(command, args, options = {}) {
+  const { env: envOverrides = {}, ...rest } = options;
   return spawn(command, args, {
     stdio: 'inherit',
     cwd: repoRoot,
@@ -140,9 +141,9 @@ function spawnProcess(command, args, options = {}) {
       ...process.env,
       PORT: port,
       NODE_ENV: process.env.NODE_ENV || 'production',
-      ...options.env,
+      ...envOverrides,
     },
-    ...options,
+    ...rest,
   });
 }
 
@@ -216,7 +217,14 @@ async function waitForFrontend() {
 
 function startFrontend() {
   console.log('[desktop] Starting Next.js frontend…');
-  nextProcess = spawnProcess(npmCmd, ['--prefix', frontendDir, 'run', 'start:web']);
+  nextProcess = spawnProcess(npmCmd, ['--prefix', frontendDir, 'run', 'start:web'], {
+    env: {
+      // Force the production Next.js server to listen on the loopback interface so that
+      // both the readiness probe and Electron shell can reach it consistently.
+      HOSTNAME: '127.0.0.1',
+      HOST: '127.0.0.1',
+    },
+  });
   nextProcess.on('error', (error) => {
     if (shuttingDown) {
       return;
