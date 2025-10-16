@@ -801,7 +801,14 @@ export async function searchIndex(
 
   const hybridResult = await attemptHybrid();
   if (hybridResult.payload && !abortSignal?.aborted) {
-    return normalizeSearchPayload(hybridResult.payload);
+    const fallbackFlag = Boolean(
+      typeof hybridResult.payload["keyword_fallback"] === "boolean"
+        ? hybridResult.payload["keyword_fallback"]
+        : typeof hybridResult.payload["keywordFallback"] === "boolean"
+        ? hybridResult.payload["keywordFallback"]
+        : false,
+    );
+    return normalizeSearchPayload(hybridResult.payload, fallbackFlag);
   }
 
   if (abortSignal?.aborted) {
@@ -860,11 +867,20 @@ function normalizeSearchPayload(
   payload: Record<string, unknown>,
   keywordFallback: boolean = false,
 ): SearchIndexResponse {
-  const rawResults = Array.isArray(payload.results)
-    ? payload.results
-    : Array.isArray(payload.hits)
-    ? payload.hits
-    : [];
+  const candidateLists: unknown[][] = [];
+  if (Array.isArray(payload.results)) candidateLists.push(payload.results);
+  if (Array.isArray(payload.hits)) candidateLists.push(payload.hits);
+  if (Array.isArray(payload.combined)) candidateLists.push(payload.combined);
+  if (Array.isArray(payload.vector)) candidateLists.push(payload.vector);
+  if (Array.isArray(payload.keyword)) candidateLists.push(payload.keyword);
+
+  let rawResults: unknown[] = [];
+  for (const list of candidateLists) {
+    if (list.length > 0) {
+      rawResults = list;
+      break;
+    }
+  }
 
   const hits: SearchHit[] = [];
   rawResults.forEach((item, index) => {
@@ -874,7 +890,14 @@ function normalizeSearchPayload(
     const entry = item as Record<string, unknown>;
     const url = typeof entry.url === "string" ? entry.url.trim() : "";
     const titleRaw = typeof entry.title === "string" ? entry.title.trim() : "";
-    const snippet = typeof entry.snippet === "string" ? entry.snippet : "";
+    const snippet =
+      typeof entry.snippet === "string"
+        ? entry.snippet
+        : typeof entry.chunk === "string"
+        ? entry.chunk
+        : typeof entry.summary === "string"
+        ? entry.summary
+        : "";
     const score = coerceNumber(entry.score);
     const blended = coerceNumber(entry.blended_score ?? entry.blendedScore);
     const lang = typeof entry.lang === "string" ? entry.lang : null;
@@ -910,7 +933,11 @@ function normalizeSearchPayload(
       ? payload.jobId
       : undefined;
   const lastIndexTime = coerceNumber(payload.last_index_time ?? payload.lastIndexTime) ?? undefined;
-  const confidence = coerceNumber(payload.confidence) ?? undefined;
+  const confidence =
+    coerceNumber(payload.confidence) ??
+    coerceNumber(payload.vector_top_score) ??
+    coerceNumber(payload.vectorTopScore) ??
+    undefined;
   const seedCount = coerceNumber(payload.seed_count ?? payload.seedCount);
   const triggerReason =
     typeof payload.trigger_reason === "string"
@@ -919,7 +946,9 @@ function normalizeSearchPayload(
       ? payload.triggerReason
       : undefined;
   const explicitDetail = typeof payload.detail === "string" ? payload.detail : undefined;
-  const detail = explicitDetail ?? (keywordFallback ? "Hybrid search unavailable; showing keyword results." : undefined);
+  const detail =
+    explicitDetail ??
+    (keywordFallback ? "Hybrid search unavailable; showing keyword results." : undefined);
   const error = typeof payload.error === "string" ? payload.error : undefined;
   const code = typeof payload.code === "string" ? payload.code : undefined;
   const action = typeof payload.action === "string" ? payload.action : undefined;
