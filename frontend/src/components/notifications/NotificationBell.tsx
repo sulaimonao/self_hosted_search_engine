@@ -2,6 +2,7 @@
 
 import { Bell } from "lucide-react";
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -10,7 +11,7 @@ import { useAppStore } from "@/state/useAppStore";
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const notifications = useAppStore((state) => state.notifications);
+  const notifications = useAppStore(useShallow((state) => state.notifications));
   const unreadCount = Object.values(notifications).reduce(
     (total, item) => total + (item.muted ? 0 : item.count),
     0,

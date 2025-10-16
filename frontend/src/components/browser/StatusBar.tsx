@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useHealth } from "@/lib/health";
 import { useAppStore } from "@/state/useAppStore";
@@ -17,8 +18,8 @@ function resolveHealthColor(status: string | undefined) {
 }
 
 export function StatusBar() {
-  const notifications = useAppStore((state) => state.notifications);
-  const { data: health } = useHealth();
+  const notifications = useAppStore(useShallow((state) => state.notifications));
+  const health = useHealth();
 
   const crawl = useMemo(() => {
     const entries = Object.values(notifications).filter((item) => item.kind === "crawl.progress");

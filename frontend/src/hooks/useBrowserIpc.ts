@@ -16,6 +16,7 @@ import {
 } from "@/lib/browser-ipc";
 import { useAppStore } from "@/state/useAppStore";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
+import { setIfChanged } from "@/lib/store/utils";
 
 function mapNavStateToTab(state: BrowserNavState) {
   return {
@@ -35,6 +36,8 @@ function applyTabList(summary: BrowserTabList | undefined) {
   }
   useAppStore.getState().replaceTabs(summary);
 }
+
+const guardedAppSetState = setIfChanged(useAppStore.setState, useAppStore.getState);
 
 export function useBrowserIpc() {
   useEffect(() => {
@@ -90,9 +93,11 @@ export function useBrowserIpc() {
 
     const unsubscribeNav = subscribeNavState(api, (state) => {
       const patch = mapNavStateToTab(state);
-      useAppStore.getState().updateTab(state.tabId, patch);
+      const store = useAppStore.getState();
+      store.updateTab(state.tabId, patch);
       if (state.isActive) {
-        useAppStore.setState({ activeTabId: state.tabId });
+        guardedAppSetState({ activeTabId: state.tabId });
+        store.setBrowserDesiredUrl(state.url);
       }
     });
 

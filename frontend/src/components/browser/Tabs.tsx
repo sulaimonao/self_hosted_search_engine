@@ -2,17 +2,24 @@
 
 import { Plus, X } from "lucide-react";
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state/useAppStore";
 
 export function TabsBar() {
-  const tabs = useAppStore((state) => state.tabs);
-  const activeTabId = useAppStore((state) => state.activeTabId ?? state.tabs[0]?.id);
-  const setActive = useAppStore((state) => state.setActive);
-  const closeTab = useAppStore((state) => state.closeTab);
-  const addTab = useAppStore((state) => state.addTab);
+  const { tabs, activeTabId, setActive, closeTab, addTab } = useAppStore(
+    useShallow((state) => ({
+      tabs: state.tabs,
+      activeTabId: state.activeTabId,
+      setActive: state.setActive,
+      closeTab: state.closeTab,
+      addTab: state.addTab,
+    })),
+  );
+
+  const resolvedActiveTabId = activeTabId ?? tabs[0]?.id;
 
   const sorted = useMemo(() => tabs, [tabs]);
 
@@ -21,7 +28,7 @@ export function TabsBar() {
       <div className="max-w-full overflow-x-auto">
         <div className="flex items-center gap-2 py-1">
           {sorted.map((tab) => {
-            const active = activeTabId === tab.id;
+            const active = resolvedActiveTabId === tab.id;
             return (
               <button
                 key={tab.id}
@@ -53,8 +60,7 @@ export function TabsBar() {
           })}
         </div>
       </div>
-      <Button size="icon" variant="outline" onClick={() => addTab("https://example.com")}
-        title="New tab">
+      <Button size="icon" variant="outline" onClick={() => addTab("https://example.com")} title="New tab">
         <Plus size={16} />
       </Button>
     </div>

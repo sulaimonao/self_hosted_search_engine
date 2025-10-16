@@ -172,7 +172,11 @@ class AgentBrowserManager:
         done.wait(max(0.0, float(timeout)))
 
     def close(self) -> None:
-        try:
+        sessions: list[_BrowserSession] = []
+        browser = None
+        playwright = None
+
+        with suppress(Exception):
             with self._lock:
                 if getattr(self, "_closed", False):
                     return
@@ -183,16 +187,13 @@ class AgentBrowserManager:
                 playwright = getattr(self, "_playwright", None)
                 self._browser = None
                 self._playwright = None
-        except KeyboardInterrupt:
-            return
-        except Exception:
-            return
 
         for session in sessions:
             with suppress(Exception, KeyboardInterrupt):
                 session.close()
 
-        self._safe_close_browser(browser)
+        with suppress(Exception, KeyboardInterrupt):
+            self._safe_close_browser(browser, timeout=2.0)
 
         if playwright is not None:
             with suppress(Exception, KeyboardInterrupt):

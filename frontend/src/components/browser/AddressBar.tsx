@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,8 +11,12 @@ import { normalizeAddressInput } from "@/lib/url";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 
 export function AddressBar() {
-  const activeTab = useAppStore((state) => state.activeTab?.());
-  const updateTab = useAppStore((state) => state.updateTab);
+  const { activeTab, updateTab } = useAppStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab?.(),
+      updateTab: state.updateTab,
+    })),
+  );
   const [value, setValue] = useState(activeTab?.url ?? "");
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
   const searchMode = useBrowserRuntimeStore((state) => state.settings?.searchMode ?? "auto");

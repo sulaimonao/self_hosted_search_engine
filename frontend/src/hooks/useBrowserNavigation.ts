@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useAppStore } from "@/state/useAppStore";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
@@ -12,11 +13,15 @@ export interface NavigateOptions {
 }
 
 export function useBrowserNavigation() {
-  const activeTab = useAppStore((state) => state.activeTab?.());
-  const addTab = useAppStore((state) => state.addTab);
-  const updateTab = useAppStore((state) => state.updateTab);
-  const setActive = useAppStore((state) => state.setActive);
-  const openPanel = useAppStore((state) => state.openPanel);
+  const { activeTab, addTab, updateTab, setActive, openPanel } = useAppStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab?.(),
+      addTab: state.addTab,
+      updateTab: state.updateTab,
+      setActive: state.setActive,
+      openPanel: state.openPanel,
+    })),
+  );
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
 
   return useCallback(

@@ -3,6 +3,7 @@
 import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -32,6 +33,8 @@ import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 import { DownloadsTray } from "@/components/browser/DownloadsTray";
 import { PermissionPrompt } from "@/components/browser/PermissionPrompt";
 import { SettingsSheet } from "@/components/browser/SettingsSheet";
+import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
+import { useUrlBinding } from "@/hooks/useUrlBinding";
 
 const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
@@ -42,18 +45,33 @@ const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
 };
 
 export function BrowserShell() {
+  useUrlBinding();
   useEvents();
-
   useBrowserIpc();
 
   const router = useRouter();
-  const activeTab = useAppStore((state) => state.activeTab?.());
-  const openPanel = useAppStore((state) => state.openPanel);
-  const panelOpen = useAppStore((state) => state.panelOpen);
+  const { activeTab, openPanel, panelOpen } = useAppStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab?.(),
+      openPanel: state.openPanel,
+      panelOpen: state.panelOpen,
+    })),
+  );
 
-  const downloadOrder = useBrowserRuntimeStore((state) => state.downloadOrder);
-  const downloads = useBrowserRuntimeStore((state) => state.downloads);
-  const setDownloadsOpen = useBrowserRuntimeStore((state) => state.setDownloadsOpen);
+  const { downloadOrder, downloads, setDownloadsOpen } = useBrowserRuntimeStore(
+    useShallow((state) => ({
+      downloadOrder: state.downloadOrder,
+      downloads: state.downloads,
+      setDownloadsOpen: state.setDownloadsOpen,
+    })),
+  );
+
+  const panelIsOpen = Boolean(panelOpen);
+  const handlePanelOpenChange = useStableOnOpenChange(panelIsOpen, (next) => {
+    if (!next) {
+      openPanel(undefined);
+    }
+  });
 
   const activeDownloads = useMemo(
     () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
@@ -239,7 +257,7 @@ export function BrowserShell() {
           </div>
         ) : null}
 
-        <Sheet open={Boolean(panelOpen)} onOpenChange={(value) => !value && openPanel(undefined)}>
+        <Sheet open={panelIsOpen} onOpenChange={handlePanelOpenChange}>
           <SheetContent
             side={panelOpen === "localSearch" || panelOpen === "collections" ? "left" : "right"}
             className="w-auto p-0"

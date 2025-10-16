@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useToast } from "@/components/ui/use-toast";
 import { useAppStore } from "@/state/useAppStore";
@@ -8,7 +9,7 @@ import { useAppStore } from "@/state/useAppStore";
 const IMPORTANT_EVENTS = new Set(["error", "crawl.done"]);
 
 export function ToastGate() {
-  const notifications = useAppStore((state) => state.notifications);
+  const notifications = useAppStore(useShallow((state) => state.notifications));
   const { toast } = useToast();
   const seenRef = useRef(new Set<string>());
 

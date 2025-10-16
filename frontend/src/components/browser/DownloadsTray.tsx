@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Check, Download, FileWarning, FolderOpen } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
+import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 
 function formatProgress(downloadBytes?: number | null, totalBytes?: number | null): number {
   if (!totalBytes || totalBytes <= 0) {
@@ -31,11 +33,16 @@ function describeState(state: string): string {
 }
 
 export function DownloadsTray() {
-  const downloadsOpen = useBrowserRuntimeStore((state) => state.downloadsOpen);
-  const setDownloadsOpen = useBrowserRuntimeStore((state) => state.setDownloadsOpen);
-  const downloadOrder = useBrowserRuntimeStore((state) => state.downloadOrder);
-  const downloads = useBrowserRuntimeStore((state) => state.downloads);
+  const { downloadsOpen, setDownloadsOpen, downloadOrder, downloads } = useBrowserRuntimeStore(
+    useShallow((state) => ({
+      downloadsOpen: state.downloadsOpen,
+      setDownloadsOpen: state.setDownloadsOpen,
+      downloadOrder: state.downloadOrder,
+      downloads: state.downloads,
+    })),
+  );
   const api = useMemo(() => resolveBrowserAPI(), []);
+  const stableOpenChange = useStableOnOpenChange(downloadsOpen, setDownloadsOpen);
 
   const items = useMemo(
     () =>
@@ -46,7 +53,7 @@ export function DownloadsTray() {
   );
 
   return (
-    <Sheet open={downloadsOpen} onOpenChange={setDownloadsOpen}>
+    <Sheet open={downloadsOpen} onOpenChange={stableOpenChange}>
       <SheetContent side="bottom" className="h-72">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2 text-sm">
