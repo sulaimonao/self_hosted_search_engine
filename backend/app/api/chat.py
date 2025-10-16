@@ -42,8 +42,8 @@ _SCHEMA_PROMPT = (
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 _MODEL_ALIASES: dict[str, str] = {
-    "gpt-oss": "gemma:2b",
-    "gemma3": "gemma:2b",
+    # legacy names mapped to current defaults
+    "gemma:2b": "gemma3",
 }
 
 
@@ -54,7 +54,12 @@ def _coerce_model(name: str | None) -> str | None:
     if not normalized:
         return None
     alias_key = normalized.lower()
-    return _MODEL_ALIASES.get(alias_key, normalized)
+    candidate = _MODEL_ALIASES.get(alias_key, normalized)
+
+    engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
+    base_url = engine_config.ollama.base_url if engine_config is not None else None
+    resolved = ollama_client.resolve_model_name(candidate, base_url=base_url, chat_only=True)
+    return resolved or candidate
 
 
 def _truncate(value: str, max_length: int) -> str:

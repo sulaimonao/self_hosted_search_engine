@@ -132,17 +132,54 @@ def has_model(model: str, *, base_url: str | None = None) -> bool:
     return _model_available(model, available)
 
 
+def resolve_model_name(
+    model: str,
+    *,
+    base_url: str | None = None,
+    chat_only: bool = False,
+) -> str:
+    """Return a model name that matches the available inventory.
+
+    When ``model`` omits a tag (e.g. ``gemma3``) the lookup attempts to find a
+    candidate with the same base name (``gemma3:latest``) so callers can remain
+    agnostic to Ollama's versioned naming.
+    """
+
+    candidate = (model or "").strip()
+    if not candidate:
+        return candidate
+    name, tag = _split_model_tag(candidate)
+    if not name:
+        return candidate
+    available = list_models(base_url=base_url, chat_only=chat_only)
+    match = _find_model_match(name, tag, available)
+    return match or candidate
+
+
 def _model_available(target: str, candidates: Iterable[str]) -> bool:
     target_name, target_tag = _split_model_tag(target)
     if not target_name:
         return False
     for candidate in candidates:
-        candidate_name, candidate_tag = _split_model_tag(candidate)
-        if not candidate_name or candidate_name != target_name:
-            continue
-        if _tags_match(target_tag, candidate_tag):
+        if _match_model(target_name, target_tag, candidate):
             return True
     return False
+
+
+def _find_model_match(
+    name: str, tag: str | None, candidates: Iterable[str]
+) -> str | None:
+    for candidate in candidates:
+        if _match_model(name, tag, candidate):
+            return candidate
+    return None
+
+
+def _match_model(target_name: str, target_tag: str | None, candidate: str) -> bool:
+    candidate_name, candidate_tag = _split_model_tag(candidate)
+    if not candidate_name or candidate_name != target_name:
+        return False
+    return _tags_match(target_tag, candidate_tag)
 
 
 def _split_model_tag(name: str) -> tuple[str, str | None]:
@@ -206,4 +243,5 @@ __all__ = [
     "has_model",
     "pull_model",
     "supports_vision",
+    "resolve_model_name",
 ]
