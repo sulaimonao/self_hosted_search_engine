@@ -22,8 +22,55 @@ export type BrowserTabList = {
   activeTabId: string | null;
 };
 
+export type BrowserHistoryEntry = {
+  id: number;
+  url: string;
+  title: string | null;
+  visitTime: number;
+  transition?: string | null;
+  referrer?: string | null;
+  tabId?: string;
+};
+
+export type BrowserDownloadState = {
+  id: string;
+  url: string;
+  filename?: string | null;
+  mime?: string | null;
+  bytesTotal?: number | null;
+  bytesReceived?: number | null;
+  path?: string | null;
+  state: "in_progress" | "completed" | "cancelled" | "interrupted";
+  startedAt?: number | null;
+  completedAt?: number | null;
+};
+
+export type BrowserSettings = {
+  thirdPartyCookies: boolean;
+  searchMode: "auto" | "query";
+  spellcheckLanguage: string;
+  proxy: {
+    mode: "system" | "manual";
+    host?: string;
+    port?: string;
+  };
+};
+
+export type BrowserPermissionPrompt = {
+  id: string;
+  origin: string;
+  permission: string;
+};
+
+export type BrowserPermissionState = {
+  origin: string;
+  permissions: { permission: string; setting: string; updatedAt: number }[];
+};
+
 export interface BrowserAPI {
-  navigate: (url: string, options?: { tabId?: string }) => void;
+  navigate: (url: string, options?: { tabId?: string; transition?: string }) => void;
+  back: (options?: { tabId?: string }) => void;
+  forward: (options?: { tabId?: string }) => void;
   goBack: (options?: { tabId?: string }) => void;
   goForward: (options?: { tabId?: string }) => void;
   reload: (options?: { tabId?: string; ignoreCache?: boolean }) => void;
@@ -31,9 +78,26 @@ export interface BrowserAPI {
   closeTab: (tabId: string) => Promise<{ ok: boolean }>;
   setActiveTab: (tabId: string) => void;
   setBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
+  onState: (handler: (state: BrowserNavState) => void) => (() => void) | void;
   onNavState: (handler: (state: BrowserNavState) => void) => (() => void) | void;
   onTabList: (handler: (summary: BrowserTabList) => void) => (() => void) | void;
   requestTabList: () => Promise<BrowserTabList>;
+  onHistoryEntry: (handler: (entry: BrowserHistoryEntry) => void) => (() => void) | void;
+  requestHistory: (limit?: number) => Promise<BrowserHistoryEntry[]>;
+  onDownload: (handler: (download: BrowserDownloadState) => void) => (() => void) | void;
+  requestDownloads: (limit?: number) => Promise<BrowserDownloadState[]>;
+  showDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onPermissionPrompt: (handler: (prompt: BrowserPermissionPrompt) => void) => (() => void) | void;
+  respondToPermission: (decision: { id: string; decision: "allow" | "deny"; remember?: boolean }) => void;
+  onPermissionState: (handler: (state: BrowserPermissionState) => void) => (() => void) | void;
+  listPermissions: (origin: string) => Promise<BrowserPermissionState["permissions"]>;
+  clearPermission: (origin: string, permission: string) => Promise<{ ok: boolean }>;
+  clearOriginPermissions: (origin: string) => Promise<{ ok: boolean }>;
+  setPermission: (origin: string, permission: string, setting: "allow" | "deny") => Promise<{ ok: boolean }>;
+  clearSiteData: (origin: string) => Promise<{ ok: boolean; error?: string }>;
+  getSettings: () => Promise<BrowserSettings>;
+  updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
+  onSettings: (handler: (settings: BrowserSettings) => void) => (() => void) | void;
 }
 
 type Unsubscribe = () => void;
@@ -76,5 +140,60 @@ export function subscribeTabList(
     return noop;
   }
   const unsubscribe = api.onTabList(handler);
+  return typeof unsubscribe === "function" ? unsubscribe : noop;
+}
+
+export function subscribeHistory(
+  api: BrowserAPI | undefined,
+  handler: (entry: BrowserHistoryEntry) => void,
+): Unsubscribe {
+  if (!api || typeof api.onHistoryEntry !== "function" || typeof handler !== "function") {
+    return noop;
+  }
+  const unsubscribe = api.onHistoryEntry(handler);
+  return typeof unsubscribe === "function" ? unsubscribe : noop;
+}
+
+export function subscribeDownloads(
+  api: BrowserAPI | undefined,
+  handler: (entry: BrowserDownloadState) => void,
+): Unsubscribe {
+  if (!api || typeof api.onDownload !== "function" || typeof handler !== "function") {
+    return noop;
+  }
+  const unsubscribe = api.onDownload(handler);
+  return typeof unsubscribe === "function" ? unsubscribe : noop;
+}
+
+export function subscribeSettings(
+  api: BrowserAPI | undefined,
+  handler: (settings: BrowserSettings) => void,
+): Unsubscribe {
+  if (!api || typeof api.onSettings !== "function" || typeof handler !== "function") {
+    return noop;
+  }
+  const unsubscribe = api.onSettings(handler);
+  return typeof unsubscribe === "function" ? unsubscribe : noop;
+}
+
+export function subscribePermissionPrompts(
+  api: BrowserAPI | undefined,
+  handler: (prompt: BrowserPermissionPrompt) => void,
+): Unsubscribe {
+  if (!api || typeof api.onPermissionPrompt !== "function" || typeof handler !== "function") {
+    return noop;
+  }
+  const unsubscribe = api.onPermissionPrompt(handler);
+  return typeof unsubscribe === "function" ? unsubscribe : noop;
+}
+
+export function subscribePermissionState(
+  api: BrowserAPI | undefined,
+  handler: (state: BrowserPermissionState) => void,
+): Unsubscribe {
+  if (!api || typeof api.onPermissionState !== "function" || typeof handler !== "function") {
+    return noop;
+  }
+  const unsubscribe = api.onPermissionState(handler);
   return typeof unsubscribe === "function" ? unsubscribe : noop;
 }

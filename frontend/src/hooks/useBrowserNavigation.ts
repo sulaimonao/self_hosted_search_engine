@@ -42,7 +42,7 @@ export function useBrowserNavigation() {
             .catch((error) => console.warn("[browser] failed to open tab", error));
           return null;
         }
-        browserAPI.navigate(target, { tabId: activeTab.id });
+        browserAPI.navigate(target, { tabId: activeTab.id, transition: "link" });
         return activeTab.id;
       }
 

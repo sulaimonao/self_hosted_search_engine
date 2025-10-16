@@ -9,7 +9,15 @@ const ALLOWED_EVENTS = new Set([
   'system-check:skipped',
 ]);
 
-const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs']);
+const BROWSER_ALLOWED_CHANNELS = new Set([
+  'nav:state',
+  'browser:tabs',
+  'history:append',
+  'downloads:update',
+  'permissions:prompt',
+  'permissions:state',
+  'settings:state',
+]);
 
 const NOOP_UNSUBSCRIBE = () => {};
 
@@ -103,6 +111,17 @@ function createBrowserAPI() {
       ipcRenderer.send('nav:navigate', {
         url: target,
         tabId: options?.tabId ?? null,
+        transition: options?.transition,
+      });
+    },
+    back: (options) => {
+      ipcRenderer.send('nav:back', {
+        tabId: options?.tabId ?? null,
+      });
+    },
+    forward: (options) => {
+      ipcRenderer.send('nav:forward', {
+        tabId: options?.tabId ?? null,
       });
     },
     goBack: (options) => {
@@ -140,9 +159,32 @@ function createBrowserAPI() {
       };
       ipcRenderer.send('browser:bounds', payload);
     },
+    onState: (handler) => subscribeBrowserChannel('nav:state', handler),
     onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
     onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
+    onHistoryEntry: (handler) => subscribeBrowserChannel('history:append', handler),
+    onDownload: (handler) => subscribeBrowserChannel('downloads:update', handler),
+    onPermissionPrompt: (handler) => subscribeBrowserChannel('permissions:prompt', handler),
+    onPermissionState: (handler) => subscribeBrowserChannel('permissions:state', handler),
+    onSettings: (handler) => subscribeBrowserChannel('settings:state', handler),
     requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+    requestHistory: (limit) => ipcRenderer.invoke('history:list', { limit }),
+    requestDownloads: (limit) => ipcRenderer.invoke('downloads:list', { limit }),
+    showDownload: (id) => ipcRenderer.invoke('downloads:show-in-folder', { id }),
+    getSettings: () => ipcRenderer.invoke('settings:get'),
+    updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),
+    respondToPermission: (decision) => {
+      if (!decision || typeof decision !== 'object') {
+        return;
+      }
+      ipcRenderer.send('permissions:decision', decision);
+    },
+    listPermissions: (origin) => ipcRenderer.invoke('permissions:list', { origin }),
+    clearPermission: (origin, permission) => ipcRenderer.invoke('permissions:clear', { origin, permission }),
+    clearOriginPermissions: (origin) => ipcRenderer.invoke('permissions:clear-origin', { origin }),
+    setPermission: (origin, permission, setting) =>
+      ipcRenderer.invoke('permissions:set', { origin, permission, setting }),
+    clearSiteData: (origin) => ipcRenderer.invoke('site:clear-data', { origin }),
   };
 }
 

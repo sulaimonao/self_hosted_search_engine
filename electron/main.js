@@ -13,6 +13,7 @@ const { pathToFileURL } = require('url');
 const { randomUUID } = require('crypto');
 
 const { runBrowserDiagnostics } = require('../scripts/diagnoseBrowser');
+const { initializeBrowserData } = require('./browser-data');
 
 const DEFAULT_FRONTEND_URL = 'http://localhost:3100';
 const FRONTEND_URL = process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
@@ -38,6 +39,10 @@ let lastBrowserDiagnostics = null;
 let initialBrowserDiagnosticsPromise = null;
 
 app.setAppLogsPath();
+app.commandLine.appendSwitch(
+  'enable-features',
+  'NetworkService,NetworkServiceInProcess,UserAgentClientHint,AcceptCHFrame,GreaseUACH',
+);
 
 const MAIN_SESSION_KEY = 'persist:main';
 const DESKTOP_USER_AGENT =
@@ -47,11 +52,31 @@ const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS = { x: 0, y: 136, width: 1280, height: 720 };
 const NAV_STATE_CHANNEL = 'nav:state';
 const TAB_LIST_CHANNEL = 'browser:tabs';
+const HISTORY_CHANNEL = 'history:append';
+const DOWNLOAD_CHANNEL = 'downloads:update';
+const PERMISSION_PROMPT_CHANNEL = 'permissions:prompt';
+const PERMISSION_STATE_CHANNEL = 'permissions:state';
+const SETTINGS_CHANNEL = 'settings:state';
+const ACCEPT_LANGUAGE_HEADER = 'en-US,en;q=0.9';
+const UA_BRAND_HEADER = '"Chromium";v="129", "Not_A Brand";v="24", "Google Chrome";v="129"';
+const UA_PLATFORM = '"macOS"';
+const UA_FULL_VERSION = '"129.0.6668.90"';
+const CONTROLLED_PERMISSIONS = new Set(['camera', 'microphone', 'geolocation', 'notifications', 'clipboard-read']);
 
 const tabs = new Map();
 const tabOrder = [];
 let activeTabId = null;
 let browserContentBounds = { ...DEFAULT_BOUNDS };
+let browserDataStore = null;
+const pendingPermissionRequests = new Map();
+let runtimeSettings = null;
+
+const DEFAULT_SETTINGS = {
+  thirdPartyCookies: true,
+  searchMode: 'auto',
+  spellcheckLanguage: 'en-US',
+  proxy: { mode: 'system', host: '', port: '' },
+};
 
 function resolveFrontendUrl() {
   if (!app.isPackaged) {
@@ -102,6 +127,259 @@ function sendToRenderer(channel, payload) {
   }
 }
 
+function getMainSession() {
+  return session.fromPartition(MAIN_SESSION_KEY);
+}
+
+function normalizeSettings(candidate) {
+  const base = { ...DEFAULT_SETTINGS };
+  if (candidate && typeof candidate === 'object') {
+    if (typeof candidate.thirdPartyCookies === 'boolean') {
+      base.thirdPartyCookies = candidate.thirdPartyCookies;
+    }
+    if (candidate.searchMode === 'auto' || candidate.searchMode === 'query') {
+      base.searchMode = candidate.searchMode;
+    }
+    if (typeof candidate.spellcheckLanguage === 'string' && candidate.spellcheckLanguage.trim()) {
+      base.spellcheckLanguage = candidate.spellcheckLanguage.trim();
+    }
+    if (candidate.proxy && typeof candidate.proxy === 'object') {
+      const proxy = {
+        mode: candidate.proxy.mode === 'manual' ? 'manual' : 'system',
+        host: typeof candidate.proxy.host === 'string' ? candidate.proxy.host : '',
+        port: Number.isFinite(Number(candidate.proxy.port)) ? String(candidate.proxy.port) : '',
+      };
+      base.proxy = proxy;
+    }
+  }
+  return base;
+}
+
+function emitSettingsState() {
+  if (runtimeSettings) {
+    sendToRenderer(SETTINGS_CHANNEL, runtimeSettings);
+  }
+}
+
+function persistRuntimeSettings() {
+  if (browserDataStore && runtimeSettings) {
+    browserDataStore.setSetting('browser.settings', runtimeSettings);
+  }
+}
+
+async function applyProxySettings(sess, proxySettings) {
+  if (!sess || !proxySettings) {
+    return;
+  }
+  if (proxySettings.mode === 'manual') {
+    const host = (proxySettings.host || '').trim();
+    const portValue = Number(proxySettings.port);
+    if (host && Number.isFinite(portValue) && portValue > 0) {
+      const proxyRules = `${host}:${portValue}`;
+      try {
+        await sess.setProxy({ proxyRules });
+      } catch (error) {
+        console.warn('Failed to apply manual proxy settings', { error });
+      }
+      return;
+    }
+  }
+  try {
+    await sess.setProxy({ mode: 'system' });
+  } catch (error) {
+    console.warn('Failed to reset proxy settings', { error });
+  }
+}
+
+function applySpellcheckSettings(sess, language) {
+  if (!sess || !language) {
+    return;
+  }
+  try {
+    sess.setSpellCheckerLanguages([language]);
+  } catch (error) {
+    console.warn('Failed to apply spellcheck language', { error });
+  }
+}
+
+async function applyRuntimeSettingsToSession() {
+  const sess = getMainSession();
+  if (!sess || !runtimeSettings) {
+    return;
+  }
+  applySpellcheckSettings(sess, runtimeSettings.spellcheckLanguage);
+  await applyProxySettings(sess, runtimeSettings.proxy);
+}
+
+function loadRuntimeSettings() {
+  const stored = browserDataStore?.getSetting('browser.settings');
+  runtimeSettings = normalizeSettings(stored || null);
+  persistRuntimeSettings();
+  void applyRuntimeSettingsToSession();
+  emitSettingsState();
+}
+
+function mergeSettings(base, patch) {
+  const next = { ...base };
+  if (!patch || typeof patch !== 'object') {
+    return next;
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      next[key] = mergeSettings(base[key] ?? {}, value);
+    } else if (value !== undefined) {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+function updateRuntimeSettings(patch) {
+  const merged = mergeSettings(runtimeSettings ?? DEFAULT_SETTINGS, patch);
+  runtimeSettings = normalizeSettings(merged);
+  persistRuntimeSettings();
+  void applyRuntimeSettingsToSession();
+  emitSettingsState();
+}
+
+function canonicalizePermission(permission, details) {
+  if (permission === 'media') {
+    if (details?.mediaTypes?.includes('video')) {
+      return 'camera';
+    }
+    if (details?.mediaTypes?.includes('audio')) {
+      return 'microphone';
+    }
+  }
+  return permission;
+}
+
+function resolveOrigin(candidate) {
+  if (!candidate || typeof candidate !== 'string') {
+    return null;
+  }
+  try {
+    const url = new URL(candidate);
+    return url.origin;
+  } catch (error) {
+    return null;
+  }
+}
+
+function emitPermissionState(origin) {
+  if (!browserDataStore || !origin) {
+    return;
+  }
+  const entries = browserDataStore.listPermissions(origin);
+  sendToRenderer(PERMISSION_STATE_CHANNEL, { origin, permissions: entries });
+}
+
+function registerPermissionHandlers(sess) {
+  if (!sess) {
+    return;
+  }
+
+  sess.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
+    if (!runtimeSettings) {
+      return undefined;
+    }
+    if (permission === 'cookies') {
+      if (runtimeSettings.thirdPartyCookies) {
+        return true;
+      }
+      const embeddingOrigin = details?.embeddingOrigin || requestingOrigin;
+      if (!embeddingOrigin || embeddingOrigin === requestingOrigin) {
+        return true;
+      }
+      return false;
+    }
+    return undefined;
+  });
+
+  sess.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const canonical = canonicalizePermission(permission, details);
+    if (!CONTROLLED_PERMISSIONS.has(canonical)) {
+      callback(true);
+      return;
+    }
+
+    const requestingOrigin = resolveOrigin(details?.requestingUrl) || resolveOrigin(details?.securityOrigin);
+    const origin = requestingOrigin || resolveOrigin(wc?.getURL());
+    if (!origin) {
+      callback(false);
+      return;
+    }
+
+    const storedDecision = browserDataStore?.getPermission(origin, canonical);
+    if (storedDecision === 'allow') {
+      callback(true);
+      return;
+    }
+    if (storedDecision === 'deny') {
+      callback(false);
+      return;
+    }
+
+    const requestId = randomUUID();
+    const timeout = setTimeout(() => {
+      const pending = pendingPermissionRequests.get(requestId);
+      if (pending) {
+        pendingPermissionRequests.delete(requestId);
+        callback(false);
+      }
+    }, 30000);
+
+    pendingPermissionRequests.set(requestId, {
+      origin,
+      permission: canonical,
+      callback,
+      timeout,
+    });
+    sendToRenderer(PERMISSION_PROMPT_CHANNEL, {
+      id: requestId,
+      origin,
+      permission: canonical,
+    });
+  });
+}
+
+function settlePermissionRequest(requestId, decision, remember) {
+  const pending = pendingPermissionRequests.get(requestId);
+  if (!pending) {
+    return;
+  }
+  pendingPermissionRequests.delete(requestId);
+  clearTimeout(pending.timeout);
+
+  const allow = decision === 'allow';
+  try {
+    pending.callback(allow);
+  } catch (error) {
+    console.warn('Permission callback failed', { error });
+  }
+
+  if (remember && browserDataStore) {
+    browserDataStore.savePermission(pending.origin, pending.permission, allow ? 'allow' : 'deny');
+    emitPermissionState(pending.origin);
+  }
+}
+
+function clearStoredPermission(origin, permission) {
+  if (!browserDataStore || !origin || !permission) {
+    return;
+  }
+  browserDataStore.clearPermission(origin, permission);
+  emitPermissionState(origin);
+}
+
+function clearAllPermissionsForOrigin(origin) {
+  if (!browserDataStore || !origin) {
+    return;
+  }
+  browserDataStore.clearPermissionsForOrigin(origin);
+  emitPermissionState(origin);
+}
+
 function safeJson(response) {
   return response
     .json()
@@ -148,6 +426,45 @@ function emitNavState(tab) {
 
 function emitTabList() {
   sendToRenderer(TAB_LIST_CHANNEL, snapshotTabList());
+}
+
+function emitHistory(entry) {
+  sendToRenderer(HISTORY_CHANNEL, entry);
+}
+
+function emitDownload(entry) {
+  sendToRenderer(DOWNLOAD_CHANNEL, entry);
+}
+
+function recordNavigationEntry(tab, url, transition) {
+  if (!browserDataStore) {
+    return;
+  }
+  const entry = browserDataStore.recordNavigation({
+    url,
+    title: tab.title,
+    transition,
+    referrer: tab.lastReferrer,
+  });
+  tab.lastHistoryId = entry.id;
+  tab.pendingReferrer = null;
+  emitHistory({ ...entry, tabId: tab.id });
+}
+
+function updateHistoryTitle(tab) {
+  if (browserDataStore && tab.lastHistoryId) {
+    browserDataStore.updateHistoryTitle(tab.lastHistoryId, tab.title);
+  }
+}
+
+function emitDownloadById(downloadId) {
+  if (!browserDataStore) {
+    return;
+  }
+  const entry = browserDataStore.getDownload(downloadId);
+  if (entry) {
+    emitDownload(entry);
+  }
 }
 
 function sanitizeBounds(bounds) {
@@ -241,10 +558,16 @@ function handleTabLifecycle(tab) {
     return { action: 'deny' };
   });
 
-  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
+  wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
     if (!isMainFrame) return;
     tab.isLoading = true;
     tab.lastError = null;
+    const previousUrl = tab.lastUrl;
+    tab.lastReferrer = tab.pendingReferrer ?? (previousUrl && previousUrl !== url ? previousUrl : null);
+    tab.pendingReferrer = null;
+    if (isInPlace) {
+      tab.pendingTransition = 'in_page';
+    }
     tab.lastUrl = url;
     emitNavState(tab);
     emitTabList();
@@ -254,12 +577,21 @@ function handleTabLifecycle(tab) {
     tab.lastUrl = url;
     tab.isLoading = false;
     tab.lastError = null;
+    const transition = tab.pendingTransition && tab.pendingTransition !== 'auto' ? tab.pendingTransition : 'link';
+    recordNavigationEntry(tab, url, transition);
+    tab.pendingTransition = 'auto';
+    tab.lastReferrer = url;
     emitNavState(tab);
     emitTabList();
   });
 
-  wc.on('did-navigate-in-page', (_event, url) => {
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (!isMainFrame) {
+      return;
+    }
     tab.lastUrl = url;
+    recordNavigationEntry(tab, url, 'in_page');
+    tab.lastReferrer = url;
     emitNavState(tab);
     emitTabList();
   });
@@ -274,6 +606,7 @@ function handleTabLifecycle(tab) {
 
   wc.on('page-title-updated', (_event, title) => {
     tab.title = title || DEFAULT_TAB_TITLE;
+    updateHistoryTitle(tab);
     emitNavState(tab);
     emitTabList();
   });
@@ -293,6 +626,8 @@ function handleTabLifecycle(tab) {
       code: errorCode,
       description: errorDescription || 'Navigation failed',
     };
+    tab.pendingTransition = 'auto';
+    tab.pendingReferrer = null;
     emitNavState(tab);
     emitTabList();
   });
@@ -320,6 +655,10 @@ async function createBrowserTab(url, options = {}) {
     lastUrl: DEFAULT_TAB_URL,
     isLoading: false,
     lastError: null,
+    lastHistoryId: null,
+    lastReferrer: null,
+    pendingTransition: typeof options.transition === 'string' ? options.transition : 'typed',
+    pendingReferrer: null,
   };
 
   tabs.set(id, tab);
@@ -675,6 +1014,110 @@ ipcMain.handle('browser:close-tab', async (_event, payload = {}) => {
 
 ipcMain.handle('browser:request-tabs', async () => snapshotTabList());
 
+ipcMain.handle('history:list', async (_event, payload = {}) => {
+  if (!browserDataStore) {
+    return [];
+  }
+  const limit = Number.isFinite(Number(payload.limit)) ? Math.max(1, Math.min(Number(payload.limit), 500)) : 100;
+  return browserDataStore.getRecentHistory(limit).map((entry) => ({ ...entry }));
+});
+
+ipcMain.handle('downloads:list', async (_event, payload = {}) => {
+  if (!browserDataStore) {
+    return [];
+  }
+  const limit = Number.isFinite(Number(payload.limit)) ? Math.max(1, Math.min(Number(payload.limit), 200)) : 50;
+  return browserDataStore.listDownloads(limit);
+});
+
+ipcMain.handle('downloads:show-in-folder', async (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!browserDataStore || !id) {
+    return { ok: false };
+  }
+  const entry = browserDataStore.getDownload(id);
+  if (!entry || !entry.path) {
+    return { ok: false, missing: true };
+  }
+  try {
+    shell.showItemInFolder(entry.path);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('settings:get', async () => runtimeSettings ?? DEFAULT_SETTINGS);
+
+ipcMain.handle('settings:update', async (_event, patch = {}) => {
+  updateRuntimeSettings(patch);
+  return runtimeSettings;
+});
+
+ipcMain.handle('permissions:list', async (_event, payload = {}) => {
+  if (!browserDataStore) {
+    return [];
+  }
+  const origin = typeof payload.origin === 'string' ? payload.origin : '';
+  if (!origin) {
+    return [];
+  }
+  return browserDataStore.listPermissions(origin);
+});
+
+ipcMain.on('permissions:decision', (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!id) {
+    return;
+  }
+  const decision = payload.decision === 'allow' ? 'allow' : 'deny';
+  const remember = payload.remember !== false;
+  settlePermissionRequest(id, decision, remember);
+});
+
+ipcMain.handle('permissions:clear', async (_event, payload = {}) => {
+  const origin = typeof payload.origin === 'string' ? payload.origin : '';
+  const permission = typeof payload.permission === 'string' ? payload.permission : '';
+  clearStoredPermission(origin, permission);
+  return { ok: true };
+});
+
+ipcMain.handle('permissions:clear-origin', async (_event, payload = {}) => {
+  const origin = typeof payload.origin === 'string' ? payload.origin : '';
+  clearAllPermissionsForOrigin(origin);
+  return { ok: true };
+});
+
+ipcMain.handle('permissions:set', async (_event, payload = {}) => {
+  const origin = typeof payload.origin === 'string' ? payload.origin : '';
+  const permission = typeof payload.permission === 'string' ? payload.permission : '';
+  const setting = payload.setting === 'allow' ? 'allow' : payload.setting === 'deny' ? 'deny' : null;
+  if (!browserDataStore || !origin || !permission || !setting) {
+    return { ok: false };
+  }
+  browserDataStore.savePermission(origin, permission, setting);
+  emitPermissionState(origin);
+  return { ok: true };
+});
+
+ipcMain.handle('site:clear-data', async (_event, payload = {}) => {
+  const origin = typeof payload.origin === 'string' ? payload.origin : '';
+  if (!origin) {
+    return { ok: false };
+  }
+  try {
+    const sess = getMainSession();
+    if (!sess) {
+      return { ok: false };
+    }
+    await sess.clearStorageData({ origin });
+    return { ok: true };
+  } catch (error) {
+    console.warn('Failed to clear site data', { origin, error });
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 ipcMain.on('browser:set-active', (_event, tabId) => {
   if (typeof tabId === 'string' && tabId) {
     setActiveTab(tabId);
@@ -696,6 +1139,8 @@ ipcMain.on('nav:navigate', (_event, payload = {}) => {
   if (!tab) {
     return;
   }
+  tab.pendingTransition = typeof payload.transition === 'string' ? payload.transition : 'typed';
+  tab.pendingReferrer = tab.lastUrl;
   tab.isLoading = true;
   tab.lastError = null;
   tab.lastUrl = url;
@@ -718,6 +1163,8 @@ ipcMain.on('nav:back', (_event, payload = {}) => {
     return;
   }
   if (tab.view.webContents.canGoBack()) {
+    tab.pendingTransition = 'back_forward';
+    tab.pendingReferrer = tab.lastUrl;
     tab.view.webContents.goBack();
   }
   emitNavState(tab);
@@ -729,6 +1176,8 @@ ipcMain.on('nav:forward', (_event, payload = {}) => {
     return;
   }
   if (tab.view.webContents.canGoForward()) {
+    tab.pendingTransition = 'back_forward';
+    tab.pendingReferrer = tab.lastUrl;
     tab.view.webContents.goForward();
   }
   emitNavState(tab);
@@ -740,6 +1189,8 @@ ipcMain.on('nav:reload', (_event, payload = {}) => {
     return;
   }
   tab.isLoading = true;
+  tab.pendingTransition = 'reload';
+  tab.pendingReferrer = tab.lastUrl;
   try {
     if (payload.ignoreCache) {
       tab.view.webContents.reloadIgnoringCache();
@@ -768,9 +1219,21 @@ if (!app.requestSingleInstanceLock()) {
     app.whenReady().then(async () => {
       const mainSession = session.fromPartition(MAIN_SESSION_KEY);
 
+      if (!browserDataStore) {
+        browserDataStore = initializeBrowserData(app);
+        loadRuntimeSettings();
+      }
+
+      registerPermissionHandlers(mainSession);
+
       mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
         const headers = { ...details.requestHeaders };
         headers['User-Agent'] = DESKTOP_USER_AGENT;
+        headers['Accept-Language'] = ACCEPT_LANGUAGE_HEADER;
+        headers['Sec-CH-UA'] = UA_BRAND_HEADER;
+        headers['Sec-CH-UA-Mobile'] = '?0';
+        headers['Sec-CH-UA-Platform'] = UA_PLATFORM;
+        headers['Sec-CH-UA-Full-Version'] = UA_FULL_VERSION;
         callback({ requestHeaders: headers });
       });
 
@@ -782,6 +1245,56 @@ if (!app.requestSingleInstanceLock()) {
           ];
         }
         callback({ responseHeaders: headers });
+      });
+
+      mainSession.on('will-download', (_event, item) => {
+        if (!browserDataStore) {
+          return;
+        }
+        const downloadId = randomUUID();
+        const filename = item.getFilename();
+        const savePath = path.join(app.getPath('downloads'), filename);
+        try {
+          item.setSavePath(savePath);
+        } catch (error) {
+          console.warn('Failed to set download save path', { error });
+        }
+        const initialEntry = {
+          id: downloadId,
+          url: item.getURL(),
+          filename,
+          mime: item.getMimeType(),
+          bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+          bytesReceived: item.getReceivedBytes(),
+          path: savePath,
+          state: 'in_progress',
+          startedAt: Date.now(),
+          completedAt: null,
+        };
+        browserDataStore.recordDownload(initialEntry);
+        emitDownload(initialEntry);
+
+        item.on('updated', (_updateEvent, state) => {
+          browserDataStore.updateDownloadProgress(downloadId, {
+            bytesReceived: item.getReceivedBytes(),
+            bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+            state: state === 'interrupted' ? 'interrupted' : 'in_progress',
+            path: savePath,
+          });
+          emitDownloadById(downloadId);
+        });
+
+        item.once('done', (_doneEvent, state) => {
+          const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted';
+          browserDataStore.updateDownloadProgress(downloadId, {
+            bytesReceived: item.getReceivedBytes(),
+            bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+            state: finalState,
+            path: savePath,
+            completedAt: Date.now(),
+          });
+          emitDownloadById(downloadId);
+        });
       });
 
       const initialPromise = ensureInitialDiagnostics();
