@@ -30,8 +30,9 @@ function isShadowModeEnabled(win) {
 }
 
 function resolveBaseUrl() {
-  const defaultUrl = 'http://localhost:3100';
-  const envUrl = [process.env.APP_URL, process.env.ELECTRON_START_URL].find(
+  const packagedFallback = `file://${path.join(__dirname, 'index.html')}`;
+  const defaultUrl = app.isPackaged ? packagedFallback : 'http://localhost:3100';
+  const envUrl = [process.env.RENDERER_URL, process.env.APP_URL, process.env.ELECTRON_START_URL].find(
     (value) => typeof value === 'string' && value.trim().length > 0,
   );
   return envUrl ?? defaultUrl;

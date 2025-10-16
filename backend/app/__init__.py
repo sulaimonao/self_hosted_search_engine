@@ -116,7 +116,11 @@ def create_app() -> Flask:
     app.before_request(middleware_logging.before_request)
     app.after_request(middleware_logging.after_request)
 
-    CORS(app, resources={r"/api/*": {"origins": ["http://127.0.0.1:3100", "http://localhost:3100"]}})
+    CORS(
+        app,
+        resources={r"/*": {"origins": ["http://localhost:3100", "http://127.0.0.1:3100"]}},
+        supports_credentials=True,
+    )
 
     @app.before_request
     def _api_only_gate():
@@ -127,6 +131,10 @@ def create_app() -> Flask:
             jsonify({"error": "Not Found", "hint": "UI served from frontend at :3100"}),
             404,
         )
+
+    @app.get("/health")
+    def health() -> Response:
+        return jsonify({"ok": True}), 200
 
     @app.post("/api/dev/log")
     def dev_log() -> Response:

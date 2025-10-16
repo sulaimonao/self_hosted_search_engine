@@ -152,6 +152,14 @@ make stop || true
 BACKEND_PORT=5050 make dev
 ```
 
+### Desktop development
+
+- Run `npm run dev:desktop` to launch the Next.js dev server on `http://localhost:3100`, the Flask API on `tcp://127.0.0.1:5050`, and an Electron window pointed at the renderer URL. `wait-on` blocks Electron until both listeners are reachable, so the window never flashes a “cannot connect” page.
+- Each service runs in the foreground via `concurrently`, so stopping one component no longer tears the rest down. Use <kbd>Ctrl</kbd> + <kbd>C</kbd> in the relevant pane (or the terminal) when you really want to exit.
+- The Electron process reads `process.env.RENDERER_URL`; the dev script sets it to `http://localhost:3100` and falls back to the built `index.html` during packaging. Update `frontend/electron/main.js` if you move the renderer bundle.
+- The API now exposes `GET /health` (200) and enables CORS for both `http://localhost:3100` and `http://127.0.0.1:3100` with `supports_credentials=true`, matching what the Electron shell uses in development.
+- Change the API launch command or port by editing `dev:api` inside `frontend/package.json`; the desktop script will automatically wait for whatever listener you configure (defaults to `5050`).
+
 ### Run as Desktop App
 
 Electron support lets you work in a native window without opening Safari/Chrome.
@@ -168,9 +176,8 @@ npm run desktop
 > `DESKTOP_SKIP_BUILD_CHECK=1` if you need to bypass the guard temporarily.
 
 The `desktop` script boots the Flask API on port `5050`, the Next.js renderer on
-port `3100`, waits for the UI to become reachable, and then launches Electron
-with live reload (`electronmon`) enabled. Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to
-shut everything down.
+port `3100`, waits for the UI to become reachable, and then launches Electron.
+Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to shut everything down.
 
 ### System check & diagnostics
 
