@@ -4,10 +4,20 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { CopilotEvent } from "@/lib/events";
+import { resolveBrowserAPI, type BrowserNavError, type BrowserTabList } from "@/lib/browser-ipc";
 
 export type Panel = "localSearch" | "collections" | "chat" | "shadow" | "agentLog";
 
-type Tab = { id: string; title: string; url: string }; // minimal tab state, extend as needed
+type Tab = {
+  id: string;
+  title: string;
+  url: string;
+  favicon?: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  isLoading?: boolean;
+  error?: BrowserNavError | null;
+};
 
 type Notification = {
   key: string;
@@ -35,6 +45,7 @@ type AppState = {
   updateTab: (id: string, patch: Partial<Tab>) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
+  replaceTabs: (summary: BrowserTabList) => void;
   setMode: (mode: AppState["mode"]) => void;
   setShadow: (enabled: boolean) => void;
   openPanel: (panel?: Panel) => void;
@@ -51,10 +62,17 @@ function createId() {
   return Math.random().toString(36).slice(2);
 }
 
+const DEFAULT_TAB_TITLE = "Welcome";
+
 const DEFAULT_TAB: Tab = {
   id: "default",
-  title: "Welcome",
+  title: DEFAULT_TAB_TITLE,
   url: "https://wikipedia.org",
+  favicon: null,
+  canGoBack: false,
+  canGoForward: false,
+  isLoading: false,
+  error: null,
 };
 
 export const useAppStore = create<AppState>()(
@@ -73,8 +91,24 @@ export const useAppStore = create<AppState>()(
       },
 
       addTab: (url, title) => {
+        const api = resolveBrowserAPI();
+        if (api) {
+          void api
+            .createTab(url)
+            .catch((error) => console.warn("[browser] failed to create tab", error));
+          return url;
+        }
         const id = createId();
-        const next: Tab = { id, title: title ?? url, url };
+        const next: Tab = {
+          id,
+          title: title ?? url,
+          url,
+          favicon: null,
+          canGoBack: false,
+          canGoForward: false,
+          isLoading: false,
+          error: null,
+        };
         set((state) => ({
           tabs: [...state.tabs, next],
           activeTabId: id,
@@ -84,10 +118,22 @@ export const useAppStore = create<AppState>()(
 
       updateTab: (id, patch) =>
         set((state) => ({
-          tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)),
+          tabs: state.tabs.map((tab) =>
+            tab.id === id
+              ? {
+                  ...tab,
+                  ...patch,
+                }
+              : tab,
+          ),
         })),
 
-      closeTab: (id) =>
+      closeTab: (id) => {
+        const api = resolveBrowserAPI();
+        if (api) {
+          void api.closeTab(id).catch((error) => console.warn("[browser] failed to close tab", error));
+          return;
+        }
         set((state) => {
           if (state.tabs.length <= 1) {
             return state;
@@ -102,9 +148,42 @@ export const useAppStore = create<AppState>()(
             tabs: nextTabs,
             activeTabId: nextActive,
           };
-        }),
+        });
+      },
 
-      setActive: (id) => set({ activeTabId: id }),
+      setActive: (id) => {
+        const api = resolveBrowserAPI();
+        if (api) {
+          api.setActiveTab(id);
+        }
+        set({ activeTabId: id });
+      },
+
+      replaceTabs: (summary) =>
+        set((state) => {
+          if (!summary || !Array.isArray(summary.tabs)) {
+            return state;
+          }
+          const mapped: Tab[] = summary.tabs.map((tab) => ({
+            id: tab.tabId,
+            title: tab.title ?? tab.url ?? DEFAULT_TAB_TITLE,
+            url: tab.url,
+            favicon: tab.favicon ?? null,
+            canGoBack: tab.canGoBack,
+            canGoForward: tab.canGoForward,
+            isLoading: Boolean(tab.isLoading),
+            error: tab.error ?? null,
+          }));
+          const desiredActive = summary.activeTabId;
+          const nextActive =
+            mapped.find((tab) => tab.id === desiredActive)?.id ??
+            mapped[0]?.id ??
+            state.activeTabId;
+          return {
+            tabs: mapped.length > 0 ? mapped : state.tabs,
+            activeTabId: mapped.length > 0 ? nextActive : state.activeTabId,
+          };
+        }),
       setMode: (mode) => set({ mode }),
       setShadow: (enabled) => set({ shadowEnabled: enabled }),
       openPanel: (panel) => set({ panelOpen: panel }),

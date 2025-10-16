@@ -33,6 +33,10 @@ export function TabsBar() {
                 onClick={() => setActive(tab.id)}
                 title={tab.url}
               >
+                {tab.favicon ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={tab.favicon} alt="" className="h-3 w-3" />
+                ) : null}
                 <span className="max-w-[200px] truncate">{tab.title || tab.url || "New Tab"}</span>
                 {tabs.length > 1 ? (
                   <X

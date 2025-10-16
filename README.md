@@ -18,6 +18,7 @@ required.
 - [Initial setup](#initial-setup)
 - [Running the application](#running-the-application)
 - [Researcher browser & shadow mode](#researcher-browser--shadow-mode)
+- [Desktop browser mode](#desktop-browser-mode)
 - [Command quick reference](#command-quick-reference)
 - [Data & storage layout](#data--storage-layout)
 - [Testing & quality gates](#testing--quality-gates)
@@ -158,6 +159,26 @@ BACKEND_PORT=5050 make dev
 - Each service runs in the foreground via `concurrently`, so stopping one component no longer tears the rest down. Use <kbd>Ctrl</kbd> + <kbd>C</kbd> in the relevant pane (or the terminal) when you really want to exit.
 - The Electron process reads `process.env.RENDERER_URL`; the dev script sets it to `http://localhost:3100` and falls back to the built `index.html` during packaging. Update `frontend/electron/main.js` if you move the renderer bundle.
 - The API now exposes `GET /health` (200) and enables CORS for both `http://localhost:3100` and `http://127.0.0.1:3100` with `supports_credentials=true`, matching what the Electron shell uses in development.
+
+## Desktop browser mode
+
+The Electron shell now embeds a real Chromium `BrowserView` for every open tab. Navigation, address bar text, tab titles, favicons, and back/forward button state all mirror the active `BrowserView` via IPC—no more cross-origin iframe hacks. Cookies persist across restarts through the dedicated `persist:main` session, and outbound requests spoof a stable Chrome 129 user agent with hardened `navigator` properties to avoid Google/Cloudflare CAPTCHA loops.
+
+Key behaviour:
+
+- Every tab runs inside its own sandboxed `BrowserView`; the renderer simply listens for navigation updates and renders controls.
+- The address bar, tab strip, and keyboard shortcuts drive navigation through the preload bridge (`window.browserAPI`), delegating to Electron’s `webContents` APIs.
+- Back/forward buttons enable only when the active `BrowserView` can move, and favicons/titles refresh as soon as the page reports them.
+- Window resize events relay the updated viewport bounds back to the main process so the active `BrowserView` always fills the content area underneath the React chrome.
+- Any navigation failure surfaces an inline retry prompt that triggers a `webContents.reload({ ignoreCache: true })` from the renderer.
+
+To exercise the full desktop experience during development:
+
+```bash
+npm run dev:desktop
+```
+
+The command boots the API, Next.js renderer, and Electron shell with live reload. The Electron session reuses cookies between runs (`persist:main`), so CAPTCHA challenges solved once stay solved.
 - Change the API launch command or port by editing `dev:api` inside `frontend/package.json`; the desktop script will automatically wait for whatever listener you configure (defaults to `5050`).
 
 ### Run as Desktop App
