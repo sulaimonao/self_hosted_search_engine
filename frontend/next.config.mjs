@@ -29,4 +29,15 @@ const nextConfig = {
   ...baseConfig,
 };
 
+const configuredAssetPrefix =
+  process.env.ASSET_PREFIX ?? process.env.NEXT_PUBLIC_ASSET_PREFIX ?? process.env.NEXT_ASSET_PREFIX;
+
+if (configuredAssetPrefix && configuredAssetPrefix.trim().length > 0) {
+  if (process.env.NODE_ENV === 'production') {
+    nextConfig.assetPrefix = configuredAssetPrefix.trim();
+  } else {
+    nextConfig.assetPrefix = '';
+  }
+}
+
 export default nextConfig;

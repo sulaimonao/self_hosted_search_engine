@@ -9,6 +9,19 @@ const __dirname = path.dirname(__filename);
 const DEV_BROWSER_PATH = '/browser';
 const FRONTEND_WAIT_TIMEOUT_MS = Number(process.env.ELECTRON_WAIT_TIMEOUT_MS ?? '60000');
 
+const DEFAULT_DEV_SERVER_ORIGIN = (() => {
+  const fallbackHost = 'localhost';
+  const fallbackPort = '3100';
+  const host = typeof process.env.DEV_SERVER_HOST === 'string' && process.env.DEV_SERVER_HOST.trim().length > 0
+    ? process.env.DEV_SERVER_HOST.trim()
+    : fallbackHost;
+  const portCandidate = process.env.DEV_SERVER_PORT ?? fallbackPort;
+  const parsedPort = Number.parseInt(portCandidate, 10);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? String(parsedPort) : fallbackPort;
+  const protocol = process.env.DEV_SERVER_PROTOCOL?.trim().toLowerCase() === 'https' ? 'https' : 'http';
+  return `${protocol}://${host}:${port}`;
+})();
+
 const sharedWebPreferences = Object.freeze({
   preload: path.join(__dirname, 'preload.js'),
   contextIsolation: true,
@@ -31,7 +44,7 @@ function isShadowModeEnabled(win) {
 
 function resolveBaseUrl() {
   const packagedFallback = `file://${path.join(__dirname, 'index.html')}`;
-  const defaultUrl = app.isPackaged ? packagedFallback : 'http://localhost:3100';
+  const defaultUrl = app.isPackaged ? packagedFallback : DEFAULT_DEV_SERVER_ORIGIN;
   const envUrl = [process.env.RENDERER_URL, process.env.APP_URL, process.env.ELECTRON_START_URL].find(
     (value) => typeof value === 'string' && value.trim().length > 0,
   );

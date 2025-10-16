@@ -99,9 +99,21 @@ const { runBrowserDiagnostics }: {
   }) => Promise<BrowserDiagnosticsReport>;
 } = require('../scripts/diagnoseBrowser.js');
 
-const DEFAULT_FRONTEND_URL = 'http://localhost:3100';
+const DEFAULT_FRONTEND_ORIGIN = (() => {
+  const fallbackHost = 'localhost';
+  const fallbackPort = '3100';
+  const rawHost = process.env.FRONTEND_HOST;
+  const host =
+    typeof rawHost === 'string' && rawHost.trim().length > 0 ? rawHost.trim() : fallbackHost;
+  const rawPort = process.env.FRONTEND_PORT;
+  const parsedPort = rawPort ? Number.parseInt(rawPort, 10) : NaN;
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? String(parsedPort) : fallbackPort;
+  const protocol =
+    process.env.FRONTEND_PROTOCOL?.trim().toLowerCase() === 'https' ? 'https' : 'http';
+  return `${protocol}://${host}:${port}`;
+})();
 const DEFAULT_API_URL = 'http://127.0.0.1:5050';
-const FRONTEND_URL = process.env.APP_URL || process.env.FRONTEND_URL || DEFAULT_FRONTEND_URL;
+const FRONTEND_URL = process.env.APP_URL || process.env.FRONTEND_URL || DEFAULT_FRONTEND_ORIGIN;
 const API_BASE_URL = (() => {
   const explicit =
     process.env.API_URL || process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL;

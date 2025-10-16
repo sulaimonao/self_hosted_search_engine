@@ -1238,7 +1238,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         off();
       }
     };
-  }, [desktop]);
+  }, []);
 
   const refreshModels = useCallback(async () => {
     if (!backendHealthy) {

@@ -8,13 +8,14 @@
     "dev:api": "make api || cross-env PYTHONPATH=. BACKEND_PORT=5050 python3 -m backend.app",
     "dev:electron": "npm --prefix frontend run dev:electron",
     "dev:electron:wait": "npm --prefix frontend run dev:electron:wait",
-    "dev:desktop": "npm --prefix frontend run stop:web >/dev/null 2>&1 || true && RENDERER_PORT=$(npm --prefix frontend exec detect-port 3100) && DESKTOP_RENDERER_URL=http://127.0.0.1:$RENDERER_PORT concurrently -k --success=first --raw -n WEB,API,ELECTRON -c auto \"PORT=$RENDERER_PORT npm --prefix frontend run dev:web\" \"npm run dev:api\" \"RENDERER_PORT=$RENDERER_PORT DESKTOP_RENDERER_URL=$DESKTOP_RENDERER_URL npm --prefix frontend run dev:electron:wait\"",
+    "dev:desktop": "npm --prefix frontend run stop:web >/dev/null 2>&1 || true && DESKTOP_RENDERER_URL=http://localhost:3100 concurrently -k --success=first --raw -n WEB,API,ELECTRON -c auto \"npm run dev:web\" \"npm run dev:api\" \"npm --prefix frontend run dev:electron:wait\"",
     "stop": "pkill -f '[n]ext dev' || true; pkill -f '[e]lectron' || true; pkill -f 'backend\\.app' || true",
     "desktop": "node scripts/run-desktop.js",
     "build:web": "npm --prefix frontend run build:web && npm --prefix frontend exec next export || npm --prefix frontend run build:web",
     "build:desktop": "npm run build:web && electron-builder && open \"dist/mac/Personal Search Engine.app\"",
     "diagnose:browser": "electron scripts/diagnoseBrowser.js",
-    "diagnose:browser:fast": "DIAG_TIMEOUT=10000 electron scripts/diagnoseBrowser.js"
+    "diagnose:browser:fast": "DIAG_TIMEOUT=10000 electron scripts/diagnoseBrowser.js",
+    "lint": "npm --prefix frontend run lint"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
