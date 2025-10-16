@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { useAppStore } from "@/state/useAppStore";
+import { resolveBrowserAPI } from "@/lib/browser-ipc";
 
 export interface NavigateOptions {
   newTab?: boolean;
@@ -16,6 +17,7 @@ export function useBrowserNavigation() {
   const updateTab = useAppStore((state) => state.updateTab);
   const setActive = useAppStore((state) => state.setActive);
   const openPanel = useAppStore((state) => state.openPanel);
+  const browserAPI = useMemo(() => resolveBrowserAPI(), []);
 
   return useCallback(
     (url: string, options: NavigateOptions = {}): string | null => {
@@ -33,6 +35,17 @@ export function useBrowserNavigation() {
         openPanel(undefined);
       }
 
+      if (browserAPI) {
+        if (options.newTab || !activeTab) {
+          void browserAPI
+            .createTab(target)
+            .catch((error) => console.warn("[browser] failed to open tab", error));
+          return null;
+        }
+        browserAPI.navigate(target, { tabId: activeTab.id });
+        return activeTab.id;
+      }
+
       if (options.newTab || !activeTab) {
         const id = addTab(target, normalizedTitle ?? target);
         if (normalizedTitle) {
@@ -48,6 +61,6 @@ export function useBrowserNavigation() {
       });
       return activeTab.id;
     },
-    [activeTab, addTab, openPanel, setActive, updateTab],
+    [activeTab, addTab, browserAPI, openPanel, setActive, updateTab],
   );
 }

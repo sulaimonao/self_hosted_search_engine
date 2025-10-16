@@ -1,9 +1,20 @@
-import { app, BrowserWindow, session, ipcMain, Menu, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  BrowserView,
+  ipcMain,
+  Menu,
+  Rectangle,
+  session,
+  shell,
+  WebContents,
+} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import log from 'electron-log';
+import { randomUUID } from 'node:crypto';
 
 type BrowserDiagnosticsReport = Record<string, unknown> & {
   artifactPath?: string | null;
@@ -40,6 +51,45 @@ type ExportReportResult = {
   skipped?: boolean;
 };
 
+type BrowserNavError = {
+  code?: number;
+  description?: string;
+};
+
+type BrowserNavState = {
+  tabId: string;
+  url: string;
+  title?: string | null;
+  favicon?: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  isActive: boolean;
+  isLoading: boolean;
+  error?: BrowserNavError | null;
+};
+
+type BrowserTabList = {
+  tabs: BrowserNavState[];
+  activeTabId: string | null;
+};
+
+type BrowserTabRecord = {
+  id: string;
+  view: BrowserView;
+  title: string | null;
+  favicon?: string | null;
+  lastUrl: string;
+  isLoading: boolean;
+  lastError?: BrowserNavError | null;
+};
+
+type BrowserBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 const require = createRequire(import.meta.url);
 const { runBrowserDiagnostics }: {
   runBrowserDiagnostics: (options?: {
@@ -70,9 +120,25 @@ const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/
 const isDev = !app.isPackaged;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+app.setAppLogsPath();
+
+const MAIN_SESSION_KEY = 'persist:main';
+const DESKTOP_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.90 Safari/537.36';
+const DEFAULT_TAB_URL = 'https://wikipedia.org';
+const DEFAULT_TAB_TITLE = 'New Tab';
+const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
+const NAV_STATE_CHANNEL = 'nav:state';
+const TAB_LIST_CHANNEL = 'browser:tabs';
+
 let win: BrowserWindow | null = null;
 let lastSystemCheck: SystemCheckResult = null;
 let initialSystemCheckPromise: Promise<SystemCheckResult> | null = null;
+
+const tabs = new Map<string, BrowserTabRecord>();
+const tabOrder: string[] = [];
+let activeTabId: string | null = null;
+let browserContentBounds: Rectangle = { ...DEFAULT_BOUNDS };
 
 function resolveFrontendTarget(): string {
   if (isDev) {
@@ -103,9 +169,23 @@ function resolveDiagnosticsPath(): string {
 }
 
 function notifyRenderer(channel: SystemCheckChannel | 'desktop:shadow-toggle', payload?: unknown) {
+  const target = getMainWindow();
+  target?.webContents.send(channel, payload);
+}
+
+function getMainWindow(): BrowserWindow | null {
   if (win && !win.isDestroyed()) {
-    win.webContents.send(channel, payload);
+    return win;
   }
+  return null;
+}
+
+function sendToRenderer(channel: string, payload: unknown) {
+  const target = getMainWindow();
+  if (!target) {
+    return;
+  }
+  target.webContents.send(channel, payload);
 }
 
 async function safeJson<T = unknown>(response: Response): Promise<T | null> {
@@ -114,6 +194,322 @@ async function safeJson<T = unknown>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function getActiveTab(): BrowserTabRecord | undefined {
+  if (!activeTabId) {
+    return undefined;
+  }
+  return tabs.get(activeTabId);
+}
+
+function buildNavState(tab: BrowserTabRecord): BrowserNavState {
+  const wc = tab.view.webContents;
+  const currentUrl = wc.getURL() || tab.lastUrl || 'about:blank';
+  return {
+    tabId: tab.id,
+    url: currentUrl,
+    title: tab.title ?? null,
+    favicon: tab.favicon ?? null,
+    canGoBack: wc.canGoBack(),
+    canGoForward: wc.canGoForward(),
+    isActive: activeTabId === tab.id,
+    isLoading: tab.isLoading,
+    error: tab.lastError ?? null,
+  };
+}
+
+function emitNavState(tab: BrowserTabRecord) {
+  sendToRenderer(NAV_STATE_CHANNEL, buildNavState(tab));
+}
+
+function snapshotTabList(): BrowserTabList {
+  const list: BrowserNavState[] = [];
+  for (const id of tabOrder) {
+    const tab = tabs.get(id);
+    if (tab) {
+      list.push(buildNavState(tab));
+    }
+  }
+  return {
+    tabs: list,
+    activeTabId,
+  };
+}
+
+function emitTabList() {
+  sendToRenderer(TAB_LIST_CHANNEL, snapshotTabList());
+}
+
+function sanitizeBounds(bounds: BrowserBounds): Rectangle {
+  const safe: Rectangle = {
+    x: Number.isFinite(bounds.x) ? Math.max(0, Math.round(bounds.x)) : 0,
+    y: Number.isFinite(bounds.y) ? Math.max(0, Math.round(bounds.y)) : 0,
+    width: Number.isFinite(bounds.width) ? Math.max(0, Math.round(bounds.width)) : 0,
+    height: Number.isFinite(bounds.height) ? Math.max(0, Math.round(bounds.height)) : 0,
+  };
+
+  if ((safe.width === 0 || safe.height === 0) && getMainWindow()) {
+    const content = getMainWindow()!.getContentBounds();
+    if (safe.width === 0) {
+      safe.width = Math.max(0, content.width - safe.x);
+    }
+    if (safe.height === 0) {
+      safe.height = Math.max(0, content.height - safe.y);
+    }
+  }
+
+  if (safe.width === 0) {
+    safe.width = DEFAULT_BOUNDS.width;
+  }
+  if (safe.height === 0) {
+    safe.height = DEFAULT_BOUNDS.height;
+  }
+  return safe;
+}
+
+function applyBoundsToView(view: BrowserView) {
+  const bounds = browserContentBounds;
+  view.setBounds(bounds);
+  view.setAutoResize({ width: true, height: true });
+}
+
+function updateBrowserBounds(bounds: BrowserBounds) {
+  browserContentBounds = sanitizeBounds(bounds);
+  const active = getActiveTab();
+  if (active) {
+    applyBoundsToView(active.view);
+  }
+}
+
+function attachTab(tab: BrowserTabRecord) {
+  const target = getMainWindow();
+  if (!target) {
+    return;
+  }
+  try {
+    target.setBrowserView(tab.view);
+    applyBoundsToView(tab.view);
+    tab.view.webContents.focus();
+  } catch (error) {
+    log.warn('Failed to attach BrowserView', { tabId: tab.id, error });
+  }
+}
+
+function detachTab(tab: BrowserTabRecord) {
+  const target = getMainWindow();
+  if (!target) {
+    return;
+  }
+  try {
+    target.removeBrowserView(tab.view);
+  } catch (error) {
+    log.warn('Failed to detach BrowserView', { tabId: tab.id, error });
+  }
+}
+
+function setActiveTab(tabId: string) {
+  const next = tabs.get(tabId);
+  if (!next) {
+    return;
+  }
+
+  if (activeTabId === tabId) {
+    attachTab(next);
+    emitNavState(next);
+    emitTabList();
+    return;
+  }
+
+  const previous = getActiveTab();
+  if (previous) {
+    detachTab(previous);
+  }
+
+  activeTabId = tabId;
+  attachTab(next);
+  emitNavState(next);
+  emitTabList();
+}
+
+function ensureTabOrder(tabId: string) {
+  if (!tabOrder.includes(tabId)) {
+    tabOrder.push(tabId);
+  }
+}
+
+function resolveTabFromId(tabId: unknown): BrowserTabRecord | undefined {
+  if (typeof tabId === 'string' && tabId) {
+    return tabs.get(tabId);
+  }
+  return getActiveTab();
+}
+
+function handleTabLifecycle(tab: BrowserTabRecord) {
+  const { webContents: wc } = tab.view;
+
+  wc.setWindowOpenHandler(({ url }) => {
+    if (typeof url === 'string' && url.trim().length > 0) {
+      void createBrowserTab(url, { activate: true });
+    }
+    return { action: 'deny' };
+  });
+
+  wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
+    if (!isMainFrame) {
+      return;
+    }
+    tab.isLoading = true;
+    tab.lastError = null;
+    tab.lastUrl = url;
+    emitNavState(tab);
+    emitTabList();
+  });
+
+  wc.on('did-navigate', (_event, url) => {
+    tab.lastUrl = url;
+    tab.isLoading = false;
+    tab.lastError = null;
+    emitNavState(tab);
+    emitTabList();
+  });
+
+  wc.on('did-navigate-in-page', (_event, url) => {
+    tab.lastUrl = url;
+    emitNavState(tab);
+    emitTabList();
+  });
+
+  wc.on('did-stop-loading', () => {
+    if (tab.isLoading) {
+      tab.isLoading = false;
+      emitNavState(tab);
+      emitTabList();
+    }
+  });
+
+  wc.on('page-title-updated', (_event, title) => {
+    tab.title = title || DEFAULT_TAB_TITLE;
+    emitNavState(tab);
+    emitTabList();
+  });
+
+  wc.on('page-favicon-updated', (_event, favicons) => {
+    tab.favicon = Array.isArray(favicons) && favicons.length > 0 ? favicons[0] ?? null : null;
+    emitNavState(tab);
+    emitTabList();
+  });
+
+  wc.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) {
+      return;
+    }
+    tab.isLoading = false;
+    tab.lastError = {
+      code: errorCode,
+      description: errorDescription || 'Navigation failed',
+    };
+    emitNavState(tab);
+    emitTabList();
+  });
+}
+
+async function createBrowserTab(url?: string, options: { activate?: boolean } = {}): Promise<BrowserNavState> {
+  const id = randomUUID();
+  const view = new BrowserView({
+    webPreferences: {
+      partition: MAIN_SESSION_KEY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+
+  view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+
+  const tab: BrowserTabRecord = {
+    id,
+    view,
+    title: DEFAULT_TAB_TITLE,
+    favicon: null,
+    lastUrl: DEFAULT_TAB_URL,
+    isLoading: false,
+    lastError: null,
+  };
+
+  tabs.set(id, tab);
+  ensureTabOrder(id);
+  handleTabLifecycle(tab);
+
+  if (options.activate !== false) {
+    setActiveTab(id);
+  }
+
+  const targetUrl = typeof url === 'string' && url.trim().length > 0 ? url.trim() : DEFAULT_TAB_URL;
+  tab.lastUrl = targetUrl;
+  tab.isLoading = true;
+  emitNavState(tab);
+  emitTabList();
+
+  try {
+    await view.webContents.loadURL(targetUrl);
+  } catch (error) {
+    log.warn('Failed to load tab URL', { url: targetUrl, error });
+    tab.isLoading = false;
+    tab.lastError = {
+      description: error instanceof Error ? error.message : String(error),
+    };
+    emitNavState(tab);
+  }
+
+  return buildNavState(tab);
+}
+
+function closeBrowserTab(tabId: string): boolean {
+  const tab = tabs.get(tabId);
+  if (!tab) {
+    return false;
+  }
+
+  const index = tabOrder.indexOf(tabId);
+  if (index >= 0) {
+    tabOrder.splice(index, 1);
+  }
+
+  const wasActive = activeTabId === tabId;
+  if (wasActive) {
+    detachTab(tab);
+  }
+
+  tabs.delete(tabId);
+
+  try {
+    if (!tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.removeAllListeners();
+      tab.view.webContents.stop();
+    }
+  } catch (error) {
+    log.warn('Failed to destroy BrowserView webContents', { tabId, error });
+  }
+
+  if (wasActive) {
+    activeTabId = null;
+    const fallbackId = tabOrder[index] ?? tabOrder[index - 1] ?? tabOrder[0] ?? null;
+    if (fallbackId) {
+      setActiveTab(fallbackId);
+    }
+  }
+
+  if (tabOrder.length === 0) {
+    void createBrowserTab(DEFAULT_TAB_URL, { activate: true }).catch((error) => {
+      log.error('Failed to create fallback tab', error);
+    });
+  } else {
+    emitTabList();
+  }
+
+  return true;
 }
 
 async function runBrowserSystemCheck(options: SystemCheckRunOptions = {}): Promise<SystemCheckResult> {
@@ -235,14 +631,17 @@ function buildApplicationMenu() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1300,
+    width: 1366,
     height: 900,
     show: false,
+    title: 'Personal Search Engine',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      partition: MAIN_SESSION_KEY,
     },
   });
 
@@ -250,9 +649,16 @@ function createWindow() {
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
-      shell.openExternal(url);
+      void createBrowserTab(url, { activate: true });
     }
     return { action: 'deny' };
+  });
+
+  win.on('resize', () => {
+    const active = getActiveTab();
+    if (active) {
+      applyBoundsToView(active.view);
+    }
   });
 
   const target = resolveFrontendTarget();
@@ -263,12 +669,33 @@ function createWindow() {
     });
 
   win.on('closed', () => {
+    for (const [tabId, tab] of tabs) {
+      try {
+        if (!tab.view.webContents.isDestroyed()) {
+          tab.view.webContents.removeAllListeners();
+          tab.view.webContents.stop();
+        }
+      } catch (error) {
+        log.warn('Failed to clean up tab during window close', { tabId, error });
+      }
+    }
+    tabs.clear();
+    tabOrder.splice(0, tabOrder.length);
+    activeTabId = null;
     win = null;
   });
 }
 
 app.whenReady().then(async () => {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  const mainSession = session.fromPartition(MAIN_SESSION_KEY);
+
+  mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    headers['User-Agent'] = DESKTOP_USER_AGENT;
+    callback({ requestHeaders: headers });
+  });
+
+  mainSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders || {};
     if (isDev) {
       headers['Content-Security-Policy'] = [
@@ -280,6 +707,10 @@ app.whenReady().then(async () => {
 
   buildApplicationMenu();
   createWindow();
+  browserContentBounds = sanitizeBounds(browserContentBounds);
+  if (!tabs.size) {
+    await createBrowserTab(DEFAULT_TAB_URL, { activate: true });
+  }
 
   const initialCheck = ensureInitialSystemCheck();
   initialCheck
@@ -330,6 +761,94 @@ ipcMain.handle('shadow:capture', async (_evt, payload) => {
     log.error('shadow:capture failed', error);
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+});
+
+ipcMain.handle('browser:create-tab', async (_event, payload: { url?: string } | undefined) => {
+  const url = typeof payload?.url === 'string' ? payload.url : undefined;
+  return createBrowserTab(url, { activate: true });
+});
+
+ipcMain.handle('browser:close-tab', async (_event, payload: { tabId?: string } | undefined) => {
+  const tabId = typeof payload?.tabId === 'string' ? payload.tabId : '';
+  return { ok: tabId ? closeBrowserTab(tabId) : false };
+});
+
+ipcMain.handle('browser:request-tabs', async () => snapshotTabList());
+
+ipcMain.on('browser:set-active', (_event, tabId: unknown) => {
+  if (typeof tabId === 'string' && tabId) {
+    setActiveTab(tabId);
+  }
+});
+
+ipcMain.on('browser:bounds', (_event, bounds: BrowserBounds) => {
+  if (bounds && typeof bounds === 'object') {
+    updateBrowserBounds(bounds);
+  }
+});
+
+ipcMain.on('nav:navigate', (_event, payload: { url?: string; tabId?: string | null } | undefined) => {
+  const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
+  if (!url) {
+    return;
+  }
+  const tab = resolveTabFromId(payload?.tabId ?? null);
+  if (!tab) {
+    return;
+  }
+  tab.isLoading = true;
+  tab.lastError = null;
+  tab.lastUrl = url;
+  emitNavState(tab);
+  void tab.view.webContents.loadURL(url).catch((error) => {
+    log.warn('Failed to navigate tab', { tabId: tab.id, url, error });
+    tab.isLoading = false;
+    tab.lastError = {
+      description: error instanceof Error ? error.message : String(error),
+    };
+    emitNavState(tab);
+  });
+});
+
+ipcMain.on('nav:back', (_event, payload: { tabId?: string | null } | undefined) => {
+  const tab = resolveTabFromId(payload?.tabId ?? null);
+  if (!tab) {
+    return;
+  }
+  if (tab.view.webContents.canGoBack()) {
+    tab.view.webContents.goBack();
+  }
+  emitNavState(tab);
+});
+
+ipcMain.on('nav:forward', (_event, payload: { tabId?: string | null } | undefined) => {
+  const tab = resolveTabFromId(payload?.tabId ?? null);
+  if (!tab) {
+    return;
+  }
+  if (tab.view.webContents.canGoForward()) {
+    tab.view.webContents.goForward();
+  }
+  emitNavState(tab);
+});
+
+ipcMain.on('nav:reload', (_event, payload: { tabId?: string | null; ignoreCache?: boolean } | undefined) => {
+  const tab = resolveTabFromId(payload?.tabId ?? null);
+  if (!tab) {
+    return;
+  }
+  tab.isLoading = true;
+  try {
+    if (payload?.ignoreCache) {
+      tab.view.webContents.reloadIgnoringCache();
+    } else {
+      tab.view.webContents.reload();
+    }
+  } catch (error) {
+    log.warn('Failed to reload tab', { tabId: tab.id, error });
+    tab.isLoading = false;
+  }
+  emitNavState(tab);
 });
 
 ipcMain.handle('index:search', async (_evt, query: string) => {

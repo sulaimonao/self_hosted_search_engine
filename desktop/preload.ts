@@ -1,5 +1,48 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+type BrowserNavError = {
+  code?: number;
+  description?: string;
+};
+
+type BrowserNavState = {
+  tabId: string;
+  url: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  title?: string | null;
+  favicon?: string | null;
+  isActive: boolean;
+  isLoading?: boolean;
+  error?: BrowserNavError | null;
+};
+
+type BrowserTabList = {
+  tabs: BrowserNavState[];
+  activeTabId: string | null;
+};
+
+type BrowserBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type BrowserAPI = {
+  navigate: (url: string, options?: { tabId?: string }) => void;
+  goBack: (options?: { tabId?: string }) => void;
+  goForward: (options?: { tabId?: string }) => void;
+  reload: (options?: { tabId?: string; ignoreCache?: boolean }) => void;
+  createTab: (url?: string) => Promise<BrowserNavState>;
+  closeTab: (tabId: string) => Promise<{ ok: boolean }>;
+  setActiveTab: (tabId: string) => void;
+  setBounds: (bounds: BrowserBounds) => void;
+  onNavState: (handler: (state: BrowserNavState) => void) => Unsubscribe;
+  onTabList: (handler: (summary: BrowserTabList) => void) => Unsubscribe;
+  requestTabList: () => Promise<BrowserTabList>;
+};
+
 type DesktopSystemCheckChannel =
   | 'system-check:open-panel'
   | 'system-check:initial-report'
@@ -67,6 +110,71 @@ declare global {
   interface Window {
     desktop?: DesktopBridge;
     DesktopBridge?: DesktopBridge;
+    browserAPI?: BrowserAPI;
+  }
+}
+
+function spoofNavigator(): void {
+  try {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.webdriver', error);
+  }
+
+  try {
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.languages', error);
+  }
+
+  try {
+    class FakePluginArray extends Array<{
+      name: string;
+      filename: string;
+      description: string;
+    }> {
+      item(index: number) {
+        return this[index] ?? null;
+      }
+
+      namedItem(name: string) {
+        return this.find((plugin) => plugin.name === name) ?? null;
+      }
+
+      refresh() {
+        // no-op
+      }
+    }
+
+    const fakePlugins = new FakePluginArray(
+      {
+        name: 'Chrome PDF Viewer',
+        filename: 'internal-pdf-viewer',
+        description: 'Portable Document Format',
+      },
+      {
+        name: 'Chromium PDF Viewer',
+        filename: 'internal-pdf-viewer',
+        description: 'Portable Document Format',
+      },
+      {
+        name: 'Microsoft Edge PDF Viewer',
+        filename: 'internal-pdf-viewer',
+        description: 'Portable Document Format',
+      },
+    );
+
+    Object.freeze(fakePlugins);
+
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => fakePlugins,
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.plugins', error);
   }
 }
 
@@ -80,6 +188,8 @@ const ALLOWED_EVENTS = new Set<DesktopSystemCheckChannel>([
 ]);
 
 const noop: Unsubscribe = () => undefined;
+
+const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs']);
 
 function subscribe(channel: DesktopSystemCheckChannel, handler: SystemCheckHandler): Unsubscribe {
   if (!ALLOWED_EVENTS.has(channel) || typeof handler !== 'function') {
@@ -96,6 +206,78 @@ function subscribe(channel: DesktopSystemCheckChannel, handler: SystemCheckHandl
   return () => {
     ipcRenderer.removeListener(channel, listener);
   };
+}
+
+function subscribeBrowserChannel<T>(channel: string, handler: (payload: T) => void): Unsubscribe {
+  if (!BROWSER_ALLOWED_CHANNELS.has(channel) || typeof handler !== 'function') {
+    return noop;
+  }
+  const listener = (_event: Electron.IpcRendererEvent, payload: T) => {
+    try {
+      handler(payload);
+    } catch (error) {
+      console.warn(`[desktop] browser channel handler threw for ${channel}`, error);
+    }
+  };
+  ipcRenderer.on(channel, listener);
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+}
+
+function createBrowserAPI(): BrowserAPI {
+  const api: BrowserAPI = {
+    navigate: (url, options) => {
+      const target = typeof url === 'string' ? url.trim() : '';
+      if (!target) {
+        return;
+      }
+      ipcRenderer.send('nav:navigate', {
+        url: target,
+        tabId: options?.tabId ?? null,
+      });
+    },
+    goBack: (options) => {
+      ipcRenderer.send('nav:back', {
+        tabId: options?.tabId ?? null,
+      });
+    },
+    goForward: (options) => {
+      ipcRenderer.send('nav:forward', {
+        tabId: options?.tabId ?? null,
+      });
+    },
+    reload: (options) => {
+      ipcRenderer.send('nav:reload', {
+        tabId: options?.tabId ?? null,
+        ignoreCache: options?.ignoreCache ?? false,
+      });
+    },
+    createTab: (url) => ipcRenderer.invoke('browser:create-tab', { url }),
+    closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', { tabId }),
+    setActiveTab: (tabId) => {
+      if (typeof tabId === 'string' && tabId) {
+        ipcRenderer.send('browser:set-active', tabId);
+      }
+    },
+    setBounds: (bounds) => {
+      if (!bounds || typeof bounds !== 'object') {
+        return;
+      }
+      const payload: BrowserBounds = {
+        x: Number.isFinite(bounds.x) ? Number(bounds.x) : 0,
+        y: Number.isFinite(bounds.y) ? Number(bounds.y) : 0,
+        width: Number.isFinite(bounds.width) ? Number(bounds.width) : 0,
+        height: Number.isFinite(bounds.height) ? Number(bounds.height) : 0,
+      };
+      ipcRenderer.send('browser:bounds', payload);
+    },
+    onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
+    onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
+    requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+  };
+
+  return api;
 }
 
 function exposeBridge() {
@@ -135,4 +317,11 @@ function exposeBridge() {
   contextBridge.exposeInMainWorld('DesktopBridge', bridge);
 }
 
+function exposeBrowserAPI() {
+  const api = createBrowserAPI();
+  contextBridge.exposeInMainWorld('browserAPI', api);
+}
+
+spoofNavigator();
 exposeBridge();
+exposeBrowserAPI();

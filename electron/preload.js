@@ -9,20 +9,144 @@ const ALLOWED_EVENTS = new Set([
   'system-check:skipped',
 ]);
 
+const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs']);
+
 const NOOP_UNSUBSCRIBE = () => {};
 
 function subscribe(channel, handler) {
   if (!ALLOWED_EVENTS.has(channel) || typeof handler !== 'function') {
-    return () => {};
+    return NOOP_UNSUBSCRIBE;
   }
   const listener = (_event, payload) => {
-    handler(payload);
+    try {
+      handler(payload);
+    } catch (error) {
+      console.warn('[desktop] system check handler threw', error);
+    }
   };
   ipcRenderer.on(channel, listener);
   return () => {
     ipcRenderer.removeListener(channel, listener);
   };
 }
+
+function subscribeBrowserChannel(channel, handler) {
+  if (!BROWSER_ALLOWED_CHANNELS.has(channel) || typeof handler !== 'function') {
+    return NOOP_UNSUBSCRIBE;
+  }
+  const listener = (_event, payload) => {
+    try {
+      handler(payload);
+    } catch (error) {
+      console.warn(`[desktop] browser channel handler threw for ${channel}`, error);
+    }
+  };
+  ipcRenderer.on(channel, listener);
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+}
+
+function spoofNavigator() {
+  try {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.webdriver', error);
+  }
+
+  try {
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.languages', error);
+  }
+
+  try {
+    class FakePluginArray extends Array {
+      item(index) {
+        return this[index] ?? null;
+      }
+
+      namedItem(name) {
+        return this.find((plugin) => plugin && plugin.name === name) ?? null;
+      }
+
+      refresh() {}
+    }
+
+    const fakePlugins = new FakePluginArray(
+      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+    );
+
+    Object.freeze(fakePlugins);
+
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => fakePlugins,
+    });
+  } catch (error) {
+    console.warn('[preload] failed to patch navigator.plugins', error);
+  }
+}
+
+function createBrowserAPI() {
+  return {
+    navigate: (url, options) => {
+      const target = typeof url === 'string' ? url.trim() : '';
+      if (!target) {
+        return;
+      }
+      ipcRenderer.send('nav:navigate', {
+        url: target,
+        tabId: options?.tabId ?? null,
+      });
+    },
+    goBack: (options) => {
+      ipcRenderer.send('nav:back', {
+        tabId: options?.tabId ?? null,
+      });
+    },
+    goForward: (options) => {
+      ipcRenderer.send('nav:forward', {
+        tabId: options?.tabId ?? null,
+      });
+    },
+    reload: (options) => {
+      ipcRenderer.send('nav:reload', {
+        tabId: options?.tabId ?? null,
+        ignoreCache: options?.ignoreCache ?? false,
+      });
+    },
+    createTab: (url) => ipcRenderer.invoke('browser:create-tab', { url }),
+    closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', { tabId }),
+    setActiveTab: (tabId) => {
+      if (typeof tabId === 'string' && tabId) {
+        ipcRenderer.send('browser:set-active', tabId);
+      }
+    },
+    setBounds: (bounds) => {
+      if (!bounds || typeof bounds !== 'object') {
+        return;
+      }
+      const payload = {
+        x: Number.isFinite(bounds.x) ? Number(bounds.x) : 0,
+        y: Number.isFinite(bounds.y) ? Number(bounds.y) : 0,
+        width: Number.isFinite(bounds.width) ? Number(bounds.width) : 0,
+        height: Number.isFinite(bounds.height) ? Number(bounds.height) : 0,
+      };
+      ipcRenderer.send('browser:bounds', payload);
+    },
+    onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
+    onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
+    requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+  };
+}
+
+spoofNavigator();
 
 contextBridge.exposeInMainWorld('desktop', {
   runSystemCheck: (options) => ipcRenderer.invoke('system-check:run', options ?? {}),
@@ -52,3 +176,5 @@ contextBridge.exposeInMainWorld('desktop', {
     }
   },
 });
+
+contextBridge.exposeInMainWorld('browserAPI', createBrowserAPI());

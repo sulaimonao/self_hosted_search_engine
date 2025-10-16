@@ -8,7 +8,8 @@
     "dev": "concurrently -k -n WEB,ELC \"bash -lc 'cd .. && make dev'\" \"wait-on tcp:3100 && wait-on tcp:5050 && cross-env APP_URL=http://localhost:3100 electron .\"",
     "start": "cross-env APP_URL=http://localhost:3100 electron .",
     "build": "tsc -p tsconfig.json && electron-builder -c ./electron-builder.yml",
-    "pack": "tsc -p tsconfig.json && electron-builder --dir -c ./electron-builder.yml"
+    "pack": "tsc -p tsconfig.json && electron-builder --dir -c ./electron-builder.yml",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
@@ -17,6 +18,7 @@
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
     "typescript": "^5.6.3",
+    "vitest": "^1.6.0",
     "wait-on": "^8.0.1"
   },
   "dependencies": {

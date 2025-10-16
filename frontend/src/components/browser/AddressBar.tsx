@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/state/useAppStore";
+import { resolveBrowserAPI } from "@/lib/browser-ipc";
 
 function normalizeInput(value: string): string {
   const trimmed = value.trim();
@@ -27,6 +28,7 @@ export function AddressBar() {
   const activeTab = useAppStore((state) => state.activeTab?.());
   const updateTab = useAppStore((state) => state.updateTab);
   const [value, setValue] = useState(activeTab?.url ?? "");
+  const browserAPI = useMemo(() => resolveBrowserAPI(), []);
 
   useEffect(() => {
     setValue(activeTab?.url ?? "");
@@ -39,7 +41,11 @@ export function AddressBar() {
         event.preventDefault();
         if (!activeTab) return;
         const nextUrl = normalizeInput(value);
-        updateTab(activeTab.id, { url: nextUrl, title: value.trim() || nextUrl });
+        if (browserAPI) {
+          browserAPI.navigate(nextUrl, { tabId: activeTab.id });
+        } else {
+          updateTab(activeTab.id, { url: nextUrl, title: value.trim() || nextUrl });
+        }
       }}
     >
       <Input
