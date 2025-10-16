@@ -5,6 +5,19 @@
 const API_BASE =
   (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:5050").replace(/\/$/, "") ||
   "http://127.0.0.1:5050";
+const RENDERER_URL = (() => {
+  const fallback = "http://127.0.0.1:3100";
+  const raw = process.env.DESKTOP_RENDERER_URL;
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const normalized = new URL(raw);
+    return normalized.toString().replace(/\/$/, "");
+  } catch {
+    return fallback;
+  }
+})();
 const EMBEDDING_DEFAULT = ["embeddinggemma"];
 const CHAT_DEFAULT = ["gemma:2b"];
 
@@ -49,6 +62,27 @@ async function fetchJson(path, init) {
     );
   }
   return response.json();
+}
+
+async function ensureRendererReady() {
+  const target = `${RENDERER_URL.replace(/\/$/, "")}/api/__meta`;
+  try {
+    const response = await fetch(target, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`Renderer meta check failed (${response.status})`);
+    }
+    const payload = await response.json();
+    if (!payload?.ok || typeof payload.bootId !== "string") {
+      throw new Error("Renderer meta payload invalid");
+    }
+    log(`Renderer ready (bootId=${payload.bootId}, pid=${payload.pid ?? "unknown"}).`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Renderer validation failed: ${message}`);
+  }
 }
 
 async function ensureHealth() {
@@ -155,7 +189,8 @@ async function ensureChatReady(initialCaps) {
 }
 
 async function main() {
-  log(`Preflight starting against ${API_BASE}`);
+  log(`Preflight starting against renderer=${RENDERER_URL} api=${API_BASE}`);
+  await ensureRendererReady();
   await ensureHealth();
 
   let caps = await getCapabilities();
