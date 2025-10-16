@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+from contextlib import suppress
 import secrets
 import threading
 import time
@@ -145,28 +146,57 @@ class AgentBrowserManager:
         self._max_retries = max(0, int(max_retries))
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=headless)
+        self._closed = False
+        self._atexit_registered = False
+        self._register_atexit()
+
+    def _register_atexit(self) -> None:
+        if self._atexit_registered:
+            return
         atexit.register(self.close)
+        self._atexit_registered = True
+
+    def _safe_close_browser(self, browser: Any | None, *, timeout: float = 2.0) -> None:
+        if browser is None:
+            return
+
+        done = threading.Event()
+
+        def _close() -> None:
+            with suppress(Exception, KeyboardInterrupt):
+                browser.close()
+            done.set()
+
+        thread = threading.Thread(target=_close, name="AgentBrowserClose", daemon=True)
+        thread.start()
+        done.wait(max(0.0, float(timeout)))
 
     def close(self) -> None:
-        with self._lock:
-            sessions = list(self._sessions.items())
-            self._sessions.clear()
-            browser = getattr(self, "_browser", None)
-            playwright = getattr(self, "_playwright", None)
-        for _sid, session in sessions:
-            session.close()
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
-            self._browser = None
+        try:
+            with self._lock:
+                if getattr(self, "_closed", False):
+                    return
+                self._closed = True
+                sessions = list(self._sessions.values())
+                self._sessions.clear()
+                browser = getattr(self, "_browser", None)
+                playwright = getattr(self, "_playwright", None)
+                self._browser = None
+                self._playwright = None
+        except KeyboardInterrupt:
+            return
+        except Exception:
+            return
+
+        for session in sessions:
+            with suppress(Exception, KeyboardInterrupt):
+                session.close()
+
+        self._safe_close_browser(browser)
+
         if playwright is not None:
-            try:
+            with suppress(Exception, KeyboardInterrupt):
                 playwright.stop()
-            except Exception:
-                pass
-            self._playwright = None
 
     def start_session(self) -> str:
         session_id = secrets.token_hex(8)
