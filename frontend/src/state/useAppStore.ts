@@ -31,7 +31,7 @@ type AppState = {
 
   activeTab?: () => Tab | undefined;
 
-  addTab: (url: string) => void;
+  addTab: (url: string, title?: string) => string;
   updateTab: (id: string, patch: Partial<Tab>) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
@@ -72,15 +72,15 @@ export const useAppStore = create<AppState>()(
         return state.tabs.find((tab) => tab.id === targetId);
       },
 
-      addTab: (url) =>
-        set((state) => {
-          const id = createId();
-          const next: Tab = { id, title: url, url };
-          return {
-            tabs: [...state.tabs, next],
-            activeTabId: id,
-          };
-        }),
+      addTab: (url, title) => {
+        const id = createId();
+        const next: Tab = { id, title: title ?? url, url };
+        set((state) => ({
+          tabs: [...state.tabs, next],
+          activeTabId: id,
+        }));
+        return id;
+      },
 
       updateTab: (id, patch) =>
         set((state) => ({

@@ -1,34 +1,422 @@
 "use client";
 
-import { useState } from "react";
+import { Loader2, StopCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
+import { ChatMessageMarkdown } from "@/components/chat-message";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
+import { ChatRequestError, sendChat } from "@/lib/api";
+import type { ChatMessage } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+type Banner = { intent: "info" | "error"; text: string };
+
+function createId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2);
+}
+
+function formatTimestamp(value: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  try {
+    return date.toLocaleTimeString();
+  } catch {
+    return "";
+  }
+}
+
+function isHttpUrl(candidate: string | null | undefined) {
+  if (!candidate) return false;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function formatCitationLabel(value: string) {
+  if (!isHttpUrl(value)) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    return url.hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+}
+
+const INITIAL_ASSISTANT_GREETING =
+  "Welcome! Paste a URL or ask me to search. I only crawl when you approve each step.";
 
 export function ChatPanel() {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [
+    {
+      id: createId(),
+      role: "assistant",
+      content: INITIAL_ASSISTANT_GREETING,
+      createdAt: new Date().toISOString(),
+    },
+  ]);
   const [input, setInput] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+  const [banner, setBanner] = useState<Banner | null>(null);
+
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  const abortRef = useRef<AbortController | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  const navigate = useBrowserNavigation();
+
+  const clientTimezone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, isBusy]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const updateMessage = useCallback((id: string, updater: (message: ChatMessage) => ChatMessage) => {
+    setMessages((prev) => prev.map((message) => (message.id === id ? updater(message) : message)));
+  }, []);
+
+  const handleLinkNavigation = useCallback(
+    (url: string, event?: MouseEvent<HTMLAnchorElement>) => {
+      const newTab = Boolean(event?.metaKey || event?.ctrlKey || event?.shiftKey);
+      navigate(url, { newTab });
+    },
+    [navigate],
+  );
+
+  const handleCitationClick = useCallback(
+    (url: string, event: React.MouseEvent<HTMLButtonElement>) => {
+      const newTab = event.metaKey || event.ctrlKey || event.shiftKey;
+      if (isHttpUrl(url)) {
+        navigate(url, { newTab });
+      }
+    },
+    [navigate],
+  );
+
+  const handleSend = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isBusy) {
+      if (!trimmed) {
+        setInput("");
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsBusy(true);
+    setBanner(null);
+
+    const historySnapshot = [...messagesRef.current];
+    const createdAt = new Date().toISOString();
+
+    const userMessage: ChatMessage = {
+      id: createId(),
+      role: "user",
+      content: trimmed,
+      createdAt,
+    };
+    const assistantId = createId();
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      createdAt,
+      streaming: true,
+      citations: [],
+    };
+
+    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    setInput("");
+
+    let streamedModel: string | null = null;
+    let streamedTrace: string | null = null;
+
+    try {
+      const result = await sendChat(historySnapshot, trimmed, {
+        signal: controller.signal,
+        clientTimezone,
+        onStreamEvent: (event) => {
+          if (event.type === "metadata") {
+            streamedModel = event.model ?? streamedModel;
+            streamedTrace = event.trace_id ?? streamedTrace;
+            updateMessage(assistantId, (message) => ({
+              ...message,
+              model: streamedModel ?? message.model ?? null,
+              traceId: streamedTrace ?? message.traceId ?? null,
+            }));
+          } else if (event.type === "delta") {
+            updateMessage(assistantId, (message) => ({
+              ...message,
+              streaming: true,
+              content: event.answer ?? message.content ?? "",
+              answer: event.answer ?? message.answer ?? "",
+              reasoning: event.reasoning ?? message.reasoning ?? "",
+              citations: event.citations ?? message.citations ?? [],
+            }));
+          }
+        },
+      });
+
+      streamedModel = result.model ?? streamedModel;
+      streamedTrace = result.traceId ?? streamedTrace;
+
+      updateMessage(assistantId, (message) => ({
+        ...message,
+        streaming: false,
+        content: result.payload.answer || result.payload.reasoning || message.content || "",
+        answer: result.payload.answer || null,
+        reasoning: result.payload.reasoning || null,
+        citations: result.payload.citations ?? [],
+        traceId: result.payload.trace_id ?? streamedTrace ?? message.traceId ?? null,
+        model: result.payload.model ?? streamedModel ?? message.model ?? null,
+        autopilot: result.payload.autopilot ?? null,
+      }));
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        updateMessage(assistantId, (message) => ({
+          ...message,
+          streaming: false,
+          content: message.content || "(cancelled)",
+        }));
+        setBanner({ intent: "info", text: "Generation cancelled." });
+      } else if (error instanceof ChatRequestError) {
+        const messageText = error.hint ?? error.message;
+        updateMessage(assistantId, (message) => ({
+          ...message,
+          streaming: false,
+          content: message.content
+            ? `${message.content}\n\n${messageText}`
+            : `Error: ${messageText}`,
+          traceId: error.traceId ?? message.traceId ?? null,
+        }));
+        setBanner({ intent: "error", text: messageText });
+      } else {
+        const messageText =
+          error instanceof Error ? error.message : String(error ?? "Unknown error");
+        updateMessage(assistantId, (message) => ({
+          ...message,
+          streaming: false,
+          content: message.content
+            ? `${message.content}\n\n${messageText}`
+            : `Error: ${messageText}`,
+        }));
+        setBanner({ intent: "error", text: messageText });
+      }
+      return;
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+      setIsBusy(false);
+    }
+  }, [clientTimezone, input, isBusy, updateMessage]);
+
+  const handleSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      void handleSend();
+    },
+    [handleSend],
+  );
+
+  const handleCancel = useCallback(() => {
+    if (!abortRef.current) {
+      return;
+    }
+    abortRef.current.abort();
+    setBanner({ intent: "info", text: "Cancelling request…" });
+  }, []);
 
   return (
-    <div className="flex h-full w-[26rem] flex-col gap-3 p-4 text-sm">
-      <h3 className="text-sm font-semibold">Copilot chat</h3>
-      <div className="flex-1 overflow-y-auto rounded border p-3 text-xs text-muted-foreground">
-        Conversation history coming soon.
+    <div className="flex h-full w-[28rem] flex-col gap-3 p-4 text-sm">
+      <div>
+        <h3 className="text-sm font-semibold">Copilot chat</h3>
+        <p className="text-xs text-muted-foreground">{isBusy ? "Thinking…" : "Idle"}</p>
       </div>
-      <form
-        className="space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setInput("");
-        }}
-      >
+      <div className="flex-1 overflow-hidden rounded-lg border bg-background">
+        <ScrollArea className="h-full">
+          <div className="space-y-3 p-3">
+            {messages.map((message) => {
+              const isAssistant = message.role === "assistant";
+              const bodyText = message.answer ?? message.content ?? "";
+              return (
+                <div
+                  key={message.id}
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-sm shadow-sm",
+                    isAssistant ? "bg-card" : "bg-muted",
+                  )}
+                >
+                  <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <span>{message.role}</span>
+                    <span>{formatTimestamp(message.createdAt)}</span>
+                  </div>
+                  <Separator className="my-2" />
+                  <div className="space-y-3">
+                    {isAssistant ? (
+                      <>
+                        {bodyText ? (
+                          <ChatMessageMarkdown
+                            text={bodyText}
+                            onLinkClick={handleLinkNavigation}
+                          />
+                        ) : null}
+                        {message.citations && message.citations.length > 0 ? (
+                          <div className="space-y-2 text-xs text-muted-foreground">
+                            <p className="font-medium text-foreground">Citations</p>
+                            <ul className="space-y-1">
+                              {message.citations.map((citation, index) => (
+                                <li key={`${message.id}:citation:${index}`}>
+                                  {isHttpUrl(citation) ? (
+                                    <button
+                                      type="button"
+                                      className="font-medium text-primary underline underline-offset-2"
+                                      onClick={(event) => handleCitationClick(citation, event)}
+                                    >
+                                      {formatCitationLabel(citation)}
+                                    </button>
+                                  ) : (
+                                    <span>{citation}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {message.autopilot ? (
+                          <div className="rounded-md border border-dashed border-primary/30 bg-primary/10 px-3 py-2 text-xs text-foreground">
+                            <p className="font-semibold uppercase tracking-wide text-foreground/80">
+                              Autopilot suggestion
+                            </p>
+                            <p className="mt-1 break-all font-mono text-[13px] text-foreground">
+                              {message.autopilot.query}
+                            </p>
+                            {message.autopilot.reason ? (
+                              <p className="mt-1 text-foreground/80">{message.autopilot.reason}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {message.reasoning ? (
+                          <details className="rounded-md border bg-muted/50 px-3 py-2 text-xs text-foreground/90">
+                            <summary className="cursor-pointer font-medium text-foreground">
+                              Show reasoning
+                            </summary>
+                            <div className="mt-2">
+                              <ChatMessageMarkdown
+                                text={message.reasoning}
+                                onLinkClick={handleLinkNavigation}
+                                className="text-xs"
+                              />
+                            </div>
+                          </details>
+                        ) : null}
+                        {message.model || message.traceId ? (
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            {message.model ? `Model ${message.model}` : null}
+                            {message.model && message.traceId ? " · " : null}
+                            {message.traceId ? `Trace ${message.traceId}` : null}
+                          </p>
+                        ) : null}
+                        {message.streaming ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <span>Generating…</span>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <ChatMessageMarkdown text={bodyText} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={endRef} />
+          </div>
+        </ScrollArea>
+      </div>
+      {banner ? (
+        <div
+          className={cn(
+            "rounded-md border px-3 py-2 text-xs",
+            banner.intent === "error"
+              ? "border-destructive text-destructive"
+              : "border-border text-muted-foreground",
+          )}
+        >
+          {banner.text}
+        </div>
+      ) : null}
+      <form className="space-y-2" onSubmit={handleSubmit}>
         <Textarea
           value={input}
           onChange={(event) => setInput(event.target.value)}
           placeholder="Ask the copilot"
+          rows={4}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void handleSend();
+            }
+          }}
         />
-        <Button type="submit" className="w-full">
-          Send
-        </Button>
+        <div className="flex items-center justify-between gap-2">
+          {isBusy ? (
+            <Button type="button" variant="outline" onClick={handleCancel}>
+              <StopCircle className="mr-2 h-4 w-4" /> Cancel
+            </Button>
+          ) : (
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              ⌘/Ctrl + Enter to send
+            </span>
+          )}
+          <Button type="submit" disabled={isBusy || !input.trim()}>
+            {isBusy ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Sending
+              </>
+            ) : (
+              "Send"
+            )}
+          </Button>
+        </div>
       </form>
     </div>
   );
