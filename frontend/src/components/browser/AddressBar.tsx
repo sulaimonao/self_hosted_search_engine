@@ -6,29 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/state/useAppStore";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
-
-function normalizeInput(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "https://duckduckgo.com";
-  }
-  const urlPattern = /^(https?:\/\/)/i;
-  if (urlPattern.test(trimmed)) {
-    return trimmed;
-  }
-  try {
-    const potential = new URL(`https://${trimmed}`);
-    return potential.toString();
-  } catch {
-    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
-  }
-}
+import { normalizeAddressInput } from "@/lib/url";
+import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 
 export function AddressBar() {
   const activeTab = useAppStore((state) => state.activeTab?.());
   const updateTab = useAppStore((state) => state.updateTab);
   const [value, setValue] = useState(activeTab?.url ?? "");
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
+  const searchMode = useBrowserRuntimeStore((state) => state.settings?.searchMode ?? "auto");
 
   useEffect(() => {
     setValue(activeTab?.url ?? "");
@@ -40,9 +26,9 @@ export function AddressBar() {
       onSubmit={(event) => {
         event.preventDefault();
         if (!activeTab) return;
-        const nextUrl = normalizeInput(value);
+        const nextUrl = normalizeAddressInput(value, { searchMode });
         if (browserAPI) {
-          browserAPI.navigate(nextUrl, { tabId: activeTab.id });
+          browserAPI.navigate(nextUrl, { tabId: activeTab.id, transition: "typed" });
         } else {
           updateTab(activeTab.id, { url: nextUrl, title: value.trim() || nextUrl });
         }

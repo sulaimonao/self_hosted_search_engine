@@ -42,5 +42,8 @@
     "directories": {
       "buildResources": "build"
     }
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
   }
 }

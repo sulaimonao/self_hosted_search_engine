@@ -1,10 +1,17 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TabsBar } from "@/components/browser/Tabs";
 import { AddressBar } from "@/components/browser/AddressBar";
 import { ModeToggle } from "@/components/browser/ModeToggle";
@@ -20,6 +27,11 @@ import { useEvents } from "@/state/useEvents";
 import { Panel, useAppStore } from "@/state/useAppStore";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
 import { useBrowserIpc } from "@/hooks/useBrowserIpc";
+import { SiteInfoPopover } from "@/components/browser/SiteInfoPopover";
+import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
+import { DownloadsTray } from "@/components/browser/DownloadsTray";
+import { PermissionPrompt } from "@/components/browser/PermissionPrompt";
+import { SettingsSheet } from "@/components/browser/SettingsSheet";
 
 const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
@@ -34,15 +46,29 @@ export function BrowserShell() {
 
   useBrowserIpc();
 
+  const router = useRouter();
   const activeTab = useAppStore((state) => state.activeTab?.());
   const openPanel = useAppStore((state) => state.openPanel);
   const panelOpen = useAppStore((state) => state.panelOpen);
+
+  const downloadOrder = useBrowserRuntimeStore((state) => state.downloadOrder);
+  const downloads = useBrowserRuntimeStore((state) => state.downloads);
+  const setDownloadsOpen = useBrowserRuntimeStore((state) => state.setDownloadsOpen);
+
+  const activeDownloads = useMemo(
+    () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
+    [downloadOrder, downloads],
+  );
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const viewContainerRef = useRef<HTMLDivElement | null>(null);
 
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
   const hasBrowserAPI = Boolean(browserAPI);
+
+  const pageTitle = activeTab?.title || activeTab?.url || "New Tab";
 
   useEffect(() => {
     if (!browserAPI || !viewContainerRef.current) {
@@ -89,7 +115,7 @@ export function BrowserShell() {
               variant="outline"
               size="icon"
               disabled={!activeTab?.canGoBack}
-              onClick={() => browserAPI?.goBack({ tabId: activeTab?.id })}
+              onClick={() => browserAPI?.back({ tabId: activeTab?.id })}
             >
               <ArrowLeft size={16} />
             </Button>
@@ -97,7 +123,7 @@ export function BrowserShell() {
               variant="outline"
               size="icon"
               disabled={!activeTab?.canGoForward}
-              onClick={() => browserAPI?.goForward({ tabId: activeTab?.id })}
+              onClick={() => browserAPI?.forward({ tabId: activeTab?.id })}
             >
               <ArrowRight size={16} />
             </Button>
@@ -110,8 +136,72 @@ export function BrowserShell() {
               <RotateCcw size={16} />
             </Button>
           </div>
-          <AddressBar />
+          <SiteInfoPopover url={activeTab?.url} />
+          <div className="hidden min-w-0 items-center gap-2 sm:flex">
+            {activeTab?.favicon ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={activeTab.favicon} alt="" className="h-4 w-4" />
+            ) : (
+              <Globe size={14} className="text-muted-foreground" />
+            )}
+            <span className="truncate text-sm text-muted-foreground">{pageTitle}</span>
+          </div>
+          <div className="flex-1">
+            <AddressBar />
+          </div>
           <ModeToggle />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setDownloadsOpen(true)}
+            title="Downloads"
+            className="relative"
+          >
+            <Download size={16} />
+            {activeDownloads > 0 ? (
+              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">
+                {activeDownloads}
+              </span>
+            ) : null}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" title="Menu">
+                <Menu size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuItem
+                onSelect={() => {
+                  setDownloadsOpen(true);
+                }}
+              >
+                Downloads
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setSettingsOpen(true);
+                }}
+              >
+                Settings
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  router.push("/history");
+                }}
+              >
+                History
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            size="icon"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Cog size={16} />
+          </Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("localSearch")}>🔍</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("collections")}>📁</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("chat")}>💬</Button>
@@ -160,6 +250,9 @@ export function BrowserShell() {
       </main>
 
       <StatusBar />
+      <DownloadsTray />
+      <PermissionPrompt />
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <ToastGate />
     </div>
   );

@@ -173,6 +173,14 @@ Key behaviour:
 - Window resize events relay the updated viewport bounds back to the main process so the active `BrowserView` always fills the content area underneath the React chrome.
 - Any navigation failure surfaces an inline retry prompt that triggers a `webContents.reload({ ignoreCache: true })` from the renderer.
 
+Additional desktop capabilities:
+
+- **Persistent browsing data.** History, visits, download metadata, per-origin permission decisions, and browser preferences live in `browser_state.sqlite3` under Electron’s `userData` directory (for example `~/Library/Application Support/Personal Search Engine/` on macOS). Cookies and storage survive restarts because the browser session runs inside the `persist:main` partition and is never cleared on boot.
+- **Site controls.** The lock icon next to the address bar opens a site info popover where you can review or reset stored permissions and clear site data. Permission prompts now appear inline with an “Allow/Block” dialog and remember decisions by default.
+- **Downloads tray.** Click the download icon in the toolbar (or choose *Downloads* from the menu) to open a tray showing progress, status, and a *Show in folder* action for each file.
+- **History view.** The desktop menu links to `/history`, a simple list of recent navigations with one-click open buttons that retarget the active tab.
+- **Settings sheet.** A lightweight settings panel controls third-party cookies, address bar search behaviour, spellcheck language, and proxy mode (system/manual with host/port overrides).
+
 To exercise the full desktop experience during development:
 
 ```bash
