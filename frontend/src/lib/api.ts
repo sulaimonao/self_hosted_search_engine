@@ -757,79 +757,109 @@ export async function searchIndex(
     throw new Error("Search query is required");
   }
 
-  const params = new URLSearchParams({ q: trimmed });
+  const body: Record<string, unknown> = { query: trimmed };
+  const legacyParams = new URLSearchParams({ q: trimmed });
   if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
-    params.set("limit", String(options.limit));
+    body.limit = options.limit;
+    legacyParams.set("limit", String(options.limit));
   }
   if (typeof options.useLlm === "boolean") {
-    params.set("llm", options.useLlm ? "1" : "0");
+    body.use_llm = options.useLlm;
+    body.llm = options.useLlm;
+    legacyParams.set("llm", options.useLlm ? "1" : "0");
   }
   if (options.model) {
-    params.set("model", options.model);
+    body.model = options.model;
+    legacyParams.set("model", options.model);
   }
 
-  let payload: Record<string, unknown> | null = null;
-  let fallbackReason: string | null = null;
+  const abortSignal = options.signal;
+  const attemptHybrid = async () => {
+    try {
+      const response = await fetch(api("/api/index/hybrid_search"), {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(body),
+        signal: abortSignal,
+      });
+      if (!response.ok) {
+        if (![404, 405, 500, 501].includes(response.status)) {
+          const detail = await response.text();
+          throw new Error(detail || `Hybrid search failed (${response.status})`);
+        }
+        return { payload: null, reason: await response.text() } as const;
+      }
+      const payload = (await response.json()) as Record<string, unknown>;
+      return { payload, reason: null } as const;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+      return { payload: null, reason: error instanceof Error ? error.message : String(error) } as const;
+    }
+  };
+
+  const hybridResult = await attemptHybrid();
+  if (hybridResult.payload && !abortSignal?.aborted) {
+    return normalizeSearchPayload(hybridResult.payload);
+  }
+
+  if (abortSignal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
+
+  const fallbackEndpoints = ["/api/index/search", "/api/search"] as const;
+  let lastError: Error | null = hybridResult.reason
+    ? new Error(hybridResult.reason)
+    : null;
+
+  for (const endpoint of fallbackEndpoints) {
+    try {
+      const response = await fetch(api(endpoint), {
+        method: endpoint === "/api/index/search" ? "POST" : "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(body),
+        signal: abortSignal,
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        lastError = new Error(detail || `Search request failed (${response.status})`);
+        continue;
+      }
+      const payload = (await response.json()) as Record<string, unknown>;
+      return normalizeSearchPayload(payload, endpoint !== "/api/index/hybrid_search");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
 
   try {
-    const response = await fetch(api(`/api/search?${params.toString()}`), {
-      signal: options.signal,
+    const response = await fetch(api(`/api/search?${legacyParams.toString()}`), {
+      signal: abortSignal,
     });
-
     if (response.ok) {
-      payload = (await response.json()) as Record<string, unknown>;
-    } else {
-      const message = await response.text();
-      const status = response.status;
-      const shouldFallback = status === 404 || status === 405 || status === 500 || status === 501;
-      if (shouldFallback) {
-        fallbackReason = message || `GET /api/search returned ${status}`;
-      } else {
-        throw new Error(message || `Search request failed (${status})`);
-      }
+      const payload = (await response.json()) as Record<string, unknown>;
+      return normalizeSearchPayload(payload, true);
     }
+    const detail = await response.text();
+    lastError = new Error(detail || `Search request failed (${response.status})`);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw error;
     }
-    fallbackReason =
-      error instanceof Error ? error.message : String(error ?? "GET /api/search unavailable");
+    lastError = error instanceof Error ? error : new Error(String(error));
   }
 
-  if (!payload) {
-    const abortSignal = options.signal;
-    if (abortSignal?.aborted) {
-      throw new DOMException("The operation was aborted", "AbortError");
-    }
+  throw lastError ?? new Error("Search request failed");
+}
 
-    const body: Record<string, unknown> = { query: trimmed };
-    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
-      body.limit = options.limit;
-    }
-    if (typeof options.useLlm === "boolean") {
-      body.use_llm = options.useLlm;
-      body.llm = options.useLlm;
-    }
-    if (options.model) {
-      body.model = options.model;
-    }
-
-    const postResponse = await fetch(api("/api/search"), {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-      signal: abortSignal,
-    });
-
-    if (!postResponse.ok) {
-      const detail = await postResponse.text();
-      const message = detail || fallbackReason;
-      throw new Error(message || `Search request failed (${postResponse.status})`);
-    }
-
-    payload = (await postResponse.json()) as Record<string, unknown>;
-  }
-
+function normalizeSearchPayload(
+  payload: Record<string, unknown>,
+  keywordFallback: boolean = false,
+): SearchIndexResponse {
   const rawResults = Array.isArray(payload.results)
     ? payload.results
     : Array.isArray(payload.hits)
@@ -868,7 +898,11 @@ export async function searchIndex(
     });
   });
 
-  const status = typeof payload.status === "string" ? payload.status : "ok";
+  const status = typeof payload.status === "string"
+    ? payload.status
+    : keywordFallback
+    ? "warming"
+    : "ok";
   const jobIdValue =
     typeof payload.job_id === "string"
       ? payload.job_id
@@ -884,7 +918,8 @@ export async function searchIndex(
       : typeof payload.triggerReason === "string"
       ? payload.triggerReason
       : undefined;
-  const detail = typeof payload.detail === "string" ? payload.detail : undefined;
+  const explicitDetail = typeof payload.detail === "string" ? payload.detail : undefined;
+  const detail = explicitDetail ?? (keywordFallback ? "Hybrid search unavailable; showing keyword results." : undefined);
   const error = typeof payload.error === "string" ? payload.error : undefined;
   const code = typeof payload.code === "string" ? payload.code : undefined;
   const action = typeof payload.action === "string" ? payload.action : undefined;
@@ -1784,14 +1819,32 @@ function normalizeModelName(value: unknown): string | null {
 }
 
 export async function fetchModelInventory(): Promise<ModelInventory> {
-  const [modelsResponse, healthResponse] = await Promise.all([
-    fetch(api("/api/llm/models")),
-    fetch(api("/api/llm/health")),
-  ]);
+  const healthPromise = fetch(api("/api/llm/health"));
+  const modelEndpoints = ["/api/llm/llm_models", "/api/llm/models"] as const;
+  let modelsResponse: Response | null = null;
+  let lastModelError: Error | null = null;
 
-  if (!modelsResponse.ok) {
-    throw new Error("Unable to retrieve model list");
+  for (const endpoint of modelEndpoints) {
+    try {
+      const response = await fetch(api(endpoint));
+      if (!response.ok) {
+        const detail = await response.text();
+        const message = detail || `Unable to retrieve model list (${response.status})`;
+        lastModelError = new Error(message);
+        continue;
+      }
+      modelsResponse = response;
+      break;
+    } catch (error) {
+      lastModelError = error instanceof Error ? error : new Error(String(error));
+    }
   }
+
+  if (!modelsResponse) {
+    throw lastModelError ?? new Error("Unable to retrieve model list");
+  }
+
+  const healthResponse = await healthPromise;
   if (!healthResponse.ok) {
     throw new Error("Unable to reach Ollama health endpoint");
   }

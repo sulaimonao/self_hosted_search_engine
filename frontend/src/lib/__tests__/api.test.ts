@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchModelInventory,
+  searchIndex,
   sendChat,
   ChatRequestError,
   triggerRefresh,
@@ -15,9 +16,9 @@ afterEach(() => {
 });
 
 describe("fetchModelInventory", () => {
-  it("parses available models and configuration", async () => {
+  it("parses available models and configuration from llm_models endpoint", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (typeof input === "string" && input.includes("/api/llm/models")) {
+      if (typeof input === "string" && input.includes("/api/llm/llm_models")) {
         return new Response(
           JSON.stringify({
             chat_models: ["gpt-oss", "gemma3"],
@@ -47,6 +48,107 @@ describe("fetchModelInventory", () => {
     expect(inventory.configured.primary).toBe("gpt-oss");
     expect(inventory.status.running).toBe(true);
     expect(inventory.models[0].model).toBe("gpt-oss");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/llm/llm_models");
+  });
+
+  it("falls back to legacy models endpoint when llm_models returns 404", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (typeof input === "string" && input.includes("/api/llm/llm_models")) {
+        return new Response("not found", { status: 404 });
+      }
+      if (typeof input === "string" && input.includes("/api/llm/models")) {
+        return new Response(
+          JSON.stringify({
+            chat_models: ["gpt-oss"],
+            available: ["gpt-oss"],
+            configured: { primary: "gpt-oss", fallback: null },
+            embedder: null,
+            ollama_host: "http://127.0.0.1:11434",
+          }),
+          { status: 200 },
+        );
+      }
+      if (typeof input === "string" && input.includes("/api/llm/health")) {
+        return new Response(JSON.stringify({ reachable: true, model_count: 1 }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch ${input}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const inventory = await fetchModelInventory();
+    expect(inventory.chatModels).toEqual(["gpt-oss"]);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/llm/models");
+  });
+});
+
+describe("searchIndex", () => {
+  it("prefers hybrid search endpoint", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof input === "string" && input.includes("/api/index/hybrid_search")) {
+        expect(init?.method).toBe("POST");
+        const body = JSON.parse(init?.body as string);
+        expect(body.query).toBe("hello");
+        return new Response(
+          JSON.stringify({
+            status: "ok",
+            hits: [
+              {
+                url: "https://example.com",
+                title: "Example",
+                snippet: "Snippet",
+                score: 0.42,
+                source: "vector",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (typeof input === "string" && input.includes("/api/index/search")) {
+        throw new Error("Fallback should not fire");
+      }
+      throw new Error(`Unexpected fetch ${input}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchIndex("hello");
+    expect(result.status).toBe("ok");
+    expect(result.hits[0]?.url).toBe("https://example.com");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/index/hybrid_search");
+  });
+
+  it("falls back to keyword search when hybrid unavailable", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof input === "string" && input.includes("/api/index/hybrid_search")) {
+        return new Response("", { status: 404 });
+      }
+      if (typeof input === "string" && input.includes("/api/index/search")) {
+        expect(init?.method).toBe("POST");
+        return new Response(
+          JSON.stringify({
+            hits: [
+              {
+                url: "https://example.org",
+                title: "Keyword result",
+                snippet: "Snippet",
+                score: 0.12,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (typeof input === "string" && input.includes("/api/search")) {
+        throw new Error("Legacy GET should not be reached in this test");
+      }
+      throw new Error(`Unexpected fetch ${input}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchIndex("fallback query");
+    expect(result.hits[0]?.url).toBe("https://example.org");
+    expect(result.detail).toContain("Hybrid search unavailable");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/index/search");
   });
 });
 

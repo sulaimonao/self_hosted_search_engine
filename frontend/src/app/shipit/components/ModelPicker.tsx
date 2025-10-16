@@ -16,8 +16,11 @@ export default function ModelPicker(): JSX.Element {
     setAvailableModels,
     setFeature,
   } = useApp();
-  const { data: health } = useSWR("shipit:llm-health", () => fetchLlmHealth());
-  const { data: models } = useSWR("shipit:llm-models", () => fetchLlmModels());
+  const {
+    data: health,
+    error: healthError,
+  } = useSWR("shipit:llm-health", () => fetchLlmHealth());
+  const { data: models, error: modelsError } = useSWR("shipit:llm-models", () => fetchLlmModels());
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -45,11 +48,14 @@ export default function ModelPicker(): JSX.Element {
   }, [models, selectedModel, setAvailableModels, setSelectedModel]);
 
   useEffect(() => {
-    if (!health) {
+    if (health) {
+      setFeature("llm", health.reachable ? "available" : "unavailable");
       return;
     }
-    setFeature("llm", health.reachable ? "available" : "unavailable");
-  }, [health, setFeature]);
+    if (healthError || modelsError) {
+      setFeature("llm", "unavailable");
+    }
+  }, [health, healthError, modelsError, setFeature]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
