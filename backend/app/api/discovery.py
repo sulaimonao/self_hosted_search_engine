@@ -33,6 +33,7 @@ def _serialize(record: DiscoveryRecord, *, include_text: bool) -> dict[str, Any]
 
 
 @bp.get("/events")
+@bp.get("/stream_events")
 def stream_events() -> Response:
     if not _enabled():
         return Response(status=404)

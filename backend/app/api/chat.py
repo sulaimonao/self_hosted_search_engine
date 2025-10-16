@@ -41,6 +41,20 @@ _SCHEMA_PROMPT = (
     "Only request autopilot when real-time browsing is required or the user has asked you to take over."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
+_MODEL_ALIASES: dict[str, str] = {
+    "gpt-oss": "gemma:2b",
+    "gemma3": "gemma:2b",
+}
+
+
+def _coerce_model(name: str | None) -> str | None:
+    if not isinstance(name, str):
+        return None
+    normalized = name.strip()
+    if not normalized:
+        return None
+    alias_key = normalized.lower()
+    return _MODEL_ALIASES.get(alias_key, normalized)
 
 
 def _truncate(value: str, max_length: int) -> str:
@@ -545,8 +559,20 @@ def chat_invoke() -> Response:
             if fallback_model and fallback_model != primary_model:
                 candidates.append(fallback_model)
 
+        candidate_pairs: list[tuple[str | None, str]] = []
+        seen_models: set[str] = set()
+        for candidate in candidates:
+            resolved = _coerce_model(candidate) or ""
+            key = resolved.strip().lower()
+            if not key:
+                continue
+            if key in seen_models:
+                continue
+            seen_models.add(key)
+            candidate_pairs.append((candidate, resolved))
+
         if chat_span is not None:
-            chat_span.set_attribute("chat.candidate_count", len(candidates))
+            chat_span.set_attribute("chat.candidate_count", len(candidate_pairs))
 
         config: AppConfig = current_app.config["APP_CONFIG"]
         endpoint = _chat_endpoint(config)
@@ -554,7 +580,9 @@ def chat_invoke() -> Response:
         attempted: list[str] = []
         missing_reasons: list[str] = []
 
-        for attempt_index, candidate in enumerate(candidates, start=1):
+        for attempt_index, (alias_label, candidate) in enumerate(
+            candidate_pairs, start=1
+        ):
             attempted.append(candidate)
             prepared_messages, image_used, system_prompt = _prepare_messages(
                 candidate=candidate,
@@ -573,6 +601,7 @@ def chat_invoke() -> Response:
                 "chat.request",
                 trace=trace_id,
                 model=candidate,
+                alias=alias_label if alias_label and alias_label != candidate else None,
                 attempt=attempt_index,
                 url=url_value,
                 has_text=bool(text_context),

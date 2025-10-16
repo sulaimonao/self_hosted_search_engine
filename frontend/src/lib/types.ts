@@ -198,6 +198,44 @@ export interface PageExtractResponse {
   metadata?: Record<string, unknown>;
 }
 
+export interface EmbeddingCapabilityStatus {
+  model?: string;
+  ready?: boolean;
+  available?: boolean;
+  autopull_started?: boolean;
+  last_error?: string | null;
+}
+
+export interface CapabilitySnapshot {
+  generated_at: string;
+  llm: {
+    health: boolean;
+    list_models: boolean;
+    chat: boolean;
+    models: string[];
+  };
+  search: {
+    bm25: boolean;
+    vector: boolean;
+    hybrid: boolean;
+    embedding: EmbeddingCapabilityStatus | null;
+  };
+  shadow: {
+    config: boolean;
+    toggle: boolean;
+  };
+  discovery: {
+    events_stream: boolean;
+  };
+  diagnostics: boolean;
+  progress_stream: boolean;
+}
+
+export interface MetaHealthResponse {
+  ok: boolean;
+  generated_at?: string;
+}
+
 export type SearchResponseStatus = "ok" | "focused_crawl_running" | "warming" | string;
 
 export interface SearchHit {

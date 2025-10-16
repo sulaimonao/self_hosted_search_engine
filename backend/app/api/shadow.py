@@ -108,6 +108,7 @@ def _ensure_enabled_flag(
 
 
 @bp.get("")
+@bp.get("/shadow_config")
 def shadow_config():
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
@@ -122,6 +123,7 @@ def shadow_config():
 
 
 @bp.post("")
+@bp.post("/shadow_config")
 def update_shadow_config():
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
@@ -148,7 +150,18 @@ def toggle_shadow():
     manager, error_response = _manager_or_unavailable()
     if error_response is not None:
         return error_response
-    config, enabled_state = _ensure_enabled_flag(manager, manager.toggle())
+
+    payload = request.get_json(silent=True)
+    enabled_override: bool | None = None
+    if isinstance(payload, Mapping):
+        enabled_override = _coerce_enabled(payload.get("enabled"))
+
+    if enabled_override is None:
+        next_state = manager.toggle()
+    else:
+        next_state = manager.set_enabled(enabled_override)
+
+    config, enabled_state = _ensure_enabled_flag(manager, next_state)
     config["enabled"] = enabled_state
     policy_store = _policy_store()
     if policy_store is not None:

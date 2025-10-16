@@ -324,6 +324,32 @@ class VectorIndexService:
         except EmbedderUnavailableError as exc:
             LOGGER.info("embedding warmup deferred: %s", exc)
 
+    def embedding_status(self) -> dict[str, Any]:
+        """Return a snapshot of the embedder readiness state."""
+
+        ready = bool(self._test_mode or self._embed_ready_event.is_set())
+        available = False
+        error: str | None = None
+        try:
+            available = bool(self._client.has_model(self._embed_model))
+        except OllamaClientError as exc:  # pragma: no cover - network edge case
+            error = str(exc)
+        return {
+            "model": self._embed_model,
+            "ready": ready,
+            "available": available,
+            "autopull_started": bool(self._autopull_started),
+            "last_error": error,
+        }
+
+    def is_vector_ready(self) -> bool:
+        """Best-effort probe to determine whether hybrid search can run."""
+
+        status = self.embedding_status()
+        if status["ready"]:
+            return True
+        return bool(status["available"])
+
     def index_from_pending(
         self,
         *,

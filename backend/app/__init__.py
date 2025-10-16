@@ -62,6 +62,7 @@ def create_app() -> Flask:
     from .api import index as index_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
+    from .api import admin as admin_api
     from .api import meta as meta_api
     from .api import refresh as refresh_api
     from .api import plan as plan_api
@@ -395,6 +396,7 @@ def create_app() -> Flask:
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(meta_api.bp)
+    app.register_blueprint(admin_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
     app.register_blueprint(agent_tools_api.bp)

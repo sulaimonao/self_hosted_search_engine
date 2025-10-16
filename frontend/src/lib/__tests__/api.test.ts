@@ -48,7 +48,9 @@ describe("fetchModelInventory", () => {
     expect(inventory.configured.primary).toBe("gpt-oss");
     expect(inventory.status.running).toBe(true);
     expect(inventory.models[0].model).toBe("gpt-oss");
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/llm/llm_models");
+    const calls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(calls[0]).toContain("/api/llm/health");
+    expect(calls.some((call) => call.includes("/api/llm/llm_models"))).toBe(true);
   });
 
   it("falls back to legacy models endpoint when llm_models returns 404", async () => {
@@ -77,7 +79,10 @@ describe("fetchModelInventory", () => {
 
     const inventory = await fetchModelInventory();
     expect(inventory.chatModels).toEqual(["gpt-oss"]);
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/llm/models");
+    const calls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(calls[0]).toContain("/api/llm/health");
+    expect(calls[1]).toContain("/api/llm/llm_models");
+    expect(calls[2]).toContain("/api/llm/models");
   });
 });
 
@@ -268,7 +273,11 @@ describe("shadow config", () => {
       }),
       { status: 200 },
     );
-    const fetchMock = vi.fn(async () => response);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const target = typeof input === "string" ? input : input.toString();
+      expect(target).toContain("/api/shadow/shadow_config");
+      return response;
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const config = await fetchShadowConfig();
@@ -280,7 +289,12 @@ describe("shadow config", () => {
 
   it("throws on update failure with error message", async () => {
     const response = new Response(JSON.stringify({ error: "shadow_disabled" }), { status: 409 });
-    const fetchMock = vi.fn(async () => response);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const target = typeof input === "string" ? input : input.toString();
+      expect(target).toContain("/api/shadow/toggle");
+      expect(init?.method).toBe("POST");
+      return response;
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(updateShadowConfig({ enabled: true })).rejects.toThrow("shadow_disabled");

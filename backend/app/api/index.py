@@ -35,90 +35,11 @@ def _coerce_metadata(value: Any) -> dict[str, Any] | None:
     return {str(key): item for key, item in value.items()}
 
 
-@bp.post("/upsert")
-def upsert_document() -> tuple[Any, int]:
-    payload = request.get_json(silent=True) or {}
-    text_raw = payload.get("text")
-    text_value = str(text_raw) if isinstance(text_raw, str) else None
-    if not text_value or not text_value.strip():
-        return jsonify({"error": "text is required"}), 400
-    url_value = _coerce_str(payload.get("url"))
-    title_value = _coerce_str(payload.get("title"))
-    metadata = _coerce_metadata(payload.get("meta"))
-    try:
-        result = _service().upsert_document(
-            text=text_value,
-            url=url_value,
-            title=title_value,
-            metadata=metadata,
-        )
-    except EmbedderUnavailableError as exc:
-        response = {
-            "error": "embedding_unavailable",
-            "detail": exc.detail,
-            "model": exc.model,
-        }
-        if exc.autopull_started:
-            response["autopull_started"] = True
-        return jsonify(response), 503
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(result.to_dict()), 200
-
-
-@bp.post("/search")
-def search_index() -> tuple[Any, int]:
-    payload = request.get_json(silent=True) or {}
-    query = _coerce_str(payload.get("query"))
-    if not query:
-        return jsonify({"error": "query is required"}), 400
-    k_value = payload.get("k", 5)
-    try:
-        k = max(1, int(k_value))
-    except (TypeError, ValueError):
-        return jsonify({"error": "k must be an integer"}), 400
-    filters = (
-        payload.get("filters") if isinstance(payload.get("filters"), Mapping) else None
-    )
-    try:
-        results = _service().search(query, k=k, filters=filters)
-    except EmbedderUnavailableError as exc:
-        response = {
-            "error": "embedding_unavailable",
-            "detail": exc.detail,
-            "model": exc.model,
-        }
-        if exc.autopull_started:
-            response["autopull_started"] = True
-        return jsonify(response), 503
-    return jsonify({"results": results}), 200
-
-
-@bp.get("/search")
-def hybrid_search() -> tuple[Any, int]:
-    query = _coerce_str(request.args.get("q") or request.args.get("query"))
-    if not query:
-        return jsonify({"error": "query is required"}), 400
-
-    try:
-        k = max(1, int(request.args.get("k", 10)))
-    except (TypeError, ValueError):
-        return jsonify({"error": "k must be an integer"}), 400
-
-    filters: dict[str, Any] = {}
-    domain = _coerce_str(request.args.get("domain"))
-    if domain:
-        filters["domain"] = domain
-    policy_id = _coerce_str(
-        request.args.get("policy_id") or request.args.get("policyId")
-    )
-    if policy_id:
-        filters["policy_id"] = policy_id
-    hash_filter = _coerce_str(request.args.get("hash"))
-    if hash_filter:
-        filters["hash"] = hash_filter
-
-    vector_hits = _service().search(query, k=k, filters=filters or None)
+def _run_hybrid_search(
+    query: str, *, k: int, filters: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    filters_dict = dict(filters or {})
+    vector_hits = _service().search(query, k=k, filters=filters_dict or None)
     top_score = 0.0
     for hit in vector_hits:
         try:
@@ -175,15 +96,162 @@ def hybrid_search() -> tuple[Any, int]:
         seen.add(url)
         combined.append(hit)
 
-    payload = {
+    return {
         "query": query,
         "vector": vector_hits,
         "keyword": keyword_hits,
         "combined": combined,
-        "filters": filters,
+        "filters": filters_dict,
         "vector_top_score": top_score,
         "keyword_fallback": keyword_used,
     }
+
+
+@bp.post("/upsert")
+def upsert_document() -> tuple[Any, int]:
+    payload = request.get_json(silent=True) or {}
+    text_raw = payload.get("text")
+    text_value = str(text_raw) if isinstance(text_raw, str) else None
+    if not text_value or not text_value.strip():
+        return jsonify({"error": "text is required"}), 400
+    url_value = _coerce_str(payload.get("url"))
+    title_value = _coerce_str(payload.get("title"))
+    metadata = _coerce_metadata(payload.get("meta"))
+    try:
+        result = _service().upsert_document(
+            text=text_value,
+            url=url_value,
+            title=title_value,
+            metadata=metadata,
+        )
+    except EmbedderUnavailableError as exc:
+        response = {
+            "error": "embedding_unavailable",
+            "detail": exc.detail,
+            "model": exc.model,
+        }
+        if exc.autopull_started:
+            response["autopull_started"] = True
+        return jsonify(response), 503
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result.to_dict()), 200
+
+
+@bp.route("/search", methods=["POST", "OPTIONS"])
+def search_index() -> tuple[Any, int]:
+    if request.method == "OPTIONS":
+        return ("", 204)
+    payload = request.get_json(silent=True) or {}
+    query = _coerce_str(payload.get("query"))
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    k_value = payload.get("k", 5)
+    try:
+        k = max(1, int(k_value))
+    except (TypeError, ValueError):
+        return jsonify({"error": "k must be an integer"}), 400
+    filters = (
+        payload.get("filters") if isinstance(payload.get("filters"), Mapping) else None
+    )
+    try:
+        results = _service().search(query, k=k, filters=filters)
+    except EmbedderUnavailableError as exc:
+        response = {
+            "error": "embedding_unavailable",
+            "detail": exc.detail,
+            "model": exc.model,
+        }
+        if exc.autopull_started:
+            response["autopull_started"] = True
+        return jsonify(response), 503
+    return jsonify({"results": results}), 200
+
+
+@bp.get("/search")
+def hybrid_search() -> tuple[Any, int]:
+    query = _coerce_str(request.args.get("q") or request.args.get("query"))
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    try:
+        k = max(1, int(request.args.get("k", 10)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "k must be an integer"}), 400
+
+    filters: dict[str, Any] = {}
+    domain = _coerce_str(request.args.get("domain"))
+    if domain:
+        filters["domain"] = domain
+    policy_id = _coerce_str(
+        request.args.get("policy_id") or request.args.get("policyId")
+    )
+    if policy_id:
+        filters["policy_id"] = policy_id
+    hash_filter = _coerce_str(request.args.get("hash"))
+    if hash_filter:
+        filters["hash"] = hash_filter
+
+    try:
+        payload = _run_hybrid_search(query, k=k, filters=filters)
+    except EmbedderUnavailableError as exc:
+        response = {
+            "error": "embedding_unavailable",
+            "detail": exc.detail,
+            "model": exc.model,
+        }
+        if exc.autopull_started:
+            response["autopull_started"] = True
+        return jsonify(response), 503
+    return jsonify(payload), 200
+
+
+@bp.route("/hybrid_search", methods=["POST", "OPTIONS"])
+def hybrid_search_post() -> tuple[Any, int]:
+    if request.method == "OPTIONS":
+        return ("", 204)
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, Mapping):
+        return jsonify({"error": "invalid_payload"}), 400
+
+    query = _coerce_str(payload.get("query"))
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    k_candidate = payload.get("k", payload.get("limit", 10))
+    try:
+        k = max(1, int(k_candidate))
+    except (TypeError, ValueError):
+        return jsonify({"error": "k must be an integer"}), 400
+
+    filters: dict[str, Any] = {}
+    raw_filters = payload.get("filters")
+    if isinstance(raw_filters, Mapping):
+        filters.update({str(key): value for key, value in raw_filters.items()})
+
+    domain = _coerce_str(payload.get("domain"))
+    if domain:
+        filters["domain"] = domain
+
+    policy_id = _coerce_str(payload.get("policy_id") or payload.get("policyId"))
+    if policy_id:
+        filters["policy_id"] = policy_id
+
+    hash_filter = _coerce_str(payload.get("hash"))
+    if hash_filter:
+        filters["hash"] = hash_filter
+
+    try:
+        payload = _run_hybrid_search(query, k=k, filters=filters)
+    except EmbedderUnavailableError as exc:
+        response = {
+            "error": "embedding_unavailable",
+            "detail": exc.detail,
+            "model": exc.model,
+        }
+        if exc.autopull_started:
+            response["autopull_started"] = True
+        return jsonify(response), 503
     return jsonify(payload), 200
 
 

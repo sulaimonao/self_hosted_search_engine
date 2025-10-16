@@ -35,6 +35,8 @@ import type {
   ShadowSnapshotResponse,
   SystemCheckResponse,
   AutopilotDirective,
+  CapabilitySnapshot,
+  MetaHealthResponse,
 } from "@/lib/types";
 
 const JSON_HEADERS = {
@@ -50,7 +52,7 @@ export interface MetaTimeResponse {
 }
 
 export async function fetchServerTime(): Promise<MetaTimeResponse> {
-  const endpoints = ["/api/meta/server_time", "/api/meta/time"];
+  const endpoints = ["/api/meta/time", "/api/meta/server_time"];
   let lastError: Error | null = null;
 
   for (const endpoint of endpoints) {
@@ -67,6 +69,27 @@ export async function fetchServerTime(): Promise<MetaTimeResponse> {
   }
 
   throw lastError ?? new Error("Unable to fetch server time");
+}
+
+export async function getHealth(): Promise<MetaHealthResponse> {
+  const response = await fetch(api("/api/meta/health"));
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Health check failed (${response.status})`);
+  }
+  return (await response.json()) as MetaHealthResponse;
+}
+
+export async function getCapabilities(): Promise<CapabilitySnapshot> {
+  const response = await fetch(api("/api/meta/capabilities"), {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Capabilities fetch failed (${response.status})`);
+  }
+  return (await response.json()) as CapabilitySnapshot;
 }
 
 export async function runSystemCheck(): Promise<SystemCheckResponse> {
@@ -386,7 +409,7 @@ export async function fetchShadowStatus(jobId: string): Promise<ShadowStatus> {
 }
 
 export async function fetchShadowConfig(): Promise<ShadowConfig> {
-  const response = await fetch(api("/api/shadow"), { cache: "no-store" });
+  const response = await fetch(api("/api/shadow/shadow_config"), { cache: "no-store" });
   const text = await response.text();
   if (!response.ok) {
     const payload = tryParseJson(text);
@@ -588,7 +611,7 @@ export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Pro
 }
 
 export async function updateShadowConfig(input: { enabled: boolean }): Promise<ShadowConfig> {
-  const response = await fetch(api("/api/shadow"), {
+  const response = await fetch(api("/api/shadow/toggle"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ enabled: Boolean(input.enabled) }),

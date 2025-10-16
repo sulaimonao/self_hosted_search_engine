@@ -60,6 +60,21 @@ function sanitizeBaseUrl(value) {
   return value ? value.replace(/\/$/, '') : value;
 }
 
+function resolveApiBaseUrl() {
+  const explicit = sanitizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+  if (explicit) {
+    return explicit;
+  }
+  const backendPortEnv = process.env.BACKEND_PORT || '5050';
+  try {
+    const backendPort = parsePort(backendPortEnv);
+    return `http://127.0.0.1:${backendPort}`;
+  } catch (error) {
+    console.warn('[desktop] Invalid BACKEND_PORT; defaulting to http://127.0.0.1:5050');
+    return 'http://127.0.0.1:5050';
+  }
+}
+
 function parsePort(value) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
@@ -231,6 +246,29 @@ async function waitForFrontend() {
   });
 }
 
+async function runPreflight() {
+  console.log('[desktop] Running backend preflight…');
+  await new Promise((resolve, reject) => {
+    const preflightProc = spawnProcess(
+      process.execPath,
+      [path.join('scripts', 'desktop_preflight.js')],
+      {
+        env: {
+          NEXT_PUBLIC_API_BASE_URL: resolveApiBaseUrl(),
+        },
+      },
+    );
+    preflightProc.once('error', reject);
+    preflightProc.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Preflight exited with code ${code ?? 0}`));
+      }
+    });
+  });
+}
+
 function startFrontend() {
   console.log('[desktop] Starting Next.js frontend…');
   nextProcess = spawnProcess(npmCmd, ['--prefix', frontendDir, 'run', 'start:web'], {
@@ -302,6 +340,18 @@ async function main() {
     ]);
   } catch (error) {
     console.error('[desktop] Frontend did not become ready:', error?.message || error);
+    gracefulShutdown(1);
+    return;
+  }
+
+  if (shuttingDown) {
+    return;
+  }
+
+  try {
+    await runPreflight();
+  } catch (error) {
+    console.error('[desktop] Preflight failed:', error?.message || error);
     gracefulShutdown(1);
     return;
   }

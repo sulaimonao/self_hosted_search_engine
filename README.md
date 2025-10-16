@@ -158,6 +158,7 @@ BACKEND_PORT=5050 make dev
 - Run `npm run dev:desktop` to launch the Next.js dev server on `http://localhost:3100`, the Flask API on `tcp://127.0.0.1:5050`, and an Electron window pointed at the renderer URL. `wait-on` blocks Electron until both listeners are reachable, so the window never flashes a “cannot connect” page.
 - Each service runs in the foreground via `concurrently`, so stopping one component no longer tears the rest down. Use <kbd>Ctrl</kbd> + <kbd>C</kbd> in the relevant pane (or the terminal) when you really want to exit.
 - The Electron process reads `process.env.RENDERER_URL`; the dev script sets it to `http://localhost:3100` and falls back to the built `index.html` during packaging. Update `frontend/electron/main.js` if you move the renderer bundle.
+- Before Electron boots, `scripts/desktop_preflight.ts` polls `/api/meta/health` and `/api/meta/capabilities`. When hybrid search or chat models are missing it POSTs to `/api/admin/install_models` (defaults to `embeddinggemma` + `gemma:2b`; override with `DESKTOP_EMBED_MODELS` and `DESKTOP_CHAT_MODELS`) and waits for the capability map to report ready. Production launches (`npm run desktop`) reuse the same preflight so the window never opens against a half-configured backend. Tune retry behaviour with `DESKTOP_PREFLIGHT_ATTEMPTS`, `DESKTOP_PREFLIGHT_INTERVAL`, and companions documented inline.
 - The API now exposes `GET /health` (200) and enables CORS for both `http://localhost:3100` and `http://127.0.0.1:3100` with `supports_credentials=true`, matching what the Electron shell uses in development.
 
 ## Desktop browser mode
@@ -350,6 +351,7 @@ keeps capture, organisation, and curation entirely local:
   Artifacts surface byte sizes, direct download links, and “Open in Finder”
   actions. Bookmarks capture folders + tags and can be promoted to the
   allowed-list seed registry via `/api/seeds`.
+- The web and desktop shells read `/api/meta/capabilities` on boot, hiding discovery and shadow panels when the backend reports those features as disabled. Shadow toggles now go through `/api/shadow/shadow_config` + `/api/shadow/toggle`, guaranteeing consistent state even when policies are off.
 
 Export staged snapshots with the new CLI helper:
 
@@ -532,6 +534,9 @@ Key endpoints (all under `/api/` unless otherwise noted):
 | Endpoint | Description |
 | --- | --- |
 | `POST /api/tools/search_index` | Blend vector + BM25 retrieval, falling back to BM25 when embeddings are unavailable. |
+| `GET /api/meta/health` | Lightweight readiness probe used by desktop preflight and health checks. |
+| `GET /api/meta/capabilities` | Capability map describing search modes, chat availability, discovery gating, and shadow controls. |
+| `POST /api/admin/install_models` | Trigger Ollama pulls for chat or embedding models (pass `{ "chat": ["gemma:2b"], "embedding": ["embeddinggemma"] }`). |
 | `POST /api/index/search` | Query the vector index with a semantic embedding (`query`) and optional `filters` mapping to constrain metadata fields (e.g. `{ "category": "news" }`). |
 | `POST /api/tools/enqueue_crawl` | Queue pages for polite background crawling with dedupe metadata (`topic`, `reason`, `source_task_id`). |
 | `POST /api/tools/fetch_page` | Fetch and normalize a single page, storing it under `data/agent/documents/`. |
@@ -542,10 +547,11 @@ Key endpoints (all under `/api/` unless otherwise noted):
 | `GET /api/refresh/status` | Report background crawl state (`queued`, `crawling`, `indexing`) plus counters. |
 | `GET /api/jobs/<job_id>/status` | Return structured job progress including phase, stats, progress, and ETA. |
 | `GET /api/llm/status` | Report Ollama installation status, reachability, and active host. |
-| `GET /api/llm/models` | List locally available chat-capable Ollama models. |
+| `GET /api/llm/models` | List locally available chat-capable Ollama models (legacy alias for `/api/llm/llm_models`). |
 | `POST /api/diagnostics` | Capture repository + runtime snapshot for debugging. |
 | `GET /api/meta/time` | Provide server time (local + UTC) and timezone metadata for chat grounding. |
-| `POST /api/shadow/toggle` | Toggle persisted shadow-mode indexing state without editing config files. |
+| `GET /api/shadow/shadow_config` | Retrieve persisted shadow-mode configuration and active policy snapshot. |
+| `POST /api/shadow/toggle` | Toggle or explicitly set the persisted shadow-mode indexing state by passing `{ "enabled": <bool> }`. |
 
 The agent persists its planning artefacts in `data/agent/`:
 

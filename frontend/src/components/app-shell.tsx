@@ -64,6 +64,7 @@ import {
   ShadowQueueOptions,
   fetchShadowConfig,
   updateShadowConfig,
+  getCapabilities,
   subscribeDiscoveryEvents,
   fetchDiscoveryItem,
   fetchServerTime,
@@ -97,6 +98,7 @@ import type {
   ShadowStatus,
   PendingDocument,
   AutopilotDirective,
+  CapabilitySnapshot,
 } from "@/lib/types";
 import { PendingEmbedsCard } from "@/components/pending-embeds-card";
 import { ShadowProgress } from "@/components/shadow-progress";
@@ -582,6 +584,36 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
+  const hybridSearchEnabled = Boolean(capabilities?.search?.hybrid);
+  const vectorSearchEnabled = Boolean(capabilities?.search?.vector);
+  const bm25SearchEnabled = Boolean(capabilities?.search?.bm25);
+  const discoveryCapabilityEnabled = Boolean(capabilities?.discovery?.events_stream);
+  const discoveryEnabled = LOCAL_DISCOVERY_ENABLED && discoveryCapabilityEnabled;
+  const shadowCapabilityEnabled = Boolean(capabilities?.shadow?.config);
+  const [capabilities, setCapabilities] = useState<CapabilitySnapshot | null>(null);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const capabilitiesLoadedRef = useRef(false);
+  const refreshCapabilities = useCallback(async () => {
+    if (!backendHealthy) {
+      return null;
+    }
+    setCapabilitiesLoading(true);
+    setCapabilitiesError(null);
+    try {
+      const snapshot = await getCapabilities();
+      setCapabilities(snapshot);
+      capabilitiesLoadedRef.current = true;
+      return snapshot;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "Unable to load capabilities");
+      setCapabilitiesError(message);
+      throw error;
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }, [backendHealthy]);
   const [shadowModeEnabled, setShadowModeEnabled] = useState<boolean>(false);
   const [shadowConfig, setShadowConfig] = useState<ShadowConfig | null>(null);
   const [shadowConfigLoading, setShadowConfigLoading] = useState(true);
@@ -604,6 +636,31 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   useEffect(() => {
     liveFallbackRef.current = fallbackUrl;
   }, [fallbackUrl]);
+
+  useEffect(() => {
+    if (!backendHealthy) {
+      setCapabilities(null);
+      setCapabilitiesLoading(false);
+      capabilitiesLoadedRef.current = false;
+      return;
+    }
+
+    if (capabilitiesLoadedRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    refreshCapabilities().catch(() => {
+      if (cancelled) {
+        return;
+      }
+      // errors are captured within refreshCapabilities
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendHealthy, refreshCapabilities]);
 
   const openLiveUrl = useCallback(
     async (value: string) => {
@@ -689,7 +746,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!backendHealthy) {
+    if (!backendHealthy || !capabilities?.shadow?.config) {
       return;
     }
     let cancelled = false;
@@ -726,7 +783,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [backendHealthy]);
+  }, [backendHealthy, capabilities?.shadow?.config]);
 
   useEffect(() => {
     if (backendHealthy) {
@@ -745,6 +802,22 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     }
     window.appBridge?.setShadowMode?.(shadowModeEnabled);
   }, [shadowModeEnabled]);
+
+  useEffect(() => {
+    if (capabilities && !capabilities.shadow?.config) {
+      setShadowModeEnabled(false);
+      setShadowConfig(null);
+      setShadowConfigError(null);
+      setShadowConfigLoading(false);
+    }
+  }, [capabilities]);
+
+  useEffect(() => {
+    if (capabilities && !capabilities.discovery?.events_stream) {
+      setDiscoveryItems([]);
+      discoveryErrorNotifiedRef.current = false;
+    }
+  }, [capabilities]);
 
   useEffect(() => {
     setPreviewState((state) => {
@@ -1101,6 +1174,11 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         devlog({ evt: "ui.shadow.toggle_blocked", enabled: next, reason: "backend_offline" });
         return;
       }
+      if (!shadowCapabilityEnabled) {
+        setShadowConfigError("Shadow mode is disabled on this backend.");
+        devlog({ evt: "ui.shadow.toggle_blocked", enabled: next, reason: "capability_disabled" });
+        return;
+      }
       const previous = shadowModeEnabled;
       if (next === previous) {
         return;
@@ -1133,7 +1211,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         setShadowConfigSaving(false);
       }
     },
-    [backendHealthy, backendOfflineMessage, pushToast, shadowModeEnabled],
+    [backendHealthy, backendOfflineMessage, pushToast, shadowCapabilityEnabled, shadowModeEnabled],
   );
 
   useEffect(() => {
@@ -1426,6 +1504,10 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   );
 
   const handleManualShadowCrawl = useCallback(async () => {
+    if (!shadowCapabilityEnabled) {
+      pushToast("Shadow indexing unavailable on this backend.", { variant: "warning" });
+      return;
+    }
     const targetUrl = (currentUrl ?? '').trim();
     if (!isHttpUrl(targetUrl)) {
       pushToast('Open a valid http(s) page before crawling.', { variant: 'warning' });
@@ -1447,7 +1529,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       pushToast(message, { variant: 'destructive' });
       devlog({ evt: 'ui.shadow.manual_error', url: targetUrl, message });
     }
-  }, [currentUrl, pushToast, registerJob]);
+  }, [currentUrl, pushToast, registerJob, shadowCapabilityEnabled]);
 
   const handleCrawlDomain = useCallback(async () => {
     const targetUrl = (currentUrl ?? "").trim();
@@ -1828,7 +1910,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       handleNavigate,
       pushToast,
       shadowModeEnabled,
-      queueShadowIndex,
       handleQueueAdd,
       setCitationIndexStatus,
       setChatMessages,
@@ -2301,8 +2382,6 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       defaultScope,
       handleQueueAdd,
       registerJob,
-      summarizeSelection,
-      extractSelection,
       updateAction,
       updateLogEntry,
       updateMessageForAction,
@@ -2544,7 +2623,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!LOCAL_DISCOVERY_ENABLED) {
+    if (!discoveryEnabled) {
       return;
     }
 
@@ -2580,7 +2659,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     return () => {
       subscription?.close();
     };
-  }, [pushToast]);
+  }, [discoveryEnabled, pushToast]);
 
   useEffect(() => {
     if (!shadowModeEnabled || shadowConfigSaving) {
@@ -2901,6 +2980,35 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     return details.join(" · ");
   }, [shadowConfig, shadowConfigError, shadowConfigLoading, shadowJobSummary, shadowModeEnabled]);
 
+  const searchCapabilityBanner = useMemo(() => {
+    if (capabilitiesError && !capabilitiesLoading) {
+      return `Capabilities unavailable: ${capabilitiesError}`;
+    }
+    if (!capabilities || capabilitiesLoading) {
+      return null;
+    }
+    if (!vectorSearchEnabled) {
+      const embedModel = capabilities.search.embedding?.model;
+      return embedModel
+        ? `Vector search disabled (${embedModel}). Install or warm the embedding model to enable hybrid results.`
+        : "Vector search disabled. Install an embedding model to enable hybrid results.";
+    }
+    if (!hybridSearchEnabled && bm25SearchEnabled) {
+      return "Hybrid search disabled. Using keyword index only.";
+    }
+    if (!bm25SearchEnabled && !vectorSearchEnabled) {
+      return "Search capabilities unavailable.";
+    }
+    return null;
+  }, [
+    bm25SearchEnabled,
+    capabilities,
+    capabilitiesError,
+    capabilitiesLoading,
+    hybridSearchEnabled,
+    vectorSearchEnabled,
+  ]);
+
   const modelSelectDisabled = backendHealth.loading || !backendHealthy;
 
   return (
@@ -2950,94 +3058,96 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
               </Button>
             </div>
           ) : null}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-muted/30 px-4 py-3 text-xs">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <span className="font-semibold uppercase tracking-wide text-muted-foreground">Shadow mode</span>
-              <Badge variant={shadowModeEnabled ? "default" : "outline"}>
-                {shadowModeEnabled ? "Enabled" : "Disabled"}
-              </Badge>
-              {shadowConfigLoading || shadowConfigSaving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
-              ) : null}
-              {shadowStatusText ? (
-                <span
-                  className={`max-w-[18rem] truncate ${
-                    shadowConfigError ? "text-destructive" : "text-muted-foreground"
-                  }`}
-                  title={shadowStatusText}
-                >
-                  {shadowStatusText}
-                </span>
-              ) : null}
-              <Badge variant="outline">Pending {pendingDocs.length}</Badge>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {!shadowModeEnabled ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleManualShadowCrawl}
-                  disabled={shadowConfigLoading || shadowConfigSaving}
-                >
-                  Crawl this page
-                </Button>
-              ) : null}
-              <ShadowToggle
-                enabled={shadowModeEnabled}
-                onToggle={handleShadowToggle}
-                disabled={
-                  shadowConfigLoading ||
-                  shadowConfigSaving ||
-                  backendHealth.loading ||
-                  !backendHealthy
-                }
-                loading={shadowConfigSaving}
-                error={
-                  backendHealthy
-                    ? shadowConfigError
-                    : backendOfflineMessage ?? "Backend offline (5050)"
-                }
-              />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm">
-                    Help
+          {shadowCapabilityEnabled ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-muted/30 px-4 py-3 text-xs">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="font-semibold uppercase tracking-wide text-muted-foreground">Shadow mode</span>
+                <Badge variant={shadowModeEnabled ? "default" : "outline"}>
+                  {shadowModeEnabled ? "Enabled" : "Disabled"}
+                </Badge>
+                {shadowConfigLoading || shadowConfigSaving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
+                ) : null}
+                {shadowStatusText ? (
+                  <span
+                    className={`max-w-[18rem] truncate ${
+                      shadowConfigError ? "text-destructive" : "text-muted-foreground"
+                    }`}
+                    title={shadowStatusText}
+                  >
+                    {shadowStatusText}
+                  </span>
+                ) : null}
+                <Badge variant="outline">Pending {pendingDocs.length}</Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {!shadowModeEnabled ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleManualShadowCrawl}
+                    disabled={shadowConfigLoading || shadowConfigSaving}
+                  >
+                    Crawl this page
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      systemCheck.setOpen(true);
-                      void systemCheck.rerun();
-                    }}
-                  >
-                    Run System Check…
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      void systemCheck.downloadReport();
-                    }}
-                  >
-                    Download last report
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      void systemCheck.openReport();
-                    }}
-                  >
-                    Open last report
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                ) : null}
+                <ShadowToggle
+                  enabled={shadowModeEnabled}
+                  onToggle={handleShadowToggle}
+                  disabled={
+                    shadowConfigLoading ||
+                    shadowConfigSaving ||
+                    backendHealth.loading ||
+                    !backendHealthy
+                  }
+                  loading={shadowConfigSaving}
+                  error={
+                    backendHealthy
+                      ? shadowConfigError
+                      : backendOfflineMessage ?? "Backend offline (5050)"
+                  }
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm">
+                      Help
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        systemCheck.setOpen(true);
+                        void systemCheck.rerun();
+                      }}
+                    >
+                      Run System Check…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        void systemCheck.downloadReport();
+                      }}
+                    >
+                      Download last report
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        void systemCheck.openReport();
+                      }}
+                    >
+                      Open last report
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </header>
       <NavProgressHud />
-      {shadowJobSummary ? (
+      {shadowCapabilityEnabled && shadowJobSummary ? (
         <div className="mx-auto w-full max-w-[1600px] px-4">
           <ShadowProgress job={shadowJobSummary} />
         </div>
@@ -3047,6 +3157,17 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           <div className="grid h-full min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1.2fr)_minmax(20rem,26rem)]">
             <ScrollArea className="h-full rounded-2xl border border-border/60 bg-card/80 shadow-inner">
               <div className="flex flex-col gap-4 p-4">
+                {searchCapabilityBanner ? (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-xs ${
+                      capabilitiesError && !capabilitiesLoading
+                        ? "border-destructive/50 bg-destructive/10 text-destructive"
+                        : "border-amber-500/40 bg-amber-500/10 text-amber-100"
+                    }`}
+                  >
+                    {searchCapabilityBanner}
+                  </div>
+                ) : null}
                 <SearchResultsPanel
                   className="overflow-hidden rounded-xl border border-border/60 bg-background/90 shadow-sm"
                   query={searchState.query}
@@ -3390,7 +3511,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           </Button>
         </SheetContent>
       </Sheet>
-      {LOCAL_DISCOVERY_ENABLED ? (
+      {discoveryEnabled ? (
         <LocalDiscoveryPanel
           items={discoveryItems}
           busyIds={discoveryBusyIds}

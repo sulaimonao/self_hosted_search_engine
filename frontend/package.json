@@ -9,7 +9,7 @@
     "dev:web": "next dev -p 3100",
     "dev:api": "cross-env PYTHONPATH=.. BACKEND_PORT=5050 python3 -m backend.app",
     "dev:electron": "cross-env RENDERER_URL=http://localhost:3100 electron .",
-    "dev:electron:wait": "wait-on http://localhost:3100 tcp:5050 && cross-env RENDERER_URL=http://localhost:3100 electron .",
+    "dev:electron:wait": "wait-on http://localhost:3100 tcp:5050 && node ../scripts/desktop_preflight.js && cross-env RENDERER_URL=http://localhost:3100 electron .",
     "dev:desktop": "concurrently -n WEB,API,ELECTRON -c auto \"npm:dev:web\" \"npm:dev:api\" \"npm:dev:electron:wait\"",
     "test": "vitest run",
     "test:watch": "vitest",
