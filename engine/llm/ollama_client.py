@@ -169,7 +169,40 @@ class OllamaClient:
             available = self.list_models()
         except OllamaClientError:
             return False
-        return model in available
+        return _model_available(model, available)
+
+
+def _model_available(target: str, candidates: Iterable[str]) -> bool:
+    target_name, target_tag = _split_model_tag(target)
+    if not target_name:
+        return False
+    for candidate in candidates:
+        candidate_name, candidate_tag = _split_model_tag(candidate)
+        if not candidate_name or candidate_name != target_name:
+            continue
+        if _tags_match(target_tag, candidate_tag):
+            return True
+    return False
+
+
+def _split_model_tag(name: str) -> tuple[str, str | None]:
+    text = (name or "").strip()
+    if not text:
+        return "", None
+    base, sep, tag = text.partition(":")
+    base = base.strip()
+    tag = tag.strip() if sep else None
+    if tag and tag.lower() == "latest":
+        tag = "latest"
+    return base, tag or None
+
+
+def _tags_match(requested: str | None, candidate: str | None) -> bool:
+    if (requested is None or requested == "latest") and (
+        candidate is None or candidate == "latest"
+    ):
+        return True
+    return requested == candidate
 
 
 __all__ = ["OllamaClient", "OllamaClientError", "ChatMessage"]

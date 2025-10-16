@@ -584,16 +584,16 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const livePreviewEnabled = inAppBrowserEnabled && !liveFallbackActive;
   const hasDocuments = true;
   const crawlButtonLabel = defaultScope === "page" ? "Crawl page" : "Crawl domain";
+  const [capabilities, setCapabilities] = useState<CapabilitySnapshot | null>(null);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const capabilitiesLoadedRef = useRef(false);
   const hybridSearchEnabled = Boolean(capabilities?.search?.hybrid);
   const vectorSearchEnabled = Boolean(capabilities?.search?.vector);
   const bm25SearchEnabled = Boolean(capabilities?.search?.bm25);
   const discoveryCapabilityEnabled = Boolean(capabilities?.discovery?.events_stream);
   const discoveryEnabled = LOCAL_DISCOVERY_ENABLED && discoveryCapabilityEnabled;
   const shadowCapabilityEnabled = Boolean(capabilities?.shadow?.config);
-  const [capabilities, setCapabilities] = useState<CapabilitySnapshot | null>(null);
-  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
-  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
-  const capabilitiesLoadedRef = useRef(false);
   const refreshCapabilities = useCallback(async () => {
     if (!backendHealthy) {
       return null;
