@@ -1218,20 +1218,27 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
     shadowModeEnabledRef.current = shadowModeEnabled;
   }, [shadowModeEnabled]);
 
+  const shadowToggleHandlerRef = useRef(handleShadowToggle);
+
+  useEffect(() => {
+    shadowToggleHandlerRef.current = handleShadowToggle;
+  }, [handleShadowToggle]);
+
   useEffect(() => {
     if (!desktopSupports(desktop, "onShadowToggle")) {
       return;
     }
     const off = desktop.onShadowToggle(() => {
       const next = !shadowModeEnabledRef.current;
-      void handleShadowToggle(next);
+      const handler = shadowToggleHandlerRef.current;
+      void handler(next);
     });
     return () => {
       if (typeof off === "function") {
         off();
       }
     };
-  }, [handleShadowToggle]);
+  }, [desktop]);
 
   const refreshModels = useCallback(async () => {
     if (!backendHealthy) {
