@@ -7,15 +7,15 @@ type Closeable = { close: () => void };
 
 const DISCOVERY_STREAM_ENDPOINT =
   process.env.NEXT_PUBLIC_DISCOVERY_STREAM_URL ?? "http://127.0.0.1:5050/api/discovery/stream_events";
-const LEGACY_EVENTS_ENDPOINT =
-  process.env.NEXT_PUBLIC_EVENTS_SSE_URL ?? "http://127.0.0.1:5050/api/events/sse";
+const DISCOVERY_FALLBACK_ENDPOINT =
+  process.env.NEXT_PUBLIC_DISCOVERY_EVENTS_URL ?? "http://127.0.0.1:5050/api/discovery/events";
 
 export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable | undefined {
   if (typeof window === "undefined" || typeof EventSource === "undefined") {
     return undefined;
   }
 
-  const endpoints = [DISCOVERY_STREAM_ENDPOINT, LEGACY_EVENTS_ENDPOINT];
+  const endpoints = [DISCOVERY_STREAM_ENDPOINT, DISCOVERY_FALLBACK_ENDPOINT];
   let source: EventSource | null = null;
   let attempt = 0;
   let closed = false;

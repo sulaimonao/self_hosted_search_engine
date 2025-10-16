@@ -18,6 +18,7 @@ _MAIN_0.toc
 /worktrees/
 /data/telemetry/
 diagnostics/
+!frontend/src/app/shipit/diagnostics/
 *.py
 *.json
 !package.json
