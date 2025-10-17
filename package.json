@@ -5,7 +5,7 @@
   "main": "electron/main.js",
   "scripts": {
     "dev:web": "cross-env NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:5050 npm --prefix frontend run dev:web",
-    "dev:api": "make api || cross-env PYTHONPATH=. BACKEND_PORT=5050 python3 -m backend.app",
+    "dev:api": "make api || BACKEND_PORT=5050 ./scripts/dev_api_fallback.sh",
     "dev:electron": "npm --prefix frontend run dev:electron",
     "dev:electron:wait": "npm --prefix frontend run dev:electron:wait",
     "dev:desktop": "concurrently -k --success=first --raw -n WEB,API,ELECTRON -c auto \"npm:dev:web\" \"npm:dev:api\" \"npm:dev:electron:wait\"",

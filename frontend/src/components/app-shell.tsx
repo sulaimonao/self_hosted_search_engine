@@ -45,6 +45,7 @@ import { CopilotHeader } from "@/components/copilot-header";
 import { ContextPanel } from "@/components/context-panel";
 import { ProgressPanel } from "@/components/ProgressPanel";
 import { DocInspector } from "@/components/DocInspector";
+import type { ModelSelectOption } from "@/components/toolbar/ModelSelect";
 import {
   extractSelection,
   fetchModelInventory,
@@ -514,6 +515,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   const backendHealth = useBackendHealth({ intervalMs: 15_000 });
   const backendHealthy = backendHealth.healthy;
   const backendOfflineMessage = backendHealth.error;
+  const backendWarningMessage = backendHealth.warning;
 
   const omniboxRef = useRef<HTMLInputElement | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -1973,20 +1975,21 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       const contextUrl = shouldAttachContext ? pageContext?.url ?? currentUrl : currentUrl;
       const textContext = shouldAttachContext ? pageContext?.text ?? null : null;
       const imageContext = shouldAttachContext && visionEnabled ? pageContext?.screenshot_b64 ?? null : null;
+      const preferredModel = chatModel ?? chatModels[0] ?? null;
 
       devlog({
         evt: "ui.chat.send",
-        model: chatModel ?? "auto",
+        model: preferredModel ?? "auto",
         hasText: Boolean(textContext),
         hasImg: Boolean(imageContext),
       });
 
-      let streamedModel = chatModel ?? null;
+      let streamedModel = preferredModel;
       let streamedTrace: string | null = null;
 
       try {
         const result = await sendChat(historySnapshot, trimmed, {
-          model: chatModel,
+          model: preferredModel ?? undefined,
           signal: controller.signal,
           url: contextUrl || undefined,
           textContext: textContext ?? undefined,
@@ -2019,7 +2022,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
 
         streamedModel = result.model ?? streamedModel;
         streamedTrace = result.traceId ?? streamedTrace;
-        lastSuccessfulModelRef.current = streamedModel ?? chatModel;
+        lastSuccessfulModelRef.current = streamedModel ?? preferredModel ?? chatModel;
 
         updateAssistant((message) => ({
           ...message,
@@ -2029,7 +2032,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
           reasoning: result.payload.reasoning,
           citations: result.payload.citations,
           traceId: streamedTrace ?? result.payload.trace_id ?? message.traceId ?? null,
-          model: streamedModel ?? result.payload.model ?? message.model ?? chatModel ?? null,
+          model: streamedModel ?? result.payload.model ?? message.model ?? preferredModel ?? chatModel ?? null,
         }));
 
         const citationUrls = collectUniqueHttpCitations(result.payload.citations);
@@ -2051,7 +2054,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
         devlog({
           evt: "ui.chat.ok",
           trace: streamedTrace ?? result.traceId,
-          model: streamedModel ?? result.model ?? chatModel ?? "unknown",
+          model: streamedModel ?? result.model ?? preferredModel ?? chatModel ?? "unknown",
         });
 
         appendLog({
@@ -2132,6 +2135,7 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
       pageContext,
       pushToast,
       clientTimezone,
+      chatModels,
       timeMeta,
       handleQueueAdd,
       setCitationIndexStatus,
@@ -2935,14 +2939,52 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
   );
 
   const chatModelOptions = useMemo(() => {
-    if (!chatModel) {
-      return chatModels;
+    const seen = new Set<string>();
+    const installed = new Set(chatModels.map((model) => model.trim()).filter(Boolean));
+    const entries: ModelSelectOption[] = [];
+
+    const addOption = (value: string | null, details: Partial<ModelSelectOption> = {}) => {
+      const normalized = typeof value === "string" ? value.trim() : "";
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      entries.push({
+        value: normalized,
+        label: details.label ?? normalized,
+        description: details.description,
+        available: details.available ?? installed.has(normalized),
+      });
+    };
+
+    const selectedInstalled =
+      typeof chatModel === "string" && installed.has(chatModel.trim());
+    addOption(chatModel, { available: selectedInstalled });
+
+    for (const status of modelStatus) {
+      if (status.kind !== "chat") {
+        continue;
+      }
+      let description: string | undefined;
+      if (status.available === false) {
+        description = status.installed === false ? "Not installed locally" : "Ollama offline";
+      } else if (status.role === "primary") {
+        description = "Configured primary";
+      } else if (status.role === "fallback") {
+        description = "Configured fallback";
+      }
+      addOption(status.model, {
+        available: status.available !== false,
+        description,
+      });
     }
-    if (chatModels.includes(chatModel)) {
-      return chatModels;
+
+    for (const model of chatModels) {
+      addOption(model, { available: true });
     }
-    return [chatModel, ...chatModels.filter((model) => model !== chatModel)];
-  }, [chatModels, chatModel]);
+
+    return entries;
+  }, [chatModel, chatModels, modelStatus]);
 
   const supportsVision = useMemo(() => modelSupportsVision(chatModel), [chatModel]);
 
@@ -3062,6 +3104,25 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                   <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
                 ) : null}
                 Retry
+              </Button>
+            </div>
+          ) : null}
+          {backendHealthy && backendWarningMessage ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+              <span>{backendWarningMessage}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  void backendHealth.refresh();
+                }}
+                disabled={backendHealth.loading}
+              >
+                {backendHealth.loading ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
+                ) : null}
+                Recheck
               </Button>
             </div>
           ) : null}
@@ -3307,7 +3368,8 @@ export function AppShell({ initialUrl, initialContext }: AppShellProps = {}) {
                       <ChatPanel
                         header={
                           <CopilotHeader
-                            chatModels={chatModelOptions}
+                            chatModels={chatModels}
+                            modelOptions={chatModelOptions}
                             selectedModel={chatModel}
                             onModelChange={handleModelSelect}
                             installing={isAutopulling}

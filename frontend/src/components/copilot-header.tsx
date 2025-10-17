@@ -3,10 +3,11 @@
 import { AlertTriangle, Loader2, PlugZap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ModelSelect } from "@/components/toolbar/ModelSelect";
+import { ModelSelect, type ModelSelectOption } from "@/components/toolbar/ModelSelect";
 
 interface CopilotHeaderProps {
   chatModels: string[];
+  modelOptions?: Array<string | ModelSelectOption>;
   selectedModel: string | null;
   onModelChange: (model: string) => void;
   installing?: boolean;
@@ -25,6 +26,7 @@ interface CopilotHeaderProps {
 
 export function CopilotHeader({
   chatModels,
+  modelOptions,
   selectedModel,
   onModelChange,
   installing = false,
@@ -36,7 +38,9 @@ export function CopilotHeader({
   controlsDisabled = false,
 }: CopilotHeaderProps) {
   const hasModels = chatModels.length > 0;
-  const disabled = installing || chatModels.length === 0 || controlsDisabled;
+  const selectOptions =
+    modelOptions && modelOptions.length > 0 ? modelOptions : chatModels;
+  const disabled = installing || !hasModels || controlsDisabled;
 
   return (
     <div className="flex flex-col gap-3">
@@ -60,7 +64,7 @@ export function CopilotHeader({
             <span className="text-muted-foreground">Model</span>
             <ModelSelect
               value={selectedModel}
-              options={chatModels}
+              options={selectOptions}
               onChange={onModelChange}
               disabled={disabled}
               loading={installing}

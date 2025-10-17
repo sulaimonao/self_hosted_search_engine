@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Shield } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
+import type { BrowserPermissionState } from "@/lib/browser-ipc";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
+
+type PermissionEntry = BrowserPermissionState["permissions"][number];
+const EMPTY_PERMISSIONS: readonly PermissionEntry[] = Object.freeze([]);
 
 function originFromUrl(url?: string | null): string | null {
   if (!url) return null;
@@ -34,8 +38,11 @@ export function SiteInfoPopover({ url }: { url?: string | null }) {
   const [open, setOpen] = useState(false);
   const api = useMemo(() => resolveBrowserAPI(), []);
   const origin = useMemo(() => originFromUrl(url), [url]);
-  const permissions = useBrowserRuntimeStore((state) =>
-    origin ? state.permissions[origin] ?? [] : [],
+  const permissions = useBrowserRuntimeStore(
+    useCallback(
+      (state) => (origin ? state.permissions[origin] ?? EMPTY_PERMISSIONS : EMPTY_PERMISSIONS),
+      [origin],
+    ),
   );
 
   useEffect(() => {

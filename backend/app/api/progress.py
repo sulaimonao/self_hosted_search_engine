@@ -11,6 +11,8 @@ from backend.app.services.progress_bus import ProgressBus
 
 bp = Blueprint("progress_stream", __name__, url_prefix="/api")
 
+_DIAGNOSTIC_JOB_ID = "__diagnostics__"
+
 
 @bp.get("/progress/<job_id>/stream")
 def progress_stream(job_id: str) -> Response:
@@ -42,4 +44,11 @@ def progress_stream(job_id: str) -> Response:
     return response
 
 
-__all__ = ["bp", "progress_stream"]
+@bp.get("/progress/stream")
+def progress_default_stream() -> Response:
+    """Fallback stream for diagnostics and generic monitoring."""
+
+    return progress_stream(_DIAGNOSTIC_JOB_ID)
+
+
+__all__ = ["bp", "progress_stream", "progress_default_stream"]

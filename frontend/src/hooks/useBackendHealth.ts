@@ -12,7 +12,9 @@ interface BackendHealthState {
   healthy: boolean;
   loading: boolean;
   error: string | null;
+  warning: string | null;
   data: LlmHealth | null;
+  reachable: boolean | null;
   lastChecked: number | null;
   refresh: () => Promise<void>;
 }
@@ -26,6 +28,8 @@ export function useBackendHealth(options: BackendHealthOptions = {}): BackendHea
   const [healthy, setHealthy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [reachable, setReachable] = useState<boolean | null>(null);
   const [lastChecked, setLastChecked] = useState<number | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -53,10 +57,20 @@ export function useBackendHealth(options: BackendHealthOptions = {}): BackendHea
       if (!mountedRef.current || controller.signal.aborted) {
         return;
       }
-      const reachable = Boolean(payload.reachable);
+      const reachableFlag =
+        typeof payload.reachable === "boolean" ? payload.reachable : null;
       setData(payload);
-      setHealthy(reachable);
-      setError(reachable ? null : OFFLINE_MESSAGE);
+      setHealthy(true);
+      setReachable(reachableFlag);
+      if (reachableFlag === false) {
+        const host = payload.host ? ` (${payload.host})` : "";
+        setWarning(
+          `Local LLM unavailable${host}. Start Ollama or install a chat model to enable crawl and chat features.`,
+        );
+      } else {
+        setWarning(null);
+      }
+      setError(null);
       setLastChecked(Date.now());
     } catch (err) {
       if (!mountedRef.current || controller.signal.aborted) {
@@ -64,8 +78,10 @@ export function useBackendHealth(options: BackendHealthOptions = {}): BackendHea
       }
       console.warn("Backend health check failed", err);
       setData(null);
+      setReachable(null);
       setHealthy(false);
       setError(OFFLINE_MESSAGE);
+      setWarning(null);
       setLastChecked(Date.now());
     } finally {
       if (mountedRef.current && !controller.signal.aborted) {
@@ -106,6 +122,8 @@ export function useBackendHealth(options: BackendHealthOptions = {}): BackendHea
     loading,
     error,
     data,
+    warning,
+    reachable,
     lastChecked,
     refresh,
   };

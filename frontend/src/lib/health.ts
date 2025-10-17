@@ -11,6 +11,19 @@ let lastSnapshot: HealthSnapshot | null = null;
 let lastFetchedAt = 0;
 let inflight: Promise<HealthSnapshot> | null = null;
 
+function resolveHealthyFlag(payload: unknown): boolean {
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    if (typeof record.healthy === "boolean") {
+      return record.healthy;
+    }
+    if (typeof record.ok === "boolean") {
+      return record.ok;
+    }
+  }
+  return false;
+}
+
 async function requestHealth(url: string): Promise<HealthSnapshot> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4_000);
@@ -21,7 +34,7 @@ async function requestHealth(url: string): Promise<HealthSnapshot> {
       return { status: "error", checkedAt };
     }
     const payload = await response.json().catch(() => null);
-    const healthy = Boolean(payload?.healthy);
+    const healthy = resolveHealthyFlag(payload);
     return {
       status: healthy ? "ok" : "degraded",
       raw: payload ?? null,

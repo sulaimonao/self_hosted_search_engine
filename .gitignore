@@ -17,7 +17,7 @@ node_modules/
 _MAIN_0.toc
 /worktrees/
 /data/telemetry/
-diagnostics/
+diagnostics/*
 !frontend/src/app/shipit/diagnostics/
 *.py
 *.json
@@ -113,3 +113,7 @@ logs/frontend.pid
 codex_task_shadow_desktop.md
 /frontend/dist
 !scripts/system_check_has_critical.py
+!tools/diag/
+!tools/diag/engine.py
+!tools/diag/__init__.py
+!tools/diag/manifest.json

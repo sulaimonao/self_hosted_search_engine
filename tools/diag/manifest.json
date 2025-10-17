@@ -1,0 +1,44 @@
+{
+  "probes": [
+    {
+      "label": "API health",
+      "type": "http",
+      "method": "GET",
+      "url": "http://127.0.0.1:5050/api/meta/health",
+      "expect": 200
+    },
+    {
+      "label": "Renderer meta",
+      "type": "http",
+      "method": "GET",
+      "url": "http://localhost:3100/api/__meta",
+      "expect": 200
+    },
+    {
+      "label": "UI: /browser",
+      "type": "web",
+      "url": "http://localhost:3100/browser"
+    },
+    {
+      "label": "Discovery stream",
+      "type": "sse",
+      "url": "http://127.0.0.1:5050/api/discovery/events",
+      "idle_ok": true,
+      "seconds": 5
+    },
+    {
+      "label": "Progress stream",
+      "type": "sse",
+      "url": "http://127.0.0.1:5050/api/progress/stream",
+      "idle_ok": true,
+      "seconds": 5
+    },
+    {
+      "label": "Renderer asset: webpack.js",
+      "type": "http",
+      "method": "GET",
+      "url": "http://localhost:3100/_next/static/chunks/webpack.js",
+      "expect": 200
+    }
+  ]
+}

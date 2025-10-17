@@ -12,12 +12,14 @@ contents of ``policy/allowlist.yml``.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple, cast
+import sys
 
 import yaml  # type: ignore[import]
 
@@ -245,6 +247,113 @@ def _run_command(cmd: Sequence[str]) -> Dict[str, object]:
         "out": completed.stdout + completed.stderr,
         "returncode": completed.returncode,
     }
+
+
+def _repo_diag_command(args: Sequence[str]) -> Dict[str, object]:
+    """Invoke the repo diagnostics CLI and coerce the JSON payload."""
+
+    cmd = [sys.executable, "-m", "tools.diag.tool", *[str(part) for part in args]]
+    try:
+        completed = subprocess.run(
+            cmd, text=True, capture_output=True, check=False  # nosec B603
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - depends on interpreter availability
+        return {"ok": False, "error": str(exc), "command": cmd}
+    stdout = (completed.stdout or "").strip()
+    payload: Dict[str, Any]
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = {"output": stdout}
+        else:
+            payload = parsed if isinstance(parsed, dict) else {"output": parsed}
+    else:
+        payload = {}
+    if completed.stderr:
+        payload["stderr"] = (completed.stderr or "").strip()
+    payload.setdefault("exit_code", completed.returncode)
+    payload["returncode"] = completed.returncode
+    payload["ok"] = payload.get("exit_code", completed.returncode) == 0
+    payload["command"] = cmd
+    return payload
+
+
+@log_tool("repo_diag.list")
+def repo_diag_list_probes() -> Dict[str, object]:
+    """Return the expanded diagnostics manifest."""
+
+    return _repo_diag_command(["list"])
+
+
+@log_tool("repo_diag.run")
+def repo_diag_run(labels: Iterable[str] | None = None) -> Dict[str, object]:
+    """Run diagnostics (optionally limited to specific probe labels)."""
+
+    args: List[str] = ["run"]
+    if labels:
+        args.append("--labels")
+        args.extend(str(label) for label in labels)
+    return _repo_diag_command(args)
+
+
+@log_tool("repo_diag.artifacts")
+def repo_diag_artifacts() -> Dict[str, object]:
+    """Return paths to the latest diagnostics artifacts."""
+
+    return _repo_diag_command(["artifacts"])
+
+
+@log_tool("repo_diag.start")
+def repo_diag_start_services() -> Dict[str, object]:
+    """Ensure diagnostics services are running (idempotent)."""
+
+    return _repo_diag_command(["start"])
+
+
+@log_tool("repo_diag.stop")
+def repo_diag_stop_services() -> Dict[str, object]:
+    """Stop diagnostics services (no-op; included for symmetry)."""
+
+    return _repo_diag_command(["stop"])
+
+
+REPO_DIAG_TOOL_SCHEMA: Dict[str, Any] = {
+    "name": "repo_diag",
+    "description": "Diagnose the repo: bring up services, list probes, run probes, and fetch artifacts.",
+    "functions": [
+        {
+            "name": "list_probes",
+            "description": "Return the auto-expanded probe manifest",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "run",
+            "description": "Run diagnostics (optionally only some probes).",
+            "parameters": {
+                "type": "object",
+                "properties": {"labels": {"type": "array", "items": {"type": "string"}}},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "artifacts",
+            "description": "Get latest run artifact paths",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "start_services",
+            "description": "Ensure API and renderer are up (reused if already running)",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "stop_services",
+            "description": "No-op (spawned processes auto-terminate on exit)",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    ],
+}
 
 
 def _check_output(cmd: Sequence[str]) -> str:
