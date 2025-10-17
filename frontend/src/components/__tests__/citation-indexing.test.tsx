@@ -4,7 +4,7 @@ import {
   collectUniqueHttpCitations,
   indexCitationUrls,
   type CitationIndexStatus,
-} from "@/components/app-shell";
+} from "@/lib/citations";
 import type { ShadowStatus } from "@/lib/types";
 
 describe("collectUniqueHttpCitations", () => {

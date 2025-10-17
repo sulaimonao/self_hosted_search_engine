@@ -42,7 +42,7 @@ export default function HistoryPage() {
           <h1 className="text-2xl font-semibold">History</h1>
           <p className="text-sm text-muted-foreground">Recently visited sites in this browser.</p>
         </div>
-        <Link href="/">
+        <Link href="/browser">
           <Button variant="outline">Back to browser</Button>
         </Link>
       </header>

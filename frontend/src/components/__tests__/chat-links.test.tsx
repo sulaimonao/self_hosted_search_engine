@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { ChatPanel } from "@/components/chat-panel";
-import { resolveChatLinkNavigation } from "@/components/app-shell";
+import { resolveChatLinkNavigation } from "@/lib/chat-links";
 import type { ChatMessage } from "@/lib/types";
 
 describe("Chat link handling", () => {
