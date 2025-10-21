@@ -95,6 +95,22 @@ type ShadowToggleHandler = () => void;
 
 type Unsubscribe = () => void;
 
+type LlmStreamPayload = {
+  requestId: string;
+  body: Record<string, unknown>;
+};
+
+type LlmFramePayload = {
+  requestId?: string | null;
+  frame: string;
+};
+
+type LlmBridge = {
+  stream: (payload: LlmStreamPayload) => Promise<unknown>;
+  onFrame: (handler: (payload: LlmFramePayload) => void) => Unsubscribe;
+  abort: (requestId?: string | null) => Promise<unknown>;
+};
+
 type DesktopBridge = {
   runSystemCheck: (options?: DesktopSystemCheckOptions) => Promise<DesktopSystemCheckReport | { skipped: true } | null>;
   getLastSystemCheck: () => Promise<DesktopSystemCheckReport | { skipped: true } | null>;
@@ -111,6 +127,7 @@ declare global {
     desktop?: DesktopBridge;
     DesktopBridge?: DesktopBridge;
     browserAPI?: BrowserAPI;
+    llm?: LlmBridge;
   }
 }
 
@@ -315,6 +332,37 @@ function exposeBridge() {
 
   contextBridge.exposeInMainWorld('desktop', bridge);
   contextBridge.exposeInMainWorld('DesktopBridge', bridge);
+  contextBridge.exposeInMainWorld('llm', {
+    stream: async (payload: LlmStreamPayload) => {
+      if (!payload || typeof payload !== 'object') {
+        throw new Error('stream payload required');
+      }
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId.trim() : '';
+      if (!requestId) {
+        throw new Error('requestId is required');
+      }
+      const body = payload.body && typeof payload.body === 'object' ? payload.body : {};
+      return ipcRenderer.invoke('llm:stream', { requestId, body });
+    },
+    onFrame: (handler: (payload: LlmFramePayload) => void) => {
+      if (typeof handler !== 'function') {
+        return noop;
+      }
+      const listener = (_event: Electron.IpcRendererEvent, data: LlmFramePayload) => {
+        try {
+          const framePayload = data && typeof data === 'object' ? data : { requestId: null, frame: '' };
+          handler(framePayload);
+        } catch (error) {
+          console.warn('[llm] frame handler error', error);
+        }
+      };
+      ipcRenderer.on('llm:frame', listener);
+      return () => {
+        ipcRenderer.removeListener('llm:frame', listener);
+      };
+    },
+    abort: (requestId?: string | null) => ipcRenderer.invoke('llm:abort', { requestId: requestId ?? null }),
+  });
 }
 
 function exposeBrowserAPI() {

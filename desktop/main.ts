@@ -15,6 +15,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import log from 'electron-log';
 import { randomUUID } from 'node:crypto';
+import { TextDecoder } from 'node:util';
 
 type BrowserDiagnosticsReport = Record<string, unknown> & {
   artifactPath?: string | null;
@@ -128,6 +129,28 @@ const API_BASE_URL = (() => {
 })();
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' } as const;
+const activeLlmStreams = new Map<number, { controller: AbortController; requestId: string }>();
+
+function flushSseBuffer(target: WebContents, requestId: string, buffer: string): string {
+  let working = buffer;
+  let index = working.indexOf("\n\n");
+  while (index !== -1) {
+    const frame = working.slice(0, index);
+    working = working.slice(index + 2);
+    if (frame.trim()) {
+      target.send('llm:frame', { requestId, frame });
+    }
+    index = working.indexOf("\n\n");
+  }
+  return working;
+}
+
+function sendSseError(target: WebContents, requestId: string, payload: Record<string, unknown>) {
+  target.send('llm:frame', {
+    requestId,
+    frame: `data: ${JSON.stringify(payload)}\n\n`,
+  });
+}
 
 const isDev = !app.isPackaged;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -756,6 +779,95 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+ipcMain.handle(
+  'llm:stream',
+  async (
+    event,
+    payload: { requestId?: string | null; body?: Record<string, unknown> | null } | undefined,
+  ) => {
+    const sender = event.sender;
+    const contentsId = sender.id;
+    const baseId = typeof payload?.requestId === 'string' ? payload.requestId.trim() : '';
+    const requestId = baseId || randomUUID();
+    const rawBody = payload?.body && typeof payload.body === 'object' ? payload.body : {};
+    const body: Record<string, unknown> = { ...(rawBody as Record<string, unknown>) };
+    if (typeof body['request_id'] !== 'string') {
+      body['request_id'] = requestId;
+    }
+    body['stream'] = true;
+
+    const controller = new AbortController();
+    const existing = activeLlmStreams.get(contentsId);
+    if (existing) {
+      existing.controller.abort();
+    }
+    activeLlmStreams.set(contentsId, { controller, requestId });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+        method: 'POST',
+        headers: { ...JSON_HEADERS, Accept: 'text/event-stream' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        sendSseError(sender, requestId, {
+          type: 'error',
+          error: response.ok ? 'stream_unavailable' : `http_${response.status}`,
+          status: response.status,
+        });
+        return { ok: false, status: response.status };
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        buffer = flushSseBuffer(sender, requestId, buffer);
+      }
+      buffer += decoder.decode();
+      flushSseBuffer(sender, requestId, buffer);
+      return { ok: true };
+    } catch (error) {
+      const aborted = controller.signal.aborted;
+      const message = error instanceof Error ? error.message : String(error ?? 'stream_failed');
+      sendSseError(sender, requestId, {
+        type: 'error',
+        error: aborted ? 'aborted' : message,
+      });
+      return { ok: false, error: message, aborted };
+    } finally {
+      const entry = activeLlmStreams.get(contentsId);
+      if (entry && entry.requestId === requestId) {
+        activeLlmStreams.delete(contentsId);
+      }
+    }
+  },
+);
+
+ipcMain.handle(
+  'llm:abort',
+  (event, payload: { requestId?: string | null } | undefined) => {
+    const contentsId = event.sender.id;
+    const entry = activeLlmStreams.get(contentsId);
+    if (!entry) {
+      return { ok: false, active: false };
+    }
+    if (payload?.requestId && payload.requestId !== entry.requestId) {
+      return { ok: false, mismatch: true };
+    }
+    entry.controller.abort();
+    activeLlmStreams.delete(contentsId);
+    return { ok: true };
+  },
+);
 
 ipcMain.handle('shadow:capture', async (_evt, payload) => {
   try {

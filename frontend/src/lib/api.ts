@@ -33,7 +33,6 @@ import type {
   ShadowPolicyResponse,
   ShadowSnapshotResponse,
   SystemCheckResponse,
-  AutopilotDirective,
   CapabilitySnapshot,
   MetaHealthResponse,
 } from "@/lib/types";

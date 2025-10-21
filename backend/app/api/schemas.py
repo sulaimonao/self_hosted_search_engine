@@ -64,6 +64,7 @@ class ChatRequest(BaseModel):
     server_time: str | None = None
     server_timezone: str | None = None
     server_time_utc: str | None = None
+    request_id: str | None = Field(default=None, alias="request_id")
 
     model_config = ConfigDict(extra="ignore")
 
@@ -84,6 +85,14 @@ class ChatRequest(BaseModel):
             trimmed = value.strip()
             return trimmed or None
         return value
+
+    @field_validator("request_id", mode="before")
+    @classmethod
+    def _trim_request_id(cls, value: Any) -> str | None:
+        if isinstance(value, str):
+            trimmed = value.strip()
+            return trimmed or None
+        return None
 
     @model_validator(mode="after")
     def _require_messages(self) -> "ChatRequest":
@@ -216,12 +225,21 @@ class ChatStreamDelta(BaseModel):
     answer: str | None = None
     reasoning: str | None = None
     citations: list[str] | None = None
+    delta: str | None = None
 
     model_config = ConfigDict(extra="ignore")
 
     @field_validator("answer", "reasoning", mode="before")
     @classmethod
     def _trim_optional(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator("delta", mode="before")
+    @classmethod
+    def _trim_delta(cls, value: Any) -> str | None:
         if value is None:
             return None
         trimmed = str(value).strip()

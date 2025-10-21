@@ -1,0 +1,265 @@
+import { useCallback, useSyncExternalStore } from "react";
+
+import type { ChatResponsePayload, ChatStreamEvent } from "@/lib/types";
+
+type LlmFramePayload = {
+  requestId?: string | null;
+  frame: string;
+};
+
+type LlmBridge = {
+  stream: (payload: { requestId: string; body: Record<string, unknown> }) => Promise<unknown> | unknown;
+  onFrame: (handler: (payload: LlmFramePayload) => void) => void | (() => void);
+  abort?: (payload?: { requestId?: string | null }) => Promise<unknown> | unknown;
+};
+
+type LlmStreamSnapshot = {
+  requestId: string | null;
+  frames: number;
+  text: string;
+  done: boolean;
+  metadata: { model: string | null; traceId: string | null } | null;
+  final: ChatResponsePayload | null;
+  error: string | null;
+};
+
+type LlmStreamStartOptions = {
+  requestId: string;
+  body: Record<string, unknown>;
+};
+
+type LlmStreamHook = {
+  state: LlmStreamSnapshot;
+  start: (options: LlmStreamStartOptions) => Promise<void>;
+  abort: (requestId?: string | null) => void;
+  supported: boolean;
+};
+
+const defaultSnapshot: LlmStreamSnapshot = {
+  requestId: null,
+  frames: 0,
+  text: "",
+  done: false,
+  metadata: null,
+  final: null,
+  error: null,
+};
+
+let bridge: LlmBridge | null = null;
+let bridgeUnsubscribe: (() => void) | null = null;
+let state: LlmStreamSnapshot = defaultSnapshot;
+const listeners = new Set<() => void>();
+
+function emit(next: LlmStreamSnapshot) {
+  state = next;
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn("[llm] listener error", error);
+    }
+  }
+}
+
+function update(mutator: (current: LlmStreamSnapshot) => LlmStreamSnapshot) {
+  emit(mutator(state));
+}
+
+function getSnapshot() {
+  return state;
+}
+
+function resolveBridge(): LlmBridge | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const candidate = (window as { llm?: LlmBridge }).llm;
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  return candidate;
+}
+
+function ensureBridge() {
+  const nextBridge = resolveBridge();
+  if (nextBridge === bridge) {
+    return;
+  }
+  if (bridgeUnsubscribe) {
+    try {
+      bridgeUnsubscribe();
+    } catch (error) {
+      console.warn("[llm] failed to unsubscribe bridge", error);
+    }
+    bridgeUnsubscribe = null;
+  }
+  bridge = nextBridge;
+  if (bridge && typeof bridge.onFrame === "function") {
+    const unsubscribe = bridge.onFrame(handleFrame);
+    bridgeUnsubscribe = typeof unsubscribe === "function" ? unsubscribe : null;
+  }
+}
+
+function parseSseFrame(raw: string): ChatStreamEvent | null {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return null;
+  }
+  const lines = raw.split(/\n/);
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+  if (dataLines.length === 0) {
+    return null;
+  }
+  const payloadText = dataLines.join("\n").trim();
+  if (!payloadText) {
+    return null;
+  }
+  try {
+    return JSON.parse(payloadText) as ChatStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+function applyFrame(
+  current: LlmStreamSnapshot,
+  parsed: ChatStreamEvent,
+  incomingRequestId: string | null | undefined,
+): LlmStreamSnapshot {
+  const activeRequest = current.requestId;
+  const requestId = incomingRequestId ?? activeRequest;
+  if (activeRequest && incomingRequestId && incomingRequestId !== activeRequest) {
+    return current;
+  }
+  if (parsed.type === "metadata") {
+    return {
+      ...current,
+      requestId: requestId ?? current.requestId,
+      metadata: {
+        model: parsed.model ?? null,
+        traceId: parsed.trace_id ?? null,
+      },
+    };
+  }
+  if (parsed.type === "delta") {
+    const deltaText = parsed.delta ?? parsed.answer ?? "";
+    const nextText = deltaText ? current.text + deltaText : current.text;
+    return {
+      ...current,
+      requestId: requestId ?? current.requestId,
+      text: nextText,
+      frames: deltaText ? current.frames + 1 : current.frames,
+      metadata: current.metadata,
+      done: false,
+      error: null,
+    };
+  }
+  if (parsed.type === "complete") {
+    const answer = parsed.payload?.answer ?? current.text;
+    return {
+      ...current,
+      requestId: requestId ?? current.requestId,
+      text: answer || current.text,
+      done: true,
+      final: parsed.payload,
+      frames: current.frames,
+      error: null,
+      metadata:
+        parsed.payload?.model || parsed.payload?.trace_id
+          ? {
+              model: parsed.payload.model ?? current.metadata?.model ?? null,
+              traceId: parsed.payload.trace_id ?? current.metadata?.traceId ?? null,
+            }
+          : current.metadata,
+    };
+  }
+  if (parsed.type === "error") {
+    return {
+      ...current,
+      requestId: requestId ?? current.requestId,
+      done: true,
+      error: parsed.hint ?? parsed.error ?? "stream_error",
+    };
+  }
+  return current;
+}
+
+function handleFrame(payload: LlmFramePayload) {
+  if (!payload || typeof payload.frame !== "string") {
+    return;
+  }
+  const parsed = parseSseFrame(payload.frame);
+  if (!parsed) {
+    return;
+  }
+  update((current) => applyFrame(current, parsed, payload.requestId ?? null));
+}
+
+export function useLlmStream(): LlmStreamHook {
+  ensureBridge();
+  const subscribe = useCallback((listener: () => void) => {
+    listeners.add(listener);
+    ensureBridge();
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
+
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  const start = useCallback(async ({ requestId, body }: LlmStreamStartOptions) => {
+    ensureBridge();
+    const target = bridge;
+    if (!target || typeof target.stream !== "function") {
+      throw new Error("LLM stream bridge unavailable");
+    }
+    update(() => ({ ...defaultSnapshot, requestId }));
+    try {
+      await target.stream({ requestId, body });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "stream_failed");
+      update((current) => ({ ...current, done: true, error: message }));
+      throw error;
+    }
+  }, []);
+
+  const abort = useCallback(
+    (requestId?: string | null) => {
+      ensureBridge();
+      const target = bridge;
+      const effectiveId = requestId ?? state.requestId;
+      if (target && typeof target.abort === "function") {
+        try {
+          target.abort({ requestId: effectiveId });
+        } catch (error) {
+          console.warn("[llm] abort failed", error);
+        }
+      }
+      if (effectiveId) {
+        update((current) =>
+          current.requestId === effectiveId ? { ...current, done: true } : current,
+        );
+      }
+    },
+    [],
+  );
+
+  const supported = Boolean(resolveBridge());
+
+  return {
+    state: snapshot,
+    start,
+    abort,
+    supported,
+  };
+}

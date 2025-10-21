@@ -134,3 +134,13 @@ def test_missing_scripts(tmp_path: Path) -> None:
     ]
     rule_ids = _run_rules(tmp_path, files, only={"R11"})
     assert "R11" in rule_ids
+
+
+def test_llm_stream_integrity(tmp_path: Path) -> None:
+    files = [
+        ("desktop/main.ts", "export const noop = true;"),
+        ("desktop/preload.ts", "export const noop = true;"),
+        ("frontend/src/hooks/useLlmStream.ts", "export function useLlmStream() { return null as any; }")
+    ]
+    rule_ids = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    assert "R20_stream_integrity" in rule_ids

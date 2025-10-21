@@ -186,6 +186,7 @@ export type ChatStreamEvent =
       answer?: string | null;
       reasoning?: string | null;
       citations?: string[] | null;
+      delta?: string | null;
     }
   | {
       type: "complete";
