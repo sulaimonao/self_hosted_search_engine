@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import requests
+
 from ..config import AppConfig
 
 
@@ -122,6 +124,37 @@ def _collect_dependencies(repo_root: Path, timeout: int) -> Dict[str, Any]:
     return {"result": result, "packages": packages}
 
 
+def _probe_chat_endpoint(api_base: str, timeout: int) -> Dict[str, Any]:
+    """Send a simple chat request to verify the API responds."""
+
+    url = f"{api_base.rstrip('/')}/api/chat"
+    payload = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "gemma3:latest",
+        "stream": False,
+    }
+    print(f"[diagnostics] probing chat endpoint at {url}")
+    try:
+        response = requests.post(url, json=payload, timeout=timeout)
+    except requests.RequestException as exc:
+        return {"ok": False, "error": str(exc), "url": url}
+
+    text = (response.text or "").strip()
+    probe: Dict[str, Any] = {
+        "ok": response.ok and bool(text),
+        "status": response.status_code,
+        "url": url,
+        "trace_id": response.headers.get("X-Request-Id"),
+        "model": response.headers.get("X-LLM-Model"),
+        "body_preview": text[:200],
+    }
+    if not text:
+        probe["error"] = "empty_response"
+    elif not response.ok:
+        probe["error"] = text
+    return probe
+
+
 def _tail_lines(path: Path, limit: int) -> List[str]:
     lines: List[str] = []
     try:
@@ -157,6 +190,7 @@ def _render_summary(data: Dict[str, Any]) -> str:
     tests = data.get("tests", {})
     deps = data.get("dependencies", {})
     logs = data.get("logs", [])
+    chat = data.get("chat", {})
     generated_at = data.get("generated_at", "")
 
     summary: List[str] = ["# Diagnostics Report", "", f"Generated at: {generated_at}"]
@@ -193,6 +227,24 @@ def _render_summary(data: Dict[str, Any]) -> str:
             summary.extend(["", "### Pytest stderr", "```", stderr, "```"])
     else:
         summary.append("- Skipped (disabled)")
+    summary.append("")
+
+    summary.append("## Chat")
+    if chat:
+        status = "pass" if chat.get("ok") else "fail"
+        summary.append(f"- Status: {status}")
+        summary.append(f"- Endpoint: {chat.get('url', 'n/a')}")
+        if chat.get("trace_id"):
+            summary.append(f"- Trace ID: {chat.get('trace_id')}")
+        if chat.get("model"):
+            summary.append(f"- Model: {chat.get('model')}")
+        if chat.get("body_preview"):
+            summary.append("- Preview:")
+            summary.extend(["", "```", chat.get("body_preview", ""), "```"])
+        if chat.get("error"):
+            summary.append(f"- Error: {chat.get('error')}")
+    else:
+        summary.append("- Chat probe not executed")
     summary.append("")
 
     summary.append("## Dependencies")
@@ -246,6 +298,8 @@ def run_diagnostics(config: AppConfig, *, include_pytest: bool | None = None) ->
     pytest_info = _collect_pytest(repo_root, timeout, include_pytest)
     deps_info = _collect_dependencies(repo_root, timeout)
     logs_info = _collect_logs(config.logs_dir, log_files, log_lines)
+    api_base = os.getenv("DIAGNOSTICS_API_BASE_URL", "http://127.0.0.1:5050").rstrip("/")
+    chat_probe = _probe_chat_endpoint(api_base, timeout)
 
     data = {
         "generated_at": timestamp,
@@ -253,6 +307,7 @@ def run_diagnostics(config: AppConfig, *, include_pytest: bool | None = None) ->
         "tests": pytest_info,
         "dependencies": deps_info,
         "logs": logs_info,
+        "chat": chat_probe,
     }
 
     summary_markdown = _render_summary(data)

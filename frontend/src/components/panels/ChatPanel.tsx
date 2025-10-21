@@ -3,6 +3,7 @@
 import { Loader2, StopCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { CopilotHeader } from "@/components/copilot-header";
 import { ChatMessageMarkdown } from "@/components/chat-message";
@@ -10,25 +11,35 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { UsePageContextToggle } from "@/components/UsePageContextToggle";
 import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 import {
   autopullModels,
-  ChatRequestError,
   fetchModelInventory,
   fetchServerTime,
-  sendChat,
+  fetchChatContext,
+  runAutopilotTool,
+  storeChatMessage,
   type MetaTimeResponse,
   type ModelInventory,
+  type ChatContextResponse,
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
-import type { ChatMessage } from "@/lib/types";
+import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
+import type { AutopilotToolDirective, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/state/useAppStore";
 
 const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
 const INVENTORY_REFRESH_DELAY_MS = 5_000;
 
 type Banner = { intent: "info" | "error"; text: string };
+
+type ToolExecutionState = {
+  status: "idle" | "running" | "success" | "error";
+  detail?: string;
+};
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -73,6 +84,49 @@ function formatCitationLabel(value: string) {
   }
 }
 
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return value.slice(0, Math.max(0, maxLength - 1)).trimEnd() + "…";
+}
+
+function summarizeToolResult(result: Record<string, unknown> | null | undefined): string {
+  if (!result) {
+    return "OK";
+  }
+  try {
+    const serialized = JSON.stringify(result, null, 2);
+    return truncateText(serialized, 400) || "OK";
+  } catch (error) {
+    return String(result);
+  }
+}
+
+function captureWindowSelection(maxLength = 4000): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const selection = window.getSelection();
+    const text = selection?.toString()?.trim();
+    if (!text) {
+      return null;
+    }
+    return truncateText(text, maxLength);
+  } catch {
+    return null;
+  }
+}
+
+function countWords(text: string | null | undefined): number | null {
+  if (!text) {
+    return null;
+  }
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  return tokens.length || null;
+}
+
 const INITIAL_ASSISTANT_GREETING =
   "Welcome! Paste a URL or ask me to search. I only crawl when you approve each step.";
 
@@ -85,6 +139,7 @@ export function ChatPanel() {
       createdAt: new Date().toISOString(),
     },
   ]);
+  const [threadId] = useState(() => createId());
   const [input, setInput] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
@@ -97,6 +152,11 @@ export function ChatPanel() {
   const [installMessage, setInstallMessage] = useState<string | null>(null);
   const [serverTime, setServerTime] = useState<MetaTimeResponse | null>(null);
   const [serverTimeError, setServerTimeError] = useState<string | null>(null);
+  const [usePageContext, setUsePageContext] = useState(false);
+  const [contextSummary, setContextSummary] = useState<{ url?: string | null; selectionWordCount?: number | null } | null>(
+    null,
+  );
+  const [toolExecutions, setToolExecutions] = useState<Record<string, ToolExecutionState>>({});
 
   const messagesRef = useRef<ChatMessage[]>(messages);
   const abortRef = useRef<AbortController | null>(null);
@@ -106,6 +166,11 @@ export function ChatPanel() {
   const refreshTimeoutRef = useRef<number | null>(null);
 
   const navigate = useBrowserNavigation();
+  const { activeTab } = useAppStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab?.(),
+    })),
+  );
 
   const clientTimezone = useMemo(() => {
     try {
@@ -113,6 +178,12 @@ export function ChatPanel() {
     } catch {
       return undefined;
     }
+  }, []);
+  const clientLocale = useMemo(() => {
+    if (typeof navigator === "undefined" || typeof navigator.language !== "string") {
+      return undefined;
+    }
+    return navigator.language;
   }, []);
 
   const handleRefreshInventory = useCallback(async () => {
@@ -184,8 +255,47 @@ export function ChatPanel() {
   }, [messages]);
 
   useEffect(() => {
+    setToolExecutions((prev) => {
+      const validKeys = new Set<string>();
+      messages.forEach((message) => {
+        message.autopilot?.tools?.forEach((_tool, index) => {
+          validKeys.add(`${message.id}:${index}`);
+        });
+      });
+
+      const next: Record<string, ToolExecutionState> = {};
+      let changed = false;
+
+      for (const key of validKeys) {
+        if (prev[key]) {
+          next[key] = prev[key];
+        } else {
+          changed = true;
+        }
+      }
+
+      for (const key of Object.keys(prev)) {
+        if (!validKeys.has(key)) {
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return prev;
+      }
+      return next;
+    });
+  }, [messages]);
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isBusy]);
+
+  useEffect(() => {
+    if (!usePageContext) {
+      setContextSummary(null);
+    }
+  }, [usePageContext]);
 
   useEffect(() => {
     const resolved = resolveChatModelSelection({
@@ -330,9 +440,43 @@ export function ChatPanel() {
     return "Ask the copilot";
   }, [installing, inventory, llmReachable]);
 
+  const handleContextToggle = useCallback((value: boolean) => {
+    setUsePageContext(value);
+    if (!value) {
+      setContextSummary(null);
+    }
+  }, []);
+
   const updateMessage = useCallback((id: string, updater: (message: ChatMessage) => ChatMessage) => {
     setMessages((prev) => prev.map((message) => (message.id === id ? updater(message) : message)));
   }, []);
+
+  const handleRunAutopilotTool = useCallback(
+    async (messageId: string, index: number, tool: AutopilotToolDirective) => {
+      const key = `${messageId}:${index}`;
+      setToolExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
+      try {
+        const result = await runAutopilotTool(tool.endpoint, {
+          method: tool.method,
+          payload: tool.payload ?? undefined,
+        });
+        const summary = summarizeToolResult(result);
+        setToolExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "success", detail: summary },
+        }));
+        setBanner({ intent: "info", text: `${tool.label} executed.` });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Tool request failed");
+        setToolExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: message },
+        }));
+        setBanner({ intent: "error", text: message });
+      }
+    },
+    [setBanner],
+  );
 
   const handleLinkNavigation = useCallback(
     (url: string, event?: MouseEvent<HTMLAnchorElement>) => {
@@ -400,18 +544,89 @@ export function ChatPanel() {
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
 
+    void storeChatMessage(threadId, {
+      id: userMessage.id,
+      role: "user",
+      content: trimmed,
+    }).catch((error) => console.warn("[chat] failed to persist user message", error));
+
     let streamedModel: string | null = null;
     let streamedTrace: string | null = null;
+    let contextMessage: ChatPayloadMessage | null = null;
+    let contextData: ChatContextResponse | null = null;
+    let selectionText: string | null = null;
+
+    if (usePageContext && activeTab?.url) {
+      try {
+        selectionText = captureWindowSelection();
+        contextData = await fetchChatContext(threadId, {
+          url: activeTab.url,
+          include: ["selection", "history", "metadata"],
+          selection: selectionText,
+          title: activeTab.title ?? undefined,
+          locale: clientLocale ?? undefined,
+          time: new Date().toISOString(),
+        });
+        const combinedSelection = contextData.selection?.text ?? selectionText ?? null;
+        const selectionCount = contextData.selection?.word_count ?? countWords(combinedSelection);
+        const contextPayload = {
+          url: contextData.url ?? activeTab.url,
+          title: activeTab.title ?? (contextData.metadata?.title as string | undefined) ?? null,
+          summary: contextData.summary ?? null,
+          selection: combinedSelection,
+          selection_word_count: selectionCount,
+          metadata: contextData.metadata ?? {},
+          history: contextData.history ?? [],
+          memories: contextData.memories ?? [],
+        };
+        contextMessage = {
+          role: "system",
+          content: JSON.stringify({ context: contextPayload }, null, 2),
+        };
+        setContextSummary({
+          url: contextPayload.url ?? activeTab.url,
+          selectionWordCount: selectionCount,
+        });
+        void storeChatMessage(threadId, {
+          role: "system",
+          content: JSON.stringify({ type: "context", data: contextPayload }),
+        }).catch((error) => console.warn("[chat] failed to persist context", error));
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : "Failed to resolve page context";
+        setBanner({ intent: "error", text: messageText });
+      }
+    }
+
+    const modelMessages: ChatPayloadMessage[] = [];
+    if (contextMessage) {
+      modelMessages.push(contextMessage);
+    }
+    for (const message of historySnapshot) {
+      const role = message.role === "agent" ? "system" : message.role;
+      if (role !== "system" && role !== "assistant" && role !== "user") {
+        continue;
+      }
+      const baseContent =
+        role === "assistant" ? message.answer ?? message.content ?? "" : message.content ?? "";
+      if (!baseContent.trim()) {
+        continue;
+      }
+      modelMessages.push({ role, content: baseContent });
+    }
+    modelMessages.push({ role: "user", content: trimmed });
 
     try {
-      const result = await sendChat(historySnapshot, trimmed, {
-        signal: controller.signal,
-        clientTimezone,
+      const result = await chatClient.send({
+        messages: modelMessages,
         model: selectedModel ?? undefined,
+        url: activeTab?.url ?? undefined,
+        textContext: contextData?.selection?.text ?? selectionText ?? undefined,
+        clientTimezone,
         serverTime: serverTime?.server_time ?? undefined,
         serverTimezone: serverTime?.server_timezone ?? undefined,
         serverUtc: serverTime?.server_time_utc ?? undefined,
-        onStreamEvent: (event) => {
+        signal: controller.signal,
+        onEvent: (event) => {
           if (event.type === "metadata") {
             streamedModel = event.model ?? streamedModel;
             streamedTrace = event.trace_id ?? streamedTrace;
@@ -447,6 +662,12 @@ export function ChatPanel() {
         model: result.payload.model ?? streamedModel ?? message.model ?? null,
         autopilot: result.payload.autopilot ?? null,
       }));
+
+      void storeChatMessage(threadId, {
+        id: assistantId,
+        role: "assistant",
+        content: result.payload.answer || result.payload.reasoning || "",
+      }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
     } catch (error) {
       if (
         controller.signal.aborted ||
@@ -489,6 +710,9 @@ export function ChatPanel() {
       setIsBusy(false);
     }
   }, [
+    activeTab?.title,
+    activeTab?.url,
+    clientLocale,
     clientTimezone,
     input,
     inventory,
@@ -496,9 +720,10 @@ export function ChatPanel() {
     llmReachable,
     selectedModel,
     serverTime,
+    threadId,
     updateMessage,
+    usePageContext,
   ]);
-
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -581,6 +806,14 @@ export function ChatPanel() {
         statusLabel={headerStatusLabel}
         timeSummary={timeSummary}
         controlsDisabled={isBusy || installing}
+        contextControl={
+          <UsePageContextToggle
+            enabled={usePageContext}
+            disabled={isBusy || installing || !activeTab?.url}
+            onChange={handleContextToggle}
+            summary={contextSummary}
+          />
+        }
       />
       {statusBanner ? (
         <div
@@ -654,6 +887,63 @@ export function ChatPanel() {
                             </p>
                             {message.autopilot.reason ? (
                               <p className="mt-1 text-foreground/80">{message.autopilot.reason}</p>
+                            ) : null}
+                            {message.autopilot.tools && message.autopilot.tools.length > 0 ? (
+                              <div className="mt-2 space-y-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
+                                  Available tools
+                                </p>
+                                <div className="space-y-2">
+                                  {message.autopilot.tools.map((tool, toolIndex) => {
+                                    const key = `${message.id}:${toolIndex}`;
+                                    const execution = toolExecutions[key];
+                                    const running = execution?.status === "running";
+                                    const success = execution?.status === "success";
+                                    const failed = execution?.status === "error";
+                                    return (
+                                      <div
+                                        key={key}
+                                        className="rounded-md border border-primary/20 bg-background/80 p-2"
+                                      >
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <div className="min-w-0 flex-1">
+                                            <p className="truncate text-xs font-semibold text-primary">
+                                              {tool.label}
+                                            </p>
+                                            {tool.description ? (
+                                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                                {tool.description}
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={running}
+                                            onClick={() => {
+                                              void handleRunAutopilotTool(message.id, toolIndex, tool);
+                                            }}
+                                          >
+                                            {running ? (
+                                              <Loader2 className="h-3 w-3 animate-spin" />
+                                            ) : null}
+                                            <span>{running ? "Running" : "Run"}</span>
+                                          </Button>
+                                        </div>
+                                        {success && execution?.detail ? (
+                                          <pre className="mt-2 max-h-40 overflow-auto rounded bg-muted px-2 py-1 text-[11px] leading-tight">
+                                            {execution.detail}
+                                          </pre>
+                                        ) : null}
+                                        {failed && execution?.detail ? (
+                                          <p className="mt-2 text-[11px] text-destructive">{execution.detail}</p>
+                                        ) : null}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
                             ) : null}
                           </div>
                         ) : null}

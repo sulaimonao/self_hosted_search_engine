@@ -119,11 +119,42 @@ def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     query = str(payload.get("query", "")).strip()
     if mode != "browser" or not query:
         return None
+
     reason_val = payload.get("reason")
     reason = str(reason_val).strip() if isinstance(reason_val, str) else None
     if reason == "":
         reason = None
-    return {"mode": "browser", "query": query, "reason": reason}
+
+    tools_payload = payload.get("tools")
+    tools: list[dict[str, Any]] = []
+    if isinstance(tools_payload, Iterable) and not isinstance(tools_payload, (str, bytes, bytearray)):
+        for entry in tools_payload:
+            if not isinstance(entry, Mapping):
+                continue
+            label = str(entry.get("label", "")).strip()
+            endpoint = str(entry.get("endpoint", "")).strip()
+            if not label or not endpoint:
+                continue
+            tool: dict[str, Any] = {"label": label, "endpoint": endpoint}
+            method_val = entry.get("method")
+            if isinstance(method_val, str):
+                method = method_val.strip().upper()
+                if method in {"GET", "POST"}:
+                    tool["method"] = method
+            payload_val = entry.get("payload")
+            if isinstance(payload_val, Mapping):
+                tool["payload"] = dict(payload_val)
+            description_val = entry.get("description")
+            if isinstance(description_val, str):
+                description = description_val.strip()
+                if description:
+                    tool["description"] = description
+            tools.append(tool)
+
+    result: dict[str, Any] = {"mode": "browser", "query": query, "reason": reason}
+    if tools:
+        result["tools"] = tools
+    return result
 
 
 def _coerce_schema(text: str) -> dict[str, Any]:
@@ -540,7 +571,9 @@ def chat_invoke() -> Response:
 
     accept_header = (request.headers.get("Accept") or "").lower()
     stream_flag = request.args.get("stream")
-    if stream_flag is not None:
+    if chat_request.stream is not None:
+        streaming_requested = bool(chat_request.stream)
+    elif stream_flag is not None:
         streaming_requested = stream_flag.strip().lower() not in {"0", "false", "no", "off"}
     else:
         streaming_requested = "application/json" not in accept_header
@@ -619,7 +652,7 @@ def chat_invoke() -> Response:
             request_payload: dict[str, Any] = {
                 "model": candidate,
                 "messages": prepared_messages,
-                "stream": True,
+                "stream": bool(streaming_requested),
                 "system": system_prompt,
             }
             if _supports_json_format(candidate):
@@ -646,7 +679,7 @@ def chat_invoke() -> Response:
                     response = requests.post(
                         endpoint,
                         json=request_payload,
-                        stream=True,
+                        stream=bool(streaming_requested),
                         timeout=120,
                     )
                     if llm_span is not None:
@@ -731,9 +764,9 @@ def chat_invoke() -> Response:
                 )
 
             try:
-                payload_json, accumulator = _drain_chat_response(response)
+                payload_json = response.json()
             except ValueError as exc:
-                g.chat_error_class = "InvalidStream"
+                g.chat_error_class = "InvalidResponse"
                 g.chat_error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
                 log_event(
                     "ERROR",
@@ -752,6 +785,31 @@ def chat_invoke() -> Response:
                     ),
                     502,
                 )
+
+            if not isinstance(payload_json, Mapping):
+                g.chat_error_class = "InvalidResponse"
+                g.chat_error_message = "upstream response missing JSON object"
+                log_event(
+                    "ERROR",
+                    "chat.error",
+                    trace=trace_id,
+                    model=candidate,
+                    msg=g.chat_error_message,
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "invalid_response",
+                            "message": g.chat_error_message,
+                            "trace_id": trace_id,
+                        }
+                    ),
+                    502,
+                )
+
+            accumulator = _StreamAccumulator()
+            if accumulator.update(payload_json) is None:
+                accumulator.payload = payload_json
 
             response_payload = _render_response_payload(
                 candidate=candidate,

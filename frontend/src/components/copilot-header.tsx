@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { AlertTriangle, Loader2, PlugZap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -22,6 +24,7 @@ interface CopilotHeaderProps {
     clientZone: string;
   } | null;
   controlsDisabled?: boolean;
+  contextControl?: ReactNode;
 }
 
 export function CopilotHeader({
@@ -36,6 +39,7 @@ export function CopilotHeader({
   statusLabel,
   timeSummary,
   controlsDisabled = false,
+  contextControl,
 }: CopilotHeaderProps) {
   const hasModels = chatModels.length > 0;
   const selectOptions =
@@ -60,16 +64,21 @@ export function CopilotHeader({
           ) : null}
         </div>
         {hasModels ? (
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground">Model</span>
-            <ModelSelect
-              value={selectedModel}
-              options={selectOptions}
-              onChange={onModelChange}
-              disabled={disabled}
-              loading={installing}
-            />
+          <div className="flex flex-wrap items-center justify-end gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Model</span>
+              <ModelSelect
+                value={selectedModel}
+                options={selectOptions}
+                onChange={onModelChange}
+                disabled={disabled}
+                loading={installing}
+              />
+            </div>
+            {contextControl ? <div className="text-left text-xs text-muted-foreground/90">{contextControl}</div> : null}
           </div>
+        ) : contextControl ? (
+          <div className="text-xs text-muted-foreground/90">{contextControl}</div>
         ) : null}
       </div>
       {!hasModels ? (
