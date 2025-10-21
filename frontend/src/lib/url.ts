@@ -2,9 +2,38 @@ export type SearchMode = "auto" | "query";
 
 const SCHEME_REGEX = /^https?:\/\//i;
 const DOMAIN_LIKE_REGEX = /^[\w.-]+\.[a-z]{2,}(?:[:/?#].*)?$/i;
+const GOOGLE_HOSTS = new Set(["google.com", "www.google.com"]);
 
 function toGoogleSearch(query: string) {
-  return `https://www.google.com/search?q=${encodeURIComponent(query.trim())}`;
+  const trimmed = query.trim();
+  const base = new URL("https://www.google.com/search");
+  if (trimmed) {
+    base.searchParams.set("q", trimmed);
+  }
+  base.searchParams.set("igu", "1");
+  return base.toString();
+}
+
+function ensureGoogleEmbeddable(candidate: string): string {
+  try {
+    const url = new URL(candidate);
+    const host = url.hostname.toLowerCase();
+    if (!GOOGLE_HOSTS.has(host)) {
+      return candidate;
+    }
+    if (host === "google.com") {
+      url.hostname = "www.google.com";
+    }
+    if (!url.searchParams.has("igu")) {
+      url.searchParams.set("igu", "1");
+    }
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/webhp";
+    }
+    return url.toString();
+  } catch {
+    return candidate;
+  }
 }
 
 export function normalizeAddressInput(
@@ -17,19 +46,19 @@ export function normalizeAddressInput(
   }
 
   if (SCHEME_REGEX.test(trimmed)) {
-    return trimmed;
+    return ensureGoogleEmbeddable(trimmed);
   }
 
   const mode = options.searchMode ?? "auto";
   const looksLikeDomain = DOMAIN_LIKE_REGEX.test(trimmed);
 
   if (mode === "query" && !SCHEME_REGEX.test(trimmed)) {
-    return toGoogleSearch(trimmed);
+    return ensureGoogleEmbeddable(toGoogleSearch(trimmed));
   }
 
   if (looksLikeDomain) {
-    return `https://${trimmed}`;
+    return ensureGoogleEmbeddable(`https://${trimmed}`);
   }
 
-  return toGoogleSearch(trimmed);
+  return ensureGoogleEmbeddable(toGoogleSearch(trimmed));
 }

@@ -91,6 +91,20 @@ export function SystemCheckPanel({
   const backendChecks = systemCheck?.backend?.checks ?? [];
   const diagnosticsStatus = systemCheck?.diagnostics;
   const llmStatus = systemCheck?.llm;
+  const llmPayload = (llmStatus?.payload ?? null) as Record<string, unknown> | null;
+  const llmChatModels = Array.isArray(llmPayload?.chat_models)
+    ? (llmPayload?.chat_models as string[])
+    : [];
+  const llmAvailableModels = Array.isArray(llmPayload?.available_models)
+    ? (llmPayload?.available_models as string[])
+    : [];
+  const llmConfigured = (llmPayload?.configured ?? null) as
+    | { primary?: string | null; fallback?: string | null }
+    | null;
+  const llmModelsError =
+    typeof llmPayload?.models_error === "string" && llmPayload.models_error.trim()
+      ? (llmPayload.models_error as string)
+      : null;
   const browserChecks = browserReport?.checks ?? [];
 
   const sections = useMemo(() => {
@@ -175,14 +189,33 @@ export function SystemCheckPanel({
             <div className="space-y-1 text-sm">
               <h3 className="text-sm font-semibold">LLM details</h3>
               <p className="text-muted-foreground text-xs">
-                Reachable: {llmStatus.reachable ? 'yes' : 'no'}
-                {llmStatus.payload && typeof llmStatus.payload === 'object'
+                Reachable: {llmStatus.reachable ? "yes" : "no"}
+                {llmPayload && typeof llmPayload === "object"
                   ? (() => {
-                      const host = (llmStatus.payload as { host?: string }).host;
-                      return host ? ` • Host: ${host}` : '';
+                      const host = (llmPayload as { host?: string }).host;
+                      return host ? ` • Host: ${host}` : "";
                     })()
-                  : ''}
+                  : ""}
               </p>
+              <p className="text-xs text-muted-foreground">
+                Chat models: {llmChatModels.length > 0 ? llmChatModels.join(", ") : "none reported"}
+              </p>
+              {llmConfigured?.primary || llmConfigured?.fallback ? (
+                <p className="text-xs text-muted-foreground">
+                  Configured: {llmConfigured?.primary ?? "(primary unset)"}
+                  {llmConfigured?.fallback ? ` • Fallback: ${llmConfigured.fallback}` : ""}
+                </p>
+              ) : null}
+              {llmAvailableModels.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Available models: {llmAvailableModels.join(", ")}
+                </p>
+              ) : null}
+              {llmModelsError ? (
+                <p className="text-xs text-destructive">
+                  Model inventory error: {llmModelsError}
+                </p>
+              ) : null}
             </div>
           ) : null}
           {diagnosticsStatus ? (

@@ -237,7 +237,7 @@ export function BrowserShell() {
             ref={iframeRef}
             title={activeTab?.title ?? "tab"}
             className="h-full w-full"
-            sandbox="allow-same-origin allow-forms allow-scripts allow-popups allow-popups-to-escape-sandbox"
+            sandbox="allow-same-origin allow-forms allow-scripts allow-popups allow-top-navigation-by-user-activation"
           />
         )}
 

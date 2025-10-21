@@ -131,23 +131,86 @@ def _check_llm() -> dict[str, Any]:
             "detail": "Ollama host not configured",
             "critical": False,
         }
+
     started = time.perf_counter()
+    models_error: str | None = None
     with current_app.test_client() as client:
-        response = client.get("/api/llm/health")
+        health_response = client.get("/api/llm/health")
+        try:
+            models_response = client.get("/api/llm/models")
+        except Exception:  # pragma: no cover - defensive best effort
+            models_response = None
+            models_error = "request_failed"
     duration_ms = int((time.perf_counter() - started) * 1000)
-    payload = response.get_json(silent=True) or {}
-    reachable = bool(payload.get("reachable"))
-    status = "pass" if reachable else "warn"
-    detail = None
-    if not reachable:
-        detail = "Ollama host unreachable"
+
+    health_payload = health_response.get_json(silent=True) or {}
+    reachable = bool(health_payload.get("reachable"))
+    status = "pass" if reachable else "fail"
+    detail: str | None = None if reachable else "Ollama host unreachable"
+    critical = not reachable
+
+    chat_models: list[str] = []
+    available_models: list[str] = []
+    configured_models: dict[str, Any] | None = None
+    models_payload: dict[str, Any] | None = None
+    if health_response.status_code >= 400:
+        status = "fail"
+        detail = detail or f"LLM health returned HTTP {health_response.status_code}"
+        critical = True
+
+    if models_response is not None:
+        if models_response.status_code >= 400:
+            models_error = f"HTTP {models_response.status_code}"
+            if status == "pass":
+                status = "warn"
+            detail = detail or "Unable to enumerate chat models"
+        else:
+            models_payload = models_response.get_json(silent=True) or {}
+            chat_models = [
+                str(entry).strip()
+                for entry in (models_payload.get("chat_models") or [])
+                if str(entry).strip()
+            ]
+            available_models = [
+                str(entry).strip()
+                for entry in (models_payload.get("available") or [])
+                if str(entry).strip()
+            ]
+            configured_raw = models_payload.get("configured")
+            if isinstance(configured_raw, dict):
+                configured_models = {
+                    "primary": configured_raw.get("primary"),
+                    "fallback": configured_raw.get("fallback"),
+                }
+            reachable = reachable or bool(models_payload.get("reachable"))
+            if reachable and not chat_models:
+                status = "fail"
+                detail = "No chat-capable models reported by Ollama"
+                critical = True
+
+    payload_summary: dict[str, Any] = {
+        "host": health_payload.get("host")
+        or (models_payload.get("ollama_host") if isinstance(models_payload, dict) else None),
+        "health": health_payload,
+        "reachable": reachable,
+    }
+    if models_payload is not None:
+        payload_summary["models"] = models_payload
+        payload_summary["chat_models"] = chat_models
+        payload_summary["available_models"] = available_models
+        payload_summary["configured"] = configured_models
+        payload_summary["chat_model_count"] = len(chat_models)
+        payload_summary["available_model_count"] = len(available_models)
+    if models_error:
+        payload_summary["models_error"] = models_error
+
     return {
         "status": status,
         "reachable": reachable,
         "detail": detail,
-        "critical": False,
+        "critical": critical,
         "duration_ms": duration_ms,
-        "payload": payload,
+        "payload": payload_summary,
     }
 
 
