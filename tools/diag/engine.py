@@ -1,525 +1,601 @@
-#!/usr/bin/env python3
+"""Diagnostics engine orchestrating the self-upgrading rule registry."""
 from __future__ import annotations
 
-import atexit
+import argparse
+from collections import defaultdict
+import fnmatch
+import hashlib
 import json
 import os
-import platform
-import re
-import socket
+import shutil
+import textwrap
 import time
-import signal
-import subprocess
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
-import requests
+import yaml
 
-API_PORT = int(os.environ.get("BACKEND_PORT", "5050"))
-WEB_PORT = int(os.environ.get("PORT", "3100"))
-API_BASE = f"http://127.0.0.1:{API_PORT}"
-RENDERER = f"http://localhost:{WEB_PORT}"
+from .globs import ALL_PATTERNS, DiscoveryResult, EXCLUDE_DIRS, SPECIAL_FILENAMES
 
-DEFAULT_TIMEOUT = (5, 10)  # (connect, read)
-RUN_DIR = Path.cwd() / "diagnostics" / time.strftime("run_%Y%m%d-%H%M%S")
-LOGS_DIR = RUN_DIR / "logs"
-SHOT_DIR = RUN_DIR / "screenshots"
-MANIFEST_PATH = Path("tools/diag/manifest.json")
-API_CMD = [
-    "bash",
-    "-lc",
-    f"make api || (PYTHONPATH=. BACKEND_PORT={API_PORT} python3 -m backend.app)",
-]
-WEB_CMD = ["bash", "-lc", "npm --prefix frontend run dev:web"]
-WEB_ENV = {
-    "PORT": str(WEB_PORT),
-    "NEXT_PUBLIC_API_BASE_URL": f"http://127.0.0.1:{API_PORT}",
-}
-
-PROCS: List[Tuple[Any, Any]] = []  # (proc, loghandle)
+SCHEMA_VERSION = "1.0.0"
+RUN_DIR_NAME = Path("diagnostics") / "run_latest"
+BASELINE_DEFAULT = Path("diagnostics") / "baseline.json"
+SUPPRESSED_RULES_PATH = Path("tools/diag/SUPPRESSED_RULES.yml")
 
 
-def _mkdirs() -> None:
-    RUN_DIR.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    SHOT_DIR.mkdir(parents=True, exist_ok=True)
-    (RUN_DIR / "summary.txt").touch()
-    for name in ("api.log", "web.log", "browser-console.jsonl", "browser-network.jsonl"):
-        (LOGS_DIR / name).touch()
+class Severity(str, Enum):
+    """Severity levels used across diagnostics."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+    @property
+    def rank(self) -> int:
+        if self is Severity.LOW:
+            return 1
+        if self is Severity.MEDIUM:
+            return 2
+        return 3
 
 
-def _start(cmd: List[str], log_path: Path, extra_env: Optional[Dict[str, str]] = None):
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
-    lf = open(log_path, "w", encoding="utf-8")
-    popen_args: Dict[str, Any] = {
-        "cwd": Path.cwd(),
-        "env": env,
-        "stdout": lf,
-        "stderr": subprocess.STDOUT,
-        "text": True,
-    }
-    if os.name == "nt":  # pragma: no cover - windows-specific branch
-        popen_args["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-    else:
-        popen_args["preexec_fn"] = os.setsid  # type: ignore[attr-defined]
-    proc = subprocess.Popen(
-        cmd,
-        **popen_args,
-    )
-    PROCS.append((proc, lf))
-    return proc
+class ExitCode(Enum):
+    OK = 0
+    WARN = 1
+    ERROR = 2
+    TOOL_FAILURE = 3
 
 
-def _kill_procs() -> None:
-    for proc, lf in PROCS:
-        try:
-            if proc.poll() is None:
-                if os.name == "nt":  # pragma: no cover - windows-specific branch
-                    proc.terminate()
-                else:
-                    os.killpg(proc.pid, signal.SIGTERM)
-        except Exception:
-            pass
-        try:
-            lf.close()
-        except Exception:
-            pass
-    time.sleep(1.0)
-    for proc, _ in PROCS:
-        try:
-            if proc.poll() is None:
-                if os.name == "nt":  # pragma: no cover - windows-specific branch
-                    proc.kill()
-                else:
-                    os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
-            pass
+@dataclass
+class Finding:
+    """Single diagnostic finding emitted by a rule."""
 
+    id: str
+    rule_id: str
+    severity: Severity
+    summary: str
+    suggestion: str
+    file: Optional[str] = None
+    line_hint: Optional[int] = None
+    evidence: Optional[str] = None
+    doc: Optional[str] = None
 
-def log(msg: str) -> None:
-    print(msg, flush=True)
-    with open(RUN_DIR / "summary.txt", "a", encoding="utf-8") as handle:
-        handle.write(msg + "\n")
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "rule_id": self.rule_id,
+            "severity": self.severity.value,
+            "summary": self.summary,
+            "suggestion": self.suggestion,
+            "file": self.file,
+            "line_hint": self.line_hint,
+            "evidence": self.evidence,
+            "doc": self.doc,
+            "fingerprint": self.fingerprint,
+        }
 
-
-def _port_free(port: int) -> bool:
-    sock = socket.socket()
-    try:
-        return sock.connect_ex(("127.0.0.1", port)) != 0
-    finally:
-        sock.close()
-
-
-def _get(url: str, **kwargs):
-    return requests.get(url, timeout=kwargs.pop("timeout", DEFAULT_TIMEOUT), **kwargs)
-
-
-def _post(url: str, **kwargs):
-    return requests.post(url, timeout=kwargs.pop("timeout", DEFAULT_TIMEOUT), **kwargs)
-
-
-def _console_record(msg):
-    mtype = msg.type() if callable(getattr(msg, "type", None)) else getattr(msg, "type", None)
-    text = msg.text() if callable(getattr(msg, "text", None)) else getattr(msg, "text", None)
-    loc = {}
-    try:
-        loc = msg.location if isinstance(msg.location, dict) else dict(msg.location or {})  # type: ignore[attr-defined]
-    except Exception:
-        loc = {}
-    return {
-        "type": mtype,
-        "text": text,
-        "url": loc.get("url"),
-        "line": loc.get("lineNumber"),
-        "col": loc.get("columnNumber"),
-    }
-
-
-def _requestfailed_record(req):
-    failure_attr = getattr(req, "failure", None)
-    try:
-        failure = failure_attr() if callable(failure_attr) else failure_attr
-    except Exception:
-        failure = None
-    err_text = failure.get("errorText") if isinstance(failure, dict) else (failure if isinstance(failure, str) else None)
-    resource_attr = getattr(req, "resource_type", None)
-    resource_type = resource_attr() if callable(resource_attr) else resource_attr
-    url = req.url if hasattr(req, "url") else None
-    method = req.method if hasattr(req, "method") else None
-    return {
-        "url": url,
-        "method": method,
-        "failure": err_text,
-        "resourceType": resource_type,
-    }
-
-
-console_path = RUN_DIR / "logs" / "browser-console.jsonl"
-net_path = RUN_DIR / "logs" / "browser-network.jsonl"
-
-
-def _write_jsonl(path: Path, obj: Dict[str, Any]) -> None:
-    try:
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-
-# ---------- Detect ----------
-def detect_api_routes_runtime() -> List[Dict[str, Any]]:
-    try:
-        resp = _get(f"{API_BASE}/api/meta/routes")
-        if resp.status_code == 200:
-            payload = resp.json()
-            if isinstance(payload, list):
-                return payload
-            if isinstance(payload, dict):
-                return payload.get("routes", [])
-    except Exception:
-        pass
-    return []
-
-
-def detect_api_routes_static() -> List[Dict[str, Any]]:
-    routes: List[Dict[str, Any]] = []
-    for path in Path("backend").rglob("*.py"):
-        try:
-            text = path.read_text(errors="ignore")
-        except Exception:
-            continue
-        for match in re.finditer(r"@(?:app|[\w_]+)\.route\(\s*['\"]([^'\"]+)['\"].*?\)", text):
-            routes.append({"rule": match.group(1)})
-    seen: set[str] = set()
-    deduped: List[Dict[str, Any]] = []
-    for route in routes:
-        rule = route.get("rule", "")
-        if not rule.startswith("/api/"):
-            continue
-        if rule in seen:
-            continue
-        seen.add(rule)
-        deduped.append({"rule": rule, "methods": ["GET", "POST"]})
-    return deduped
-
-
-def detect_web_routes() -> List[str]:
-    paths: List[str] = []
-    page_files = list(Path("frontend/pages").rglob("*.tsx")) + list(
-        Path("frontend/pages").rglob("*.ts")
-    )
-    for path in page_files:
-        rel = str(path.relative_to("frontend/pages"))
-        if rel.startswith("api/"):
-            continue
-        # infer route path from filename (rough but fine for MVP)
-        route = (
-            "/" + rel.replace("index.tsx", "")
-            .replace("index.ts", "")
-            .replace(".tsx", "")
-            .replace(".ts", "")
+    @property
+    def fingerprint(self) -> str:
+        seed = "|".join(
+            [
+                self.rule_id,
+                self.summary,
+                self.suggestion,
+                self.file or "",
+                str(self.line_hint or ""),
+            ]
         )
-        route = route.replace("\\", "/")
-        if route.endswith("/"):
-            route = route[:-1]
-        if not route:
-            route = "/"
-        paths.append(route or "/")
-    if "/browser" not in paths:
-        paths.append("/browser")
-    return sorted(set(paths))
+        return hashlib.sha1(seed.encode("utf-8")).hexdigest()
 
 
-# ---------- Manifest ----------
-def load_manifest() -> Dict[str, Any]:
-    if MANIFEST_PATH.exists():
+@dataclass
+class Rule:
+    id: str
+    description: str
+    severity: Severity
+    check: Callable[["RuleContext"], Iterable[Finding]]
+    smoke_only: bool = False
+    doc: Optional[str] = None
+
+
+_RULES: Dict[str, Rule] = {}
+
+
+def register(
+    rule_id: str,
+    *,
+    description: str,
+    severity: Severity,
+    smoke_only: bool = False,
+    doc: Optional[str] = None,
+) -> Callable[[Callable[["RuleContext"], Iterable[Finding]]], Callable[["RuleContext"], Iterable[Finding]]]:
+    """Register a rule with the diagnostics engine."""
+
+    def decorator(func: Callable[["RuleContext"], Iterable[Finding]]):
+        if rule_id in _RULES:
+            raise ValueError(f"Rule '{rule_id}' already registered")
+        _RULES[rule_id] = Rule(
+            id=rule_id,
+            description=description,
+            severity=severity,
+            check=func,
+            smoke_only=smoke_only,
+            doc=doc,
+        )
+        return func
+
+    return decorator
+
+
+def iter_rules() -> Iterator[Rule]:
+    for rule_id in sorted(_RULES):
+        yield _RULES[rule_id]
+
+
+@dataclass
+class SuppressionEntry:
+    rule_id: str
+    patterns: Tuple[str, ...] = ()
+    lines: Tuple[int, ...] = ()
+    reason: Optional[str] = None
+
+    def matches(self, finding: Finding) -> bool:
+        if self.rule_id != finding.rule_id:
+            return False
+        if self.patterns and not finding.file:
+            return False
+        if self.patterns and finding.file:
+            relative = finding.file
+            if not any(fnmatch.fnmatch(relative, pattern) for pattern in self.patterns):
+                return False
+        if self.lines and finding.line_hint is not None:
+            return finding.line_hint in self.lines
+        if self.lines and finding.line_hint is None:
+            return False
+        return True
+
+
+class SuppressionIndex:
+    """Handle suppressed rules defined in files and SUPPRESSED_RULES.yml."""
+
+    def __init__(self, root: Path, context: "RuleContext") -> None:
+        self.root = root
+        self.context = context
+        self.entries: List[SuppressionEntry] = self._load_entries()
+        self.inline_cache: Dict[str, Dict[int, Set[str]]] = {}
+
+    def _load_entries(self) -> List[SuppressionEntry]:
+        path = self.root / SUPPRESSED_RULES_PATH
+        if not path.exists():
+            return []
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+        entries: List[SuppressionEntry] = []
+        if isinstance(data, dict):
+            data = [data]
+        for raw in data:
+            if not isinstance(raw, dict):
+                continue
+            rule_id = str(raw.get("rule") or raw.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            patterns = tuple(str(p) for p in raw.get("paths", []) if isinstance(p, str))
+            lines = tuple(int(l) for l in raw.get("lines", []) if isinstance(l, int))
+            reason = str(raw.get("reason")) if raw.get("reason") else None
+            entries.append(SuppressionEntry(rule_id=rule_id, patterns=patterns, lines=lines, reason=reason))
+        return entries
+
+    def _inline_for(self, relative_path: str) -> Dict[int, Set[str]]:
+        cached = self.inline_cache.get(relative_path)
+        if cached:
+            return cached
+        text = self.context.read_text(relative_path)
+        suppressions: Dict[int, Set[str]] = defaultdict(set)
+        if not text:
+            self.inline_cache[relative_path] = suppressions
+            return suppressions
+        for idx, line in enumerate(text.splitlines(), start=1):
+            marker_index = line.find("diag:")
+            if marker_index == -1:
+                continue
+            fragment = line[marker_index:]
+            lowered = fragment.lower()
+            if "disable" not in lowered:
+                continue
+            rule_part = fragment.split("=", 1)
+            if len(rule_part) != 2:
+                continue
+            raw_rules = rule_part[1]
+            # Stop at comment endings to avoid parsing trailing code.
+            raw_rules = raw_rules.split("/*")[0]
+            raw_rules = raw_rules.split("--")[0]
+            raw_rules = raw_rules.split("#")[0]
+            identifiers = [piece.strip().strip(",") for piece in raw_rules.split(",")]
+            identifiers = [identifier for identifier in identifiers if identifier]
+            for identifier in identifiers:
+                suppressions[idx].add(identifier)
+        self.inline_cache[relative_path] = suppressions
+        return suppressions
+
+    def is_suppressed(self, finding: Finding) -> bool:
+        for entry in self.entries:
+            if entry.matches(finding):
+                return True
+        if finding.file:
+            inline = self._inline_for(finding.file)
+            if finding.line_hint is not None:
+                if finding.rule_id in inline.get(finding.line_hint, set()):
+                    return True
+        return False
+
+
+@dataclass
+class Baseline:
+    fingerprints: Set[Tuple[str, str]] = field(default_factory=set)
+
+    @classmethod
+    def load(cls, path: Path) -> "Baseline":
+        if not path.exists():
+            return cls()
         try:
-            return json.loads(MANIFEST_PATH.read_text())
-        except Exception:
-            pass
-    return {"probes": []}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return cls()
+        fingerprints: Set[Tuple[str, str]] = set()
+        for item in payload.get("findings", []):
+            if not isinstance(item, dict):
+                continue
+            rule_id = item.get("rule_id") or item.get("rule")
+            fingerprint = item.get("fingerprint")
+            if isinstance(rule_id, str) and isinstance(fingerprint, str):
+                fingerprints.add((rule_id, fingerprint))
+        return cls(fingerprints=fingerprints)
+
+    def contains(self, finding: Finding) -> bool:
+        return (finding.rule_id, finding.fingerprint) in self.fingerprints
 
 
-def save_manifest(manifest: Dict[str, Any]) -> None:
-    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
+@dataclass
+class Results:
+    findings: List[Finding] = field(default_factory=list)
+    suppressed: List[Finding] = field(default_factory=list)
+    baseline_ignored: List[Finding] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+    def add(self, finding: Finding) -> None:
+        self.findings.append(finding)
+
+    def add_suppressed(self, finding: Finding) -> None:
+        self.suppressed.append(finding)
+
+    def add_baseline(self, finding: Finding) -> None:
+        self.baseline_ignored.append(finding)
+
+    def counts_by_severity(self) -> Dict[Severity, int]:
+        counts: Dict[Severity, int] = {severity: 0 for severity in Severity}
+        for finding in self.findings:
+            counts[finding.severity] += 1
+        return counts
+
+    def highest_severity(self) -> Optional[Severity]:
+        highest: Optional[Severity] = None
+        for finding in self.findings:
+            if not highest or finding.severity.rank > highest.rank:
+                highest = finding.severity
+        return highest
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "summary": {
+                "counts": {severity.value: count for severity, count in self.counts_by_severity().items()},
+                "suppressed": len(self.suppressed),
+                "baseline": len(self.baseline_ignored),
+                "errors": len(self.errors),
+            },
+            "findings": [finding.to_dict() for finding in self.findings],
+            "suppressed_findings": [finding.to_dict() for finding in self.suppressed],
+            "baseline_findings": [finding.to_dict() for finding in self.baseline_ignored],
+            "errors": self.errors,
+        }
+
+    def to_text(self) -> str:
+        counts = self.counts_by_severity()
+        summary_lines = [
+            "Diagnostics summary:",
+            f"  High: {counts[Severity.HIGH]}",
+            f"  Medium: {counts[Severity.MEDIUM]}",
+            f"  Low: {counts[Severity.LOW]}",
+            f"  Suppressed: {len(self.suppressed)}",
+            f"  Baseline: {len(self.baseline_ignored)}",
+        ]
+        if self.errors:
+            summary_lines.append(f"  Errors: {len(self.errors)}")
+        detail_lines: List[str] = []
+        for finding in self.findings:
+            location = f" ({finding.file}:{finding.line_hint})" if finding.file else ""
+            detail_lines.append(f"[{finding.rule_id}][{finding.severity.value}] {finding.summary}{location}")
+            detail_lines.append(f"    Suggestion: {finding.suggestion}")
+            if finding.evidence:
+                detail_lines.append(f"    Evidence: {finding.evidence}")
+        body = "\n".join(detail_lines) if detail_lines else "No actionable findings."
+        return "\n".join(summary_lines + ["", body])
+
+    def to_markdown(self) -> str:
+        counts = self.counts_by_severity()
+        header = textwrap.dedent(
+            f"""
+            # Diagnostics Report
+
+            | Severity | Count |
+            | --- | ---: |
+            | High | {counts[Severity.HIGH]} |
+            | Medium | {counts[Severity.MEDIUM]} |
+            | Low | {counts[Severity.LOW]} |
+            | Suppressed | {len(self.suppressed)} |
+            | Baseline | {len(self.baseline_ignored)} |
+            """
+        ).strip()
+        lines = [header, ""]
+        if self.errors:
+            lines.append("## Errors")
+            for error in self.errors:
+                lines.append(f"- {error}")
+            lines.append("")
+        if self.findings:
+            lines.append("## Findings")
+            for finding in self.findings:
+                location = f" (`{finding.file}` line {finding.line_hint})" if finding.file else ""
+                lines.append(f"- **{finding.rule_id}** ({finding.severity.value}){location}: {finding.summary}")
+                lines.append(f"  - Suggestion: {finding.suggestion}")
+                if finding.evidence:
+                    lines.append(f"  - Evidence: `{finding.evidence}`")
+        else:
+            lines.append("No actionable findings.")
+        return "\n".join(lines)
 
 
-def expand_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
-    probes: List[Dict[str, Any]] = list(manifest.get("probes", []))
+class RuleContext:
+    """Expose repository information to rules."""
 
-    routes = detect_api_routes_runtime() or detect_api_routes_static()
-    for route in routes:
-        rule = route.get("rule", "")
-        if not rule.startswith("/api/"):
-            continue
-        full_url = f"{API_BASE}{rule}"
-        if not any(
-            probe
-            for probe in probes
-            if probe.get("type") == "http"
-            and probe.get("method", "GET") == "GET"
-            and probe.get("url") == full_url
-        ):
-            probes.append(
-                {"label": f"GET {rule}", "type": "http", "method": "GET", "url": full_url, "expect": 200}
-            )
-        if rule.endswith("/search") and not any(
-            probe
-            for probe in probes
-            if probe.get("type") == "http"
-            and probe.get("url") == full_url
-            and probe.get("params")
-        ):
-            probes.append(
-                {
-                    "label": "Search hello-world",
-                    "type": "http",
-                    "method": "GET",
-                    "url": full_url,
-                    "params": {"q": "hello-world"},
-                    "expect": 200,
-                }
-            )
+    def __init__(self, root: Path, discovery: DiscoveryResult, *, smoke: bool) -> None:
+        self.root = root
+        self.discovery = discovery
+        self.smoke = smoke
+        self._text_cache: Dict[str, str] = {}
 
-    for path, label in [
-        ("/api/discovery/events", "Discovery stream"),
-        ("/api/progress/stream", "Progress stream"),
-    ]:
-        full_url = f"{API_BASE}{path}"
-        if not any(
-            probe
-            for probe in probes
-            if probe.get("type") == "sse" and probe.get("url") == full_url
-        ):
-            probes.append(
-                {"label": label, "type": "sse", "url": full_url, "idle_ok": True, "seconds": 5}
-            )
+    def resolve(self, relative_path: str) -> Path:
+        return self.root / relative_path
 
-    for route in detect_web_routes()[:10]:
-        full_url = f"{RENDERER}{route if route.startswith('/') else '/' + route}"
-        if not any(
-            probe
-            for probe in probes
-            if probe.get("type") == "web" and probe.get("url") == full_url
-        ):
-            probes.append({"label": f"Page {route}", "type": "web", "url": full_url})
-    asset_url = f"{RENDERER}/_next/static/chunks/webpack.js"
-    if not any(
-        probe
-        for probe in probes
-        if probe.get("type") == "http" and probe.get("url") == asset_url
-    ):
-        probes.append(
+    def read_text(self, relative_path: str) -> str:
+        if relative_path in self._text_cache:
+            return self._text_cache[relative_path]
+        try:
+            text = (self.root / relative_path).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        self._text_cache[relative_path] = text
+        return text
+
+    def iter_files(self, *suffixes: str) -> Iterator[str]:
+        for relative in self.discovery.files:
+            if suffixes and not any(relative.endswith(suffix) for suffix in suffixes):
+                continue
+            yield relative
+
+    def iter_patterns(self, *patterns: str) -> Iterator[str]:
+        for relative in self.discovery.files:
+            if patterns and not any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
+                continue
+            yield relative
+
+    @property
+    def matched_suffixes(self) -> Set[str]:
+        return set(self.discovery.matched_suffixes)
+
+    @property
+    def unmatched_suffixes(self) -> Set[str]:
+        return set(self.discovery.unmatched_suffixes)
+
+    @property
+    def discovered_special(self) -> Set[str]:
+        return self.discovery.discovered_special
+
+
+def _matches_patterns(relative_path: str, patterns: Sequence[str]) -> bool:
+    alt_path = f"./{relative_path}"
+    return any(
+        fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(alt_path, pattern)
+        for pattern in patterns
+    )
+
+
+def _discover_files(root: Path) -> DiscoveryResult:
+    files: List[str] = []
+    matched_suffixes: Set[str] = set()
+    unmatched_suffixes: Set[str] = set()
+    special: Set[str] = set()
+    patterns = ALL_PATTERNS
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in EXCLUDE_DIRS]
+        for filename in filenames:
+            full_path = Path(dirpath) / filename
+            relative = full_path.relative_to(root)
+            relative_posix = relative.as_posix()
+            matched = _matches_patterns(relative_posix, patterns)
+            if matched:
+                files.append(relative_posix)
+            suffix = full_path.suffix.lower()
+            if suffix:
+                if matched:
+                    matched_suffixes.add(suffix)
+                else:
+                    unmatched_suffixes.add(suffix)
+            if filename in SPECIAL_FILENAMES:
+                special.add(filename)
+    files.sort()
+    return DiscoveryResult(
+        files=files,
+        matched_suffixes=matched_suffixes,
+        unmatched_suffixes=unmatched_suffixes,
+        discovered_special=special,
+    )
+
+
+class DiagnosticsEngine:
+    """Run the registered rules and produce artefacts."""
+
+    def __init__(self, root: Optional[Path] = None) -> None:
+        self.root = root or Path.cwd()
+
+    def run(
+        self,
+        *,
+        smoke: bool = False,
+        fail_on: Severity = Severity.HIGH,
+        only: Optional[Set[str]] = None,
+        skip: Optional[Set[str]] = None,
+        baseline_path: Optional[Path] = None,
+        write_artifacts: bool = True,
+    ) -> Tuple[Results, ExitCode, Dict[str, str]]:
+        discovery = _discover_files(self.root)
+        context = RuleContext(self.root, discovery, smoke=smoke)
+        suppression_index = SuppressionIndex(self.root, context)
+        baseline = Baseline.load(self.root / (baseline_path or BASELINE_DEFAULT))
+        results = Results()
+
+        for rule in iter_rules():
+            if only and rule.id not in only:
+                continue
+            if skip and rule.id in skip:
+                continue
+            if rule.smoke_only and not smoke:
+                continue
+            try:
+                findings = list(rule.check(context))
+            except Exception as exc:  # pragma: no cover - protective guard
+                results.errors.append(f"{rule.id}: {exc}")
+                continue
+            for finding in findings:
+                if suppression_index.is_suppressed(finding):
+                    results.add_suppressed(finding)
+                    continue
+                if baseline.contains(finding):
+                    results.add_baseline(finding)
+                    continue
+                results.add(finding)
+
+        exit_code = self._compute_exit_code(results, fail_on)
+        artefacts: Dict[str, str] = {}
+        if write_artifacts:
+            artefacts = self._write_artifacts(results)
+        return results, exit_code, artefacts
+
+    def _compute_exit_code(self, results: Results, fail_on: Severity) -> ExitCode:
+        highest = results.highest_severity()
+        if highest is None:
+            return ExitCode.OK
+        if highest.rank >= fail_on.rank:
+            return ExitCode.ERROR
+        if fail_on is Severity.HIGH and highest is Severity.MEDIUM:
+            return ExitCode.WARN
+        if fail_on is Severity.MEDIUM and highest is Severity.LOW:
+            return ExitCode.WARN
+        return ExitCode.OK
+
+    def _write_artifacts(self, results: Results) -> Dict[str, str]:
+        run_dir = self.root / RUN_DIR_NAME
+        shutil.rmtree(run_dir, ignore_errors=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        payload = results.as_dict()
+        payload.update(
             {
-                "label": "Renderer asset: webpack.js",
-                "type": "http",
-                "method": "GET",
-                "url": asset_url,
-                "expect": 200,
+                "generated_at": generated_at,
+                "schema_version": SCHEMA_VERSION,
             }
         )
+        summary_txt = results.to_text()
+        summary_md = results.to_markdown()
+        checks_json = json.dumps(payload, indent=2)
+        (run_dir / "checks.json").write_text(checks_json, encoding="utf-8")
+        (run_dir / "summary.txt").write_text(summary_txt, encoding="utf-8")
+        (run_dir / "summary.md").write_text(summary_md, encoding="utf-8")
+        sarif_payload = self._build_sarif(results, generated_at)
+        sarif_json = json.dumps(sarif_payload, indent=2)
+        (run_dir / "checks.sarif").write_text(sarif_json, encoding="utf-8")
+        return {
+            "checks.json": checks_json,
+            "summary.txt": summary_txt,
+            "summary.md": summary_md,
+            "checks.sarif": sarif_json,
+        }
 
-    manifest["probes"] = probes
-    return manifest
+    def _build_sarif(self, results: Results, generated_at: str) -> Dict[str, Any]:
+        rules = []
+        for rule in iter_rules():
+            rules.append(
+                {
+                    "id": rule.id,
+                    "name": rule.description,
+                    "shortDescription": {"text": rule.description},
+                    "properties": {"severity": rule.severity.value},
+                }
+            )
+        sarif_results = []
+        for finding in results.findings:
+            sarif_results.append(
+                {
+                    "ruleId": finding.rule_id,
+                    "level": finding.severity.value,
+                    "message": {"text": finding.summary},
+                    "locations": (
+                        [
+                            {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": finding.file},
+                                    "region": {"startLine": finding.line_hint},
+                                }
+                            }
+                        ]
+                        if finding.file
+                        else []
+                    ),
+                    "properties": {
+                        "suggestion": finding.suggestion,
+                        "evidence": finding.evidence,
+                        "fingerprint": finding.fingerprint,
+                    },
+                }
+            )
+        return {
+            "version": "2.1.0",
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "self_hosted_search_engine-diagnostics",
+                            "informationUri": "https://github.com/self_hosted_search_engine",
+                            "semanticVersion": SCHEMA_VERSION,
+                            "rules": rules,
+                        }
+                    },
+                    "results": sarif_results,
+                    "invocations": [
+                        {
+                            "executionSuccessful": True,
+                            "endTimeUtc": generated_at,
+                        }
+                    ],
+                }
+            ],
+        }
 
 
-# ---------- Runners ----------
-def run_http(probe: Dict[str, Any]) -> Dict[str, Any]:
-    method = probe.get("method", "GET").upper()
-    url = probe["url"]
-    expect = int(probe.get("expect", 200))
-    params = probe.get("params") or None
-    data = probe.get("data") or None
-    start = time.time()
-    resp = _get(url, params=params) if method == "GET" else _post(url, json=data)
-    elapsed = int((time.time() - start) * 1000)
-    result = {
-        "status": "ok" if resp.status_code == expect else "error",
-        "code": resp.status_code,
-        "ms": elapsed,
-    }
+def parse_fail_on(value: str) -> Severity:
     try:
-        result["body_preview"] = (resp.text or "")[:200]
-    except Exception:
-        pass
-    return result
-
-
-def run_sse(probe: Dict[str, Any]) -> Dict[str, Any]:
-    url = probe["url"]
-    seconds = int(probe.get("seconds", 5))
-    idle_ok = bool(probe.get("idle_ok", True))
-    headers = {"Accept": "text/event-stream"}
-    try:
-        resp = _get(url, headers=headers, timeout=(5, seconds))
-    except requests.exceptions.ReadTimeout:
-        return {"status": "ok_no_events"} if idle_ok else {"status": "error", "error": "timeout"}
-    except requests.exceptions.RequestException as exc:
-        return {"status": "error", "error": repr(exc)}
-    if resp.status_code != 200:
-        if resp.status_code == 404:
-            return {"status": "skipped", "code": resp.status_code, "reason": "not_found"}
-        return {"status": "error", "code": resp.status_code}
-    first: Optional[str] = None
-    start = time.time()
-    try:
-        for line in resp.iter_lines(decode_unicode=True):
-            if time.time() - start > seconds:
-                break
-            if not line or line.startswith(":"):
-                continue
-            if line.startswith("data:"):
-                payload = line[5:].strip()
-                if payload:
-                    first = payload[:200]
-                    break
-    except requests.exceptions.ReadTimeout:
-        return {"status": "ok_no_events"} if idle_ok else {"status": "error", "error": "timeout"}
-    except Exception as exc:
-        return {"status": "error", "error": repr(exc)}
-    finally:
-        try:
-            resp.close()
-        except Exception:
-            pass
-    if first:
-        return {"status": "ok", "first_event": first}
-    return {"status": "ok_no_events"} if idle_ok else {"status": "error", "error": "no events"}
-
-
-def run_web(probe: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        try:
-            resp = _get(probe["url"])
-            return {"status": "ok" if resp.status_code == 200 else "error", "code": resp.status_code}
-        except Exception as exc:
-            return {"status": "error", "error": repr(exc)}
-    url = probe["url"]
-    slug = re.sub(r"[^a-z0-9]+", "_", url.lower())[:40]
-    shot = SHOT_DIR / f"page_{slug}.png"
-
-    from playwright.sync_api import sync_playwright  # type: ignore  # re-import to satisfy linters
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.on("console", lambda msg: _write_jsonl(console_path, _console_record(msg)))
-        page.on("requestfailed", lambda req: _write_jsonl(net_path, _requestfailed_record(req)))
-        try:
-            page.goto(url, timeout=60_000)
-            page.wait_for_load_state("domcontentloaded", timeout=30_000)
-            try:
-                from playwright.sync_api import TimeoutError as PlaywrightTimeoutError  # type: ignore
-            except Exception:  # pragma: no cover - fallback when playwright not present
-                PlaywrightTimeoutError = TimeoutError  # type: ignore
-            try:
-                page.wait_for_load_state("networkidle", timeout=30_000)
-            except PlaywrightTimeoutError:
-                log(f"Playwright networkidle timeout for {url}; continuing with screenshot")
-            page.screenshot(path=str(shot), full_page=True)
-        except Exception as exc:
-            browser.close()
-            return {"status": "error", "error": repr(exc)}
-        browser.close()
-    return {"status": "ok", "screenshot": str(shot)}
-
-
-def run_probe(probe: Dict[str, Any]) -> Dict[str, Any]:
-    start = time.time()
-    kind = probe.get("type")
-    try:
-        if kind == "http":
-            result = run_http(probe)
-        elif kind == "sse":
-            result = run_sse(probe)
-        elif kind == "web":
-            result = run_web(probe)
-        else:
-            result = {"status": "skipped", "reason": "unknown_type"}
-    except Exception as exc:
-        result = {"status": "error", "error": repr(exc)}
-    result["label"] = probe.get("label")
-    result["type"] = kind
-    result["url"] = probe.get("url")
-    result["ms_total"] = int((time.time() - start) * 1000)
-    return result
-
-
-# ---------- Public API ----------
-def run_all() -> Tuple[Dict[str, Any], int]:
-    _mkdirs()
-    try:
-        api_up = _get(f"{API_BASE}/api/meta/health").status_code == 200
-    except Exception:
-        api_up = False
-    if not api_up:
-        log("API not detected; starting backend service...")
-        _start(API_CMD, LOGS_DIR / "api.log")
-        t0 = time.time()
-        while time.time() - t0 < 60:
-            try:
-                if _get(f"{API_BASE}/api/meta/health").status_code == 200:
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-    try:
-        web_up = _get(f"{RENDERER}/api/__meta").status_code == 200
-    except Exception:
-        web_up = False
-    if not web_up:
-        log("Renderer not detected; starting web service...")
-        _start(WEB_CMD, LOGS_DIR / "web.log", extra_env=WEB_ENV)
-        t0 = time.time()
-        while time.time() - t0 < 60:
-            try:
-                if _get(f"{RENDERER}/api/__meta").status_code == 200:
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-    manifest = expand_manifest(load_manifest())
-    save_manifest(manifest)
-
-    steps: List[Dict[str, Any]] = []
-    errors: List[Dict[str, Any]] = []
-    for probe in manifest.get("probes", []):
-        outcome = run_probe(probe)
-        steps.append(outcome)
-        if outcome.get("status") == "error":
-            errors.append(outcome)
-
-    results = {
-        "env": {
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-            "api_base": API_BASE,
-            "renderer": RENDERER,
-        },
-        "steps": steps,
-        "errors": errors,
-    }
-
-    (RUN_DIR / "checks.json").write_text(json.dumps(results, indent=2))
-    ok_count = sum(1 for step in steps if str(step.get("status", "")).startswith("ok"))
-    warn_count = sum(
-        1
-        for step in steps
-        if step.get("status") in {"ok_no_events", "skipped"}
-    )
-    err_count = len(errors)
-    log(f"Probes: {len(steps)}  ✓ok:{ok_count}  ~:{warn_count}  ✗err:{err_count}")
-    (RUN_DIR / "summary.md").write_text(
-        f"# Diagnostics\n\n- Probes: {len(steps)}\n- OK: {ok_count}\n- ~ (idle/skip): {warn_count}\n- Errors: {err_count}\n"
-    )
-    return results, (0 if err_count == 0 else 1)
-
-
-atexit.register(_kill_procs)
+        return Severity(value)
+    except ValueError as exc:  # pragma: no cover - CLI validation safety net
+        raise argparse.ArgumentTypeError(f"Unknown severity level: {value}") from exc

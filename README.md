@@ -212,6 +212,16 @@ Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to shut everything down.
 
 ### System check & diagnostics
 
+- The preventive diagnostics engine lives under `tools/diag/` and exposes a
+  `python3 tools/e2e_diag.py --fail-on=high` entrypoint. Artifacts land in
+  `diagnostics/run_latest/` after each run; pass `--watch`, `--smoke`, or
+  `--format sarif` for additional coverage.
+- Enable the bundled pre-commit hook via `git config core.hooksPath .githooks`
+  to run the diagnostics automatically before commits.
+- See [`docs/diagnostics.md`](docs/diagnostics.md) for rule documentation,
+  suppression mechanics, and baseline guidance.
+- After the API reports healthy, `make dev` posts to `/api/system_check`. The
+  command aborts only when the response marks `summary.critical_failures` as
 - After the API reports healthy, `make dev` posts to `/api/system_check`. The
   command aborts only when the response marks `summary.critical_failures` as
   `true`; otherwise, the Next.js dev server starts normally and the results are

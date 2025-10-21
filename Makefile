@@ -4,7 +4,7 @@
 .PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
 .PHONY: desktop desktop-build dev-desktop
 .PHONY: api web
-.PHONY: lint-makefile
+.PHONY: lint-makefile diag
 
 lint-makefile:
 	@echo "Ensure all recipe lines use tabs (not spaces)."
@@ -240,3 +240,6 @@ export-dataset: setup
 	  exit 1; \
 	fi
 	@$(VENV_PY) scripts/export_dataset.py --out "$(OUT)" $(ARGS)
+diag:
+	python3 tools/e2e_diag.py --fail-on=high
+
