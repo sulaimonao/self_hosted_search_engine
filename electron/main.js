@@ -810,6 +810,17 @@ ipcMain.handle('index:search', async (_event, query) => {
   }
 });
 
+ipcMain.handle('desktop:get-locale', async () => {
+  try {
+    if (typeof app.getLocale === 'function') {
+      return app.getLocale();
+    }
+  } catch (error) {
+    console.warn('Failed to resolve desktop locale', { error });
+  }
+  return null;
+});
+
 async function runBrowserSystemCheck(options = {}) {
   if (!app.isReady()) {
     await app.whenReady();

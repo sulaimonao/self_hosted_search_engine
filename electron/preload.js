@@ -63,42 +63,6 @@ function spoofNavigator() {
   } catch (error) {
     console.warn('[preload] failed to patch navigator.webdriver', error);
   }
-
-  try {
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en'],
-    });
-  } catch (error) {
-    console.warn('[preload] failed to patch navigator.languages', error);
-  }
-
-  try {
-    class FakePluginArray extends Array {
-      item(index) {
-        return this[index] ?? null;
-      }
-
-      namedItem(name) {
-        return this.find((plugin) => plugin && plugin.name === name) ?? null;
-      }
-
-      refresh() {}
-    }
-
-    const fakePlugins = new FakePluginArray(
-      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    );
-
-    Object.freeze(fakePlugins);
-
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => fakePlugins,
-    });
-  } catch (error) {
-    console.warn('[preload] failed to patch navigator.plugins', error);
-  }
 }
 
 function createBrowserAPI() {
@@ -198,6 +162,7 @@ contextBridge.exposeInMainWorld('desktop', {
   onSystemCheckEvent: (channel, handler) => subscribe(channel, handler),
   shadowCapture: (payload) => ipcRenderer.invoke('shadow:capture', payload ?? {}),
   indexSearch: (query) => ipcRenderer.invoke('index:search', query ?? ''),
+  getLocale: () => ipcRenderer.invoke('desktop:get-locale'),
   onShadowToggle: (handler) => {
     if (typeof handler !== 'function') {
       return NOOP_UNSUBSCRIBE;
