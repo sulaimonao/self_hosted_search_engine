@@ -68,6 +68,35 @@ export type BrowserPermissionState = {
   permissions: { permission: string; setting: string; updatedAt: number }[];
 };
 
+export type BrowserDiagnosticsReport = {
+  timestamp: number;
+  userAgent: string | null;
+  navigatorLanguage: string | null;
+  navigatorLanguages: string[];
+  platform: string | null;
+  uaCh: Record<string, unknown> | null;
+  uaChError: string | null;
+  uaData: Record<string, unknown> | null;
+  uaDataError: string | null;
+  webdriver: boolean | null | undefined;
+  webdriverError: string | null;
+  webgl: { vendor: string | null; renderer: string | null; error: string | null };
+  cookies: { count: number | null; raw: string | null; error: string | null };
+  serviceWorker: {
+    supported: boolean;
+    status: string;
+    registrations: number;
+    scopes: string[];
+    error: string | null;
+  };
+};
+
+export type BrowserDiagnosticsResult = {
+  ok: boolean;
+  data?: BrowserDiagnosticsReport | null;
+  error?: string | null;
+};
+
 export interface BrowserAPI {
   navigate: (url: string, options?: { tabId?: string; transition?: string }) => void;
   back: (options?: { tabId?: string }) => void;
@@ -100,6 +129,7 @@ export interface BrowserAPI {
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
   onSettings: (handler: (settings: BrowserSettings) => void) => (() => void) | void;
   openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;
+  runDiagnostics?: () => Promise<BrowserDiagnosticsResult>;
 }
 
 type Unsubscribe = () => void;

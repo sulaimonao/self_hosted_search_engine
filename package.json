@@ -35,6 +35,7 @@
       "frontend/out/**/*",
       "frontend/public/**/*",
       "frontend/package.json",
+      "shared/**/*",
       "package.json"
     ],
     "mac": {

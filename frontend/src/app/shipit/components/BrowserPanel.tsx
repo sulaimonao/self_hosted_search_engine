@@ -135,11 +135,22 @@ export default function BrowserPanel(): JSX.Element {
   const [infoOpen, setInfoOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState("");
   const [historyRange, setHistoryRange] = useState("all");
+  const [supportsWebview, setSupportsWebview] = useState(false);
+  const webviewRefs = useRef<Record<string, ElectronWebviewElement | null>>({});
+  const attachWebview = useCallback((tabId: string, node: ElectronWebviewElement | null) => {
+    webviewRefs.current[tabId] = node;
+  }, []);
 
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) ?? null, [tabs, activeTabId]);
 
   useEffect(() => {
     sessionIdRef.current = loadSessionId();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const ua = window.navigator?.userAgent ?? "";
+    setSupportsWebview(/Electron/i.test(ua) || Boolean(window.appBridge?.supportsWebview));
   }, []);
 
   useEffect(() => {
@@ -369,6 +380,7 @@ export default function BrowserPanel(): JSX.Element {
         url: previousUrl,
       }));
       void navigateTo(tab.id, previousUrl, { replace: true, shadowEnabled: tab.shadowEnabled });
+      webviewRefs.current[tab.id]?.goBack?.();
     },
     [navigateTo, setTabState],
   );
@@ -383,6 +395,7 @@ export default function BrowserPanel(): JSX.Element {
         url: nextUrl,
       }));
       void navigateTo(tab.id, nextUrl, { replace: true, shadowEnabled: tab.shadowEnabled });
+      webviewRefs.current[tab.id]?.goForward?.();
     },
     [navigateTo, setTabState],
   );
@@ -390,6 +403,7 @@ export default function BrowserPanel(): JSX.Element {
   const refreshTab = useCallback(
     (tab: BrowserTab) => {
       void navigateTo(tab.id, tab.url, { replace: true, shadowEnabled: tab.shadowEnabled });
+      webviewRefs.current[tab.id]?.reload?.();
     },
     [navigateTo],
   );
@@ -568,12 +582,20 @@ export default function BrowserPanel(): JSX.Element {
                     <span className="text-sm text-destructive">{tab.errorMessage}</span>
                   ) : null}
                 </div>
-                <iframe
-                  src={tab.url}
-                  title={tab.title}
-                  className="h-[520px] w-full rounded-md border"
-                  sandbox="allow-scripts allow-same-origin allow-popups"
-                />
+                {supportsWebview ? (
+                  <webview
+                    ref={(node) => attachWebview(tab.id, node)}
+                    src={tab.url}
+                    title={tab.title}
+                    className="h-[520px] w-full rounded-md border"
+                    partition="persist:main"
+                    allowpopups
+                  />
+                ) : (
+                  <div className="flex h-[520px] w-full items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+                    Browser preview is available in the desktop app.
+                  </div>
+                )}
               </div>
             </TabsContent>
           ))}

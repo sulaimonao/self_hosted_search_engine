@@ -14,6 +14,7 @@ const { randomUUID } = require('crypto');
 
 const { runBrowserDiagnostics } = require('../scripts/diagnoseBrowser');
 const { initializeBrowserData } = require('./browser-data');
+const { BROWSER_DIAGNOSTICS_SCRIPT } = require('../shared/browser-diagnostics-script');
 
 const DEFAULT_FRONTEND_ORIGIN = (() => {
   const fallbackHost = 'localhost';
@@ -932,6 +933,7 @@ function createWindow() {
       nodeIntegration: false,
       webSecurity: true,
       partition: MAIN_SESSION_KEY,
+      webviewTag: true,
     },
   });
 
@@ -1038,6 +1040,22 @@ ipcMain.handle('browser:close-tab', async (_event, payload = {}) => {
 });
 
 ipcMain.handle('browser:request-tabs', async () => snapshotTabList());
+
+ipcMain.handle('browser:diagnostics-run', async () => {
+  const tab = getActiveTab();
+  if (!tab) {
+    return { ok: false, error: 'no_active_tab' };
+  }
+  try {
+    if (!tab.view || tab.view.webContents.isDestroyed()) {
+      return { ok: false, error: 'webcontents_unavailable' };
+    }
+    const data = await tab.view.webContents.executeJavaScript(BROWSER_DIAGNOSTICS_SCRIPT, true);
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
 
 ipcMain.handle('history:list', async (_event, payload = {}) => {
   if (!browserDataStore) {
