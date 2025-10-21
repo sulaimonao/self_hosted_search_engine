@@ -34,6 +34,7 @@ export interface DesktopBridge {
   exportSystemCheckReport?: (
     options?: { timeoutMs?: number; write?: boolean },
   ) => Promise<DesktopExportDiagnosticsResult | void>;
+  getLocale?: () => Promise<string | null>;
   shadowCapture?: (payload: {
     url: string;
     html?: string;
@@ -64,6 +65,7 @@ export const desktopFallback: DesktopBridge = {
   getLastSystemCheck: async () => ({ skipped: true }),
   openSystemCheckReport: async () => ({ ok: false, missing: true }),
   exportSystemCheckReport: async () => ({ ok: false, skipped: true }),
+  getLocale: async () => null,
   shadowCapture: async () => undefined,
   indexSearch: async () => undefined,
   onSystemCheckEvent: (channel, handler) => {
