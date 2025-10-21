@@ -35,6 +35,7 @@ import { PermissionPrompt } from "@/components/browser/PermissionPrompt";
 import { SettingsSheet } from "@/components/browser/SettingsSheet";
 import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
+import { cn } from "@/lib/utils";
 
 const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
@@ -72,6 +73,34 @@ export function BrowserShell() {
       openPanel(undefined);
     }
   });
+
+  const panelSize = useMemo<"sm" | "md" | "lg" | "xl" | "full">(() => {
+    switch (panelOpen) {
+      case "chat":
+        return "xl";
+      case "shadow":
+      case "agentLog":
+        return "lg";
+      case "localSearch":
+      case "collections":
+      default:
+        return "md";
+    }
+  }, [panelOpen]);
+
+  const panelWidthClass = useMemo(() => {
+    switch (panelOpen) {
+      case "chat":
+        return "w-full max-w-[34rem]";
+      case "shadow":
+      case "agentLog":
+        return "w-full max-w-[30rem]";
+      case "localSearch":
+      case "collections":
+      default:
+        return "w-full max-w-[26rem]";
+    }
+  }, [panelOpen]);
 
   const activeDownloads = useMemo(
     () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
@@ -260,7 +289,8 @@ export function BrowserShell() {
         <Sheet open={panelIsOpen} onOpenChange={handlePanelOpenChange}>
           <SheetContent
             side={panelOpen === "localSearch" || panelOpen === "collections" ? "left" : "right"}
-            className="w-auto p-0"
+            size={panelSize}
+            className={cn("p-0", panelWidthClass)}
           >
             {panelOpen ? PANEL_COMPONENT[panelOpen] : null}
           </SheetContent>

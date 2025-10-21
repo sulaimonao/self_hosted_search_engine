@@ -336,17 +336,19 @@ export function ChatPanel() {
 
   const handleLinkNavigation = useCallback(
     (url: string, event?: MouseEvent<HTMLAnchorElement>) => {
-      const newTab = Boolean(event?.metaKey || event?.ctrlKey || event?.shiftKey);
-      navigate(url, { newTab });
+      const newTab = Boolean(
+        event?.metaKey || event?.ctrlKey || event?.shiftKey || (event && event.button === 1),
+      );
+      navigate(url, { newTab, closePanel: true });
     },
     [navigate],
   );
 
   const handleCitationClick = useCallback(
-    (url: string, event: React.MouseEvent<HTMLButtonElement>) => {
-      const newTab = event.metaKey || event.ctrlKey || event.shiftKey;
+    (url: string, event: MouseEvent<HTMLButtonElement>) => {
+      const newTab = Boolean(event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1);
       if (isHttpUrl(url)) {
-        navigate(url, { newTab });
+        navigate(url, { newTab, closePanel: true });
       }
     },
     [navigate],
@@ -566,7 +568,7 @@ export function ChatPanel() {
   }, [autopullCandidates, handleRefreshInventory, installing]);
 
   return (
-    <div className="flex h-full w-[28rem] flex-col gap-3 p-4 text-sm">
+    <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
       <CopilotHeader
         chatModels={inventory?.chatModels ?? []}
         modelOptions={modelOptions}
@@ -593,8 +595,8 @@ export function ChatPanel() {
         </div>
       ) : null}
       <div className="flex-1 overflow-hidden rounded-lg border bg-background">
-        <ScrollArea className="h-full">
-          <div className="space-y-3 p-3">
+        <ScrollArea className="h-full pr-3">
+          <div className="space-y-4 p-3 pr-1">
             {messages.map((message) => {
               const isAssistant = message.role === "assistant";
               const bodyText = message.answer ?? message.content ?? "";
