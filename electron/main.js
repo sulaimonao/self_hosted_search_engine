@@ -57,8 +57,6 @@ app.commandLine.appendSwitch(
 );
 
 const MAIN_SESSION_KEY = 'persist:main';
-const DESKTOP_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.90 Safari/537.36';
 const DEFAULT_TAB_URL = 'https://wikipedia.org';
 const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS = { x: 0, y: 136, width: 1280, height: 720 };
@@ -69,10 +67,6 @@ const DOWNLOAD_CHANNEL = 'downloads:update';
 const PERMISSION_PROMPT_CHANNEL = 'permissions:prompt';
 const PERMISSION_STATE_CHANNEL = 'permissions:state';
 const SETTINGS_CHANNEL = 'settings:state';
-const ACCEPT_LANGUAGE_HEADER = 'en-US,en;q=0.9';
-const UA_BRAND_HEADER = '"Chromium";v="129", "Not_A Brand";v="24", "Google Chrome";v="129"';
-const UA_PLATFORM = '"macOS"';
-const UA_FULL_VERSION = '"129.0.6668.90"';
 const CONTROLLED_PERMISSIONS = new Set(['camera', 'microphone', 'geolocation', 'notifications', 'clipboard-read']);
 
 const tabs = new Map();
@@ -82,6 +76,12 @@ let browserContentBounds = { ...DEFAULT_BOUNDS };
 let browserDataStore = null;
 const pendingPermissionRequests = new Map();
 let runtimeSettings = null;
+const runtimeNetworkState = {
+  userAgent: null,
+  acceptLanguage: null,
+  localeCountryCode: null,
+  locale: null,
+};
 
 const DEFAULT_SETTINGS = {
   thirdPartyCookies: true,
@@ -657,8 +657,6 @@ async function createBrowserTab(url, options = {}) {
     },
   });
 
-  view.webContents.setUserAgent(DESKTOP_USER_AGENT);
-
   const tab = {
     id,
     view,
@@ -1231,6 +1229,33 @@ if (!app.requestSingleInstanceLock()) {
     app.whenReady().then(async () => {
       const mainSession = session.fromPartition(MAIN_SESSION_KEY);
 
+      const defaultUA =
+        (typeof mainSession.getUserAgent === 'function' && mainSession.getUserAgent()) ||
+        app.userAgentFallback ||
+        null;
+      const localeCountryCode =
+        typeof app.getLocaleCountryCode === 'function' ? app.getLocaleCountryCode() : null;
+      const preferredLocale = typeof app.getLocale === 'function' ? app.getLocale() : null;
+
+      runtimeNetworkState.userAgent = defaultUA;
+      runtimeNetworkState.localeCountryCode = localeCountryCode;
+      runtimeNetworkState.locale = preferredLocale;
+
+      let acceptLanguage = null;
+      if (preferredLocale && typeof preferredLocale === 'string') {
+        const normalized = preferredLocale.trim();
+        if (normalized) {
+          const [language] = normalized.split('-');
+          if (language && language.length && language.toLowerCase() !== normalized.toLowerCase()) {
+            acceptLanguage = `${normalized},${language};q=0.9`;
+          } else {
+            acceptLanguage = normalized;
+          }
+        }
+      }
+
+      runtimeNetworkState.acceptLanguage = acceptLanguage;
+
       if (!browserDataStore) {
         browserDataStore = initializeBrowserData(app);
         loadRuntimeSettings();
@@ -1240,12 +1265,12 @@ if (!app.requestSingleInstanceLock()) {
 
       mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
         const headers = { ...details.requestHeaders };
-        headers['User-Agent'] = DESKTOP_USER_AGENT;
-        headers['Accept-Language'] = ACCEPT_LANGUAGE_HEADER;
-        headers['Sec-CH-UA'] = UA_BRAND_HEADER;
-        headers['Sec-CH-UA-Mobile'] = '?0';
-        headers['Sec-CH-UA-Platform'] = UA_PLATFORM;
-        headers['Sec-CH-UA-Full-Version'] = UA_FULL_VERSION;
+        if (!headers['User-Agent'] && runtimeNetworkState.userAgent) {
+          headers['User-Agent'] = runtimeNetworkState.userAgent;
+        }
+        if (!headers['Accept-Language'] && runtimeNetworkState.acceptLanguage) {
+          headers['Accept-Language'] = runtimeNetworkState.acceptLanguage;
+        }
         callback({ requestHeaders: headers });
       });
 
