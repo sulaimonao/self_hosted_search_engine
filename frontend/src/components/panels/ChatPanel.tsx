@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { UsePageContextToggle } from "@/components/UsePageContextToggle";
 import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
+import { useLlmStream } from "@/hooks/useLlmStream";
 import {
   autopullModels,
   fetchModelInventory,
@@ -159,13 +160,24 @@ export function ChatPanel() {
   const [toolExecutions, setToolExecutions] = useState<Record<string, ToolExecutionState>>({});
 
   const messagesRef = useRef<ChatMessage[]>(messages);
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef = useRef<{ abort: () => void } | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
   const storedModelRef = useRef<string | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
 
   const navigate = useBrowserNavigation();
+  const { supported: llmBridgeSupported, state: llmStreamState, stream: startLlmStream, abort: abortLlmStream } =
+    useLlmStream();
+  const {
+    requestId: activeStreamRequestId,
+    text: activeStreamText,
+    frames: activeStreamFrames,
+    done: activeStreamDone,
+    error: activeStreamError,
+    metadata: activeStreamMetadata,
+  } = llmStreamState;
+  const [activeStreamMessageId, setActiveStreamMessageId] = useState<string | null>(null);
   const { activeTab } = useAppStore(
     useShallow((state) => ({
       activeTab: state.activeTab?.(),
@@ -296,6 +308,72 @@ export function ChatPanel() {
       setContextSummary(null);
     }
   }, [usePageContext]);
+
+  useEffect(() => {
+    if (!llmBridgeSupported || !activeStreamRequestId) {
+      return;
+    }
+    setMessages((prev) => {
+      let anyChanged = false;
+      const next = prev.map((message) => {
+        if (
+          message.streamRequestId !== activeStreamRequestId &&
+          message.id !== activeStreamRequestId
+        ) {
+          return message;
+        }
+        let changed = false;
+        const updated: ChatMessage = { ...message };
+        if (updated.streamRequestId !== activeStreamRequestId) {
+          updated.streamRequestId = activeStreamRequestId;
+          changed = true;
+        }
+        if (updated.streamFrames !== activeStreamFrames) {
+          updated.streamFrames = activeStreamFrames;
+          changed = true;
+        }
+        if (!activeStreamDone && !activeStreamError) {
+          const nextContent = activeStreamText ?? "";
+          if (updated.content !== nextContent) {
+            updated.content = nextContent;
+            changed = true;
+          }
+          if (!updated.streaming) {
+            updated.streaming = true;
+            changed = true;
+          }
+        } else if (activeStreamDone && updated.streaming) {
+          updated.streaming = false;
+          changed = true;
+        }
+        const metadataModel = activeStreamMetadata?.model ?? null;
+        if (metadataModel && metadataModel !== updated.model) {
+          updated.model = metadataModel;
+          changed = true;
+        }
+        const metadataTrace = activeStreamMetadata?.traceId ?? null;
+        if (metadataTrace && metadataTrace !== updated.traceId) {
+          updated.traceId = metadataTrace;
+          changed = true;
+        }
+        if (changed) {
+          anyChanged = true;
+          return updated;
+        }
+        return message;
+      });
+      return anyChanged ? next : prev;
+    });
+  }, [
+    activeStreamDone,
+    activeStreamError,
+    activeStreamFrames,
+    activeStreamMetadata,
+    activeStreamRequestId,
+    activeStreamText,
+    llmBridgeSupported,
+    setMessages,
+  ]);
 
   useEffect(() => {
     const resolved = resolveChatModelSelection({
@@ -517,8 +595,8 @@ export function ChatPanel() {
       return;
     }
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const abortToken = { abort: () => undefined } as { abort: () => void };
+    abortRef.current = abortToken;
     setIsBusy(true);
     setBanner(null);
 
@@ -539,6 +617,8 @@ export function ChatPanel() {
       createdAt,
       streaming: true,
       citations: [],
+      streamRequestId: assistantId,
+      streamFrames: 0,
     };
 
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
@@ -615,68 +695,122 @@ export function ChatPanel() {
     }
     modelMessages.push({ role: "user", content: trimmed });
 
+    let controller: AbortController | null = null;
+
     try {
-      const result = await chatClient.send({
-        messages: modelMessages,
-        model: selectedModel ?? undefined,
-        url: activeTab?.url ?? undefined,
-        textContext: contextData?.selection?.text ?? selectionText ?? undefined,
-        clientTimezone,
-        serverTime: serverTime?.server_time ?? undefined,
-        serverTimezone: serverTime?.server_timezone ?? undefined,
-        serverUtc: serverTime?.server_time_utc ?? undefined,
-        signal: controller.signal,
-        onEvent: (event) => {
-          if (event.type === "metadata") {
-            streamedModel = event.model ?? streamedModel;
-            streamedTrace = event.trace_id ?? streamedTrace;
-            updateMessage(assistantId, (message) => ({
-              ...message,
-              model: streamedModel ?? message.model ?? null,
-              traceId: streamedTrace ?? message.traceId ?? null,
-            }));
-          } else if (event.type === "delta") {
-            updateMessage(assistantId, (message) => ({
-              ...message,
-              streaming: true,
-              content: event.answer ?? message.content ?? "",
-              answer: event.answer ?? message.answer ?? "",
-              reasoning: event.reasoning ?? message.reasoning ?? "",
-              citations: event.citations ?? message.citations ?? [],
-            }));
-          }
-        },
-      });
+      if (llmBridgeSupported) {
+        abortToken.abort = () => {
+          void abortLlmStream();
+        };
+        setActiveStreamMessageId(assistantId);
+        const completion = await startLlmStream({
+          requestId: assistantId,
+          body: {
+            model: selectedModel ?? undefined,
+            messages: modelMessages,
+            url: activeTab?.url ?? undefined,
+            text_context: contextData?.selection?.text ?? selectionText ?? undefined,
+            client_timezone: clientTimezone ?? undefined,
+            server_time: serverTime?.server_time ?? undefined,
+            server_timezone: serverTime?.server_timezone ?? undefined,
+            server_time_utc: serverTime?.server_time_utc ?? undefined,
+            request_id: assistantId,
+          },
+        });
+        streamedModel = completion.payload.model ?? completion.metadata.model ?? streamedModel;
+        streamedTrace = completion.payload.trace_id ?? completion.metadata.traceId ?? streamedTrace;
+        updateMessage(assistantId, (message) => ({
+          ...message,
+          streaming: false,
+          streamFrames: completion.frames,
+          content: completion.payload.answer || completion.payload.reasoning || message.content || "",
+          answer: completion.payload.answer || null,
+          reasoning: completion.payload.reasoning || null,
+          citations: completion.payload.citations ?? [],
+          traceId: completion.payload.trace_id ?? completion.metadata.traceId ?? message.traceId ?? null,
+          model: completion.payload.model ?? completion.metadata.model ?? message.model ?? null,
+          autopilot: completion.payload.autopilot ?? null,
+          streamRequestId: message.streamRequestId ?? assistantId,
+        }));
+        void storeChatMessage(threadId, {
+          id: assistantId,
+          role: "assistant",
+          content: completion.payload.answer || completion.payload.reasoning || "",
+        }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
+      } else {
+        controller = new AbortController();
+        abortToken.abort = () => {
+          controller?.abort();
+        };
+        const result = await chatClient.send({
+          requestId: assistantId,
+          messages: modelMessages,
+          model: selectedModel ?? undefined,
+          url: activeTab?.url ?? undefined,
+          textContext: contextData?.selection?.text ?? selectionText ?? undefined,
+          clientTimezone,
+          serverTime: serverTime?.server_time ?? undefined,
+          serverTimezone: serverTime?.server_timezone ?? undefined,
+          serverUtc: serverTime?.server_time_utc ?? undefined,
+          signal: controller.signal,
+          onEvent: (event) => {
+            if (event.type === "metadata") {
+              streamedModel = event.model ?? streamedModel;
+              streamedTrace = event.trace_id ?? streamedTrace;
+              updateMessage(assistantId, (message) => ({
+                ...message,
+                model: streamedModel ?? message.model ?? null,
+                traceId: streamedTrace ?? message.traceId ?? null,
+              }));
+            } else if (event.type === "delta") {
+              updateMessage(assistantId, (message) => ({
+                ...message,
+                streaming: true,
+                content: event.answer ?? message.content ?? "",
+                answer: event.answer ?? message.answer ?? "",
+                reasoning: event.reasoning ?? message.reasoning ?? "",
+                citations: event.citations ?? message.citations ?? [],
+                streamFrames: (message.streamFrames ?? 0) + 1,
+                streamRequestId: message.streamRequestId ?? assistantId,
+              }));
+            }
+          },
+        });
 
-      streamedModel = result.model ?? streamedModel;
-      streamedTrace = result.traceId ?? streamedTrace;
+        streamedModel = result.model ?? streamedModel;
+        streamedTrace = result.traceId ?? streamedTrace;
 
-      updateMessage(assistantId, (message) => ({
-        ...message,
-        streaming: false,
-        content: result.payload.answer || result.payload.reasoning || message.content || "",
-        answer: result.payload.answer || null,
-        reasoning: result.payload.reasoning || null,
-        citations: result.payload.citations ?? [],
-        traceId: result.payload.trace_id ?? streamedTrace ?? message.traceId ?? null,
-        model: result.payload.model ?? streamedModel ?? message.model ?? null,
-        autopilot: result.payload.autopilot ?? null,
-      }));
+        updateMessage(assistantId, (message) => ({
+          ...message,
+          streaming: false,
+          content: result.payload.answer || result.payload.reasoning || message.content || "",
+          answer: result.payload.answer || null,
+          reasoning: result.payload.reasoning || null,
+          citations: result.payload.citations ?? [],
+          traceId: result.payload.trace_id ?? streamedTrace ?? message.traceId ?? null,
+          model: result.payload.model ?? streamedModel ?? message.model ?? null,
+          autopilot: result.payload.autopilot ?? null,
+          streamFrames: message.streamFrames ?? 0,
+          streamRequestId: message.streamRequestId ?? assistantId,
+        }));
 
-      void storeChatMessage(threadId, {
-        id: assistantId,
-        role: "assistant",
-        content: result.payload.answer || result.payload.reasoning || "",
-      }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
+        void storeChatMessage(threadId, {
+          id: assistantId,
+          role: "assistant",
+          content: result.payload.answer || result.payload.reasoning || "",
+        }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
+      }
     } catch (error) {
-      if (
-        controller.signal.aborted ||
-        (error instanceof DOMException && error.name === "AbortError")
-      ) {
+      const abortTriggered =
+        (controller && controller.signal.aborted) ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError");
+      if (abortTriggered) {
         updateMessage(assistantId, (message) => ({
           ...message,
           streaming: false,
           content: message.content || "(cancelled)",
+          streamRequestId: message.streamRequestId ?? assistantId,
         }));
         setBanner({ intent: "info", text: "Generation cancelled." });
       } else if (error instanceof ChatRequestError) {
@@ -688,6 +822,7 @@ export function ChatPanel() {
             ? `${message.content}\n\n${messageText}`
             : `Error: ${messageText}`,
           traceId: error.traceId ?? message.traceId ?? null,
+          streamRequestId: message.streamRequestId ?? assistantId,
         }));
         setBanner({ intent: "error", text: messageText });
       } else {
@@ -699,13 +834,17 @@ export function ChatPanel() {
           content: message.content
             ? `${message.content}\n\n${messageText}`
             : `Error: ${messageText}`,
+          streamRequestId: message.streamRequestId ?? assistantId,
         }));
         setBanner({ intent: "error", text: messageText });
       }
       return;
     } finally {
-      if (abortRef.current === controller) {
+      if (abortRef.current === abortToken) {
         abortRef.current = null;
+      }
+      if (llmBridgeSupported) {
+        setActiveStreamMessageId(null);
       }
       setIsBusy(false);
     }
@@ -717,13 +856,24 @@ export function ChatPanel() {
     input,
     inventory,
     isBusy,
+    llmBridgeSupported,
     llmReachable,
+    messagesRef,
     selectedModel,
     serverTime,
+    storeChatMessage,
     threadId,
     updateMessage,
     usePageContext,
+    fetchChatContext,
+    setBanner,
+    setContextSummary,
+    setMessages,
+    startLlmStream,
+    abortLlmStream,
+    setActiveStreamMessageId,
   ]);
+
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -832,7 +982,22 @@ export function ChatPanel() {
           <div className="space-y-4 p-3 pr-1">
             {messages.map((message) => {
               const isAssistant = message.role === "assistant";
-              const bodyText = message.answer ?? message.content ?? "";
+              const baseText = message.answer ?? message.content ?? "";
+              const isBridgeStreamActive =
+                llmBridgeSupported &&
+                Boolean(message.streamRequestId) &&
+                message.streamRequestId === activeStreamRequestId &&
+                !activeStreamDone &&
+                !activeStreamError;
+              const isStreaming = Boolean(message.streaming);
+              const streamText =
+                isStreaming && isBridgeStreamActive
+                  ? activeStreamText ?? baseText
+                  : baseText;
+              const frameCount =
+                isBridgeStreamActive && message.streaming
+                  ? activeStreamFrames
+                  : message.streamFrames ?? 0;
               return (
                 <div
                   key={message.id}
@@ -849,9 +1014,13 @@ export function ChatPanel() {
                   <div className="space-y-3">
                     {isAssistant ? (
                       <>
-                        {bodyText ? (
+                        {isStreaming ? (
+                          <div className="whitespace-pre-wrap text-sm text-foreground">
+                            {streamText || " "}
+                          </div>
+                        ) : streamText ? (
                           <ChatMessageMarkdown
-                            text={bodyText}
+                            text={streamText}
                             onLinkClick={handleLinkNavigation}
                           />
                         ) : null}
@@ -968,6 +1137,11 @@ export function ChatPanel() {
                             {message.traceId ? `Trace ${message.traceId}` : null}
                           </p>
                         ) : null}
+                        {(message.streaming || frameCount > 0) ? (
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Stream frames: {frameCount}
+                          </p>
+                        ) : null}
                         {message.streaming ? (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -976,7 +1150,7 @@ export function ChatPanel() {
                         ) : null}
                       </>
                     ) : (
-                      <ChatMessageMarkdown text={bodyText} />
+                      <ChatMessageMarkdown text={baseText} />
                     )}
                   </div>
                 </div>

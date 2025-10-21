@@ -47,6 +47,8 @@ const API_BASE_URL = (() => {
 })();
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' };
 
+const activeLlmStreams = new Map();
+
 let mainWindow;
 let lastBrowserDiagnostics = null;
 let initialBrowserDiagnosticsPromise = null;
@@ -773,6 +775,113 @@ function closeBrowserTab(tabId) {
 
   return true;
 }
+
+ipcMain.handle('llm:stream', async (event, payload = {}) => {
+  const sender = event.sender;
+  const providedId =
+    payload && typeof payload.requestId === 'string' ? payload.requestId.trim() : '';
+  const requestId = providedId ? providedId : randomUUID();
+  const bodyCandidate =
+    payload && typeof payload.body === 'object' && payload.body !== null ? payload.body : {};
+  const requestBody = Array.isArray(bodyCandidate) ? {} : bodyCandidate;
+  const controller = new AbortController();
+  activeLlmStreams.set(requestId, controller);
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const sendFrame = (frame) => {
+    if (!frame || !frame.trim()) {
+      return;
+    }
+    try {
+      sender.send('llm:frame', { requestId, frame });
+    } catch (error) {
+      console.warn('[llm] failed to forward stream frame', error);
+    }
+  };
+
+  const cleanup = () => {
+    const entry = activeLlmStreams.get(requestId);
+    if (entry === controller) {
+      activeLlmStreams.delete(requestId);
+    }
+  };
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, Accept: 'text/event-stream' },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      const errorText = await response.text().catch(() => '');
+      const detail = (errorText || '').trim() || `stream failed (${response.status || 0})`;
+      sendFrame(`event: error\ndata: ${JSON.stringify({ error: detail, status: response.status || 0 })}\n\n`);
+      throw new Error(detail);
+    }
+
+    const reader = response.body.getReader();
+    const flushBuffer = (final = false) => {
+      let index = buffer.indexOf('\n\n');
+      while (index !== -1) {
+        const raw = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        if (raw.trim()) {
+          sendFrame(raw);
+        }
+        index = buffer.indexOf('\n\n');
+      }
+      if (final && buffer.trim()) {
+        sendFrame(buffer);
+        buffer = '';
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        flushBuffer(true);
+        break;
+      }
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        flushBuffer(false);
+      }
+    }
+
+    cleanup();
+    return { ok: true, requestId };
+  } catch (error) {
+    cleanup();
+    if (controller.signal.aborted) {
+      const abortError = new Error('Stream aborted');
+      abortError.name = 'AbortError';
+      throw abortError;
+    }
+    throw error;
+  }
+});
+
+ipcMain.handle('llm:abort', async (_event, requestId) => {
+  const key = typeof requestId === 'string' ? requestId.trim() : '';
+  if (!key) {
+    return { ok: false, reason: 'invalid_request' };
+  }
+  const controller = activeLlmStreams.get(key);
+  if (!controller) {
+    return { ok: false, reason: 'not_found' };
+  }
+  activeLlmStreams.delete(key);
+  try {
+    controller.abort();
+  } catch (error) {
+    console.warn('[llm] failed to abort stream', error);
+  }
+  return { ok: true };
+});
 
 ipcMain.handle('shadow:capture', async (_event, payload) => {
   try {

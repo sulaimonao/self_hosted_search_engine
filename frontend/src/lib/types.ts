@@ -6,6 +6,8 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   streaming?: boolean;
+  streamRequestId?: string | null;
+  streamFrames?: number | null;
   proposedActions?: ProposedAction[];
   reasoning?: string | null;
   answer?: string | null;
@@ -180,12 +182,15 @@ export type ChatStreamEvent =
       attempt: number;
       model: string | null;
       trace_id: string | null;
+      request_id?: string | null;
+      requestId?: string | null;
     }
   | {
       type: "delta";
       answer?: string | null;
       reasoning?: string | null;
       citations?: string[] | null;
+      delta?: string | null;
     }
   | {
       type: "complete";

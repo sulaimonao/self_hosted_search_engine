@@ -232,6 +232,109 @@ def detect_web_routes() -> List[str]:
     return sorted(set(paths))
 
 
+# ---------- Rules ----------
+def rule_stream_integrity() -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "id": "R20_stream_integrity",
+        "title": "Electron chat streaming integrity",
+        "severity": "high",
+        "status": "ok",
+        "issues": [],
+        "subchecks": [],
+    }
+
+    issues: List[str] = result["issues"]
+
+    main_text = ""
+    main_path = Path("electron/main.js")
+    try:
+        main_text = main_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        issues.append(f"{main_path} missing")
+    except OSError as exc:
+        issues.append(f"{main_path} unreadable: {exc}")
+    else:
+        if "TextDecoder" not in main_text or "decode(value, { stream: true" not in main_text:
+            issues.append("electron/main.js missing streaming TextDecoder decode(value, { stream: true })")
+        if "\\n\\n" not in main_text:
+            issues.append("electron/main.js missing SSE frame splitter (\\n\\n)")
+        if "'llm:frame'" not in main_text:
+            issues.append("electron/main.js missing llm:frame forwarding")
+
+    hook_text = ""
+    hook_path = Path("frontend/src/hooks/useLlmStream.ts")
+    try:
+        hook_text = hook_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        issues.append(f"{hook_path} missing")
+    except OSError as exc:
+        issues.append(f"{hook_path} unreadable: {exc}")
+    else:
+        if "parseSseFrame" not in hook_text or "frame.split(/\\r?\\n/)" not in hook_text:
+            issues.append("useLlmStream hook missing framed SSE parsing")
+
+    preload_text = ""
+    preload_path = Path("electron/preload.js")
+    try:
+        preload_text = preload_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        issues.append(f"{preload_path} missing")
+    except OSError as exc:
+        issues.append(f"{preload_path} unreadable: {exc}")
+    else:
+        if "contextBridge.exposeInMainWorld('llm'" not in preload_text:
+            issues.append("electron/preload.js missing llm bridge exposure")
+        if "llm:stream" not in preload_text:
+            issues.append("electron/preload.js missing llm:stream handler")
+        if "llm:frame" not in preload_text:
+            issues.append("electron/preload.js missing llm frame subscription")
+
+    if issues:
+        result["status"] = "fail"
+
+    subchecks: List[Dict[str, Any]] = []
+    frames_check: Dict[str, Any] = {
+        "id": "R20_stream_integrity.frames_counter",
+        "severity": "medium",
+        "status": "ok",
+    }
+    if "frames: prev.frames + 1" not in hook_text:
+        frames_check["status"] = "warn"
+        frames_check["detail"] = "frames counter not detected in useLlmStream hook"
+    subchecks.append(frames_check)
+    result["subchecks"] = subchecks
+
+    return result
+
+
+def run_rules() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    rules: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+    warnings = 0
+
+    rule = rule_stream_integrity()
+    rules.append(rule)
+    if rule.get("severity") == "high" and rule.get("status") != "ok":
+        errors.append({
+            "id": rule.get("id"),
+            "severity": rule.get("severity"),
+            "issues": rule.get("issues"),
+        })
+    for sub in rule.get("subchecks", []):
+        severity = sub.get("severity", "medium")
+        status = sub.get("status", "ok")
+        if severity == "high" and status != "ok":
+            errors.append({
+                "id": sub.get("id"),
+                "severity": severity,
+                "issues": sub,
+            })
+        elif status != "ok":
+            warnings += 1
+
+    return rules, errors, warnings
+
+
 # ---------- Manifest ----------
 def load_manifest() -> Dict[str, Any]:
     if MANIFEST_PATH.exists():
@@ -496,6 +599,9 @@ def run_all() -> Tuple[Dict[str, Any], int]:
         if outcome.get("status") == "error":
             errors.append(outcome)
 
+    rules, rule_errors, rule_warns = run_rules()
+    errors.extend(rule_errors)
+
     results = {
         "env": {
             "platform": platform.platform(),
@@ -505,19 +611,50 @@ def run_all() -> Tuple[Dict[str, Any], int]:
         },
         "steps": steps,
         "errors": errors,
+        "rules": rules,
+        "rule_warnings": rule_warns,
     }
 
-    (RUN_DIR / "checks.json").write_text(json.dumps(results, indent=2))
     ok_count = sum(1 for step in steps if str(step.get("status", "")).startswith("ok"))
     warn_count = sum(
         1
         for step in steps
         if step.get("status") in {"ok_no_events", "skipped"}
     )
+    rule_fail = sum(
+        1
+        for rule in rules
+        if rule.get("severity") == "high" and rule.get("status") != "ok"
+    )
+    rule_fail += sum(
+        1
+        for rule in rules
+        for sub in rule.get("subchecks", [])
+        if sub.get("severity") == "high" and sub.get("status") != "ok"
+    )
+    top_level_rule_warns = sum(
+        1
+        for rule in rules
+        if rule.get("severity") != "high" and rule.get("status") != "ok"
+    )
+    rule_warn_total = rule_warns + top_level_rule_warns
+    results["rule_warnings_total"] = rule_warn_total
+    (RUN_DIR / "checks.json").write_text(json.dumps(results, indent=2))
     err_count = len(errors)
+    rule_ok = sum(1 for rule in rules if rule.get("status") == "ok")
+
     log(f"Probes: {len(steps)}  ✓ok:{ok_count}  ~:{warn_count}  ✗err:{err_count}")
+    log(f"Rules: {len(rules)}  ✓ok:{rule_ok}  ~:{rule_warn_total}  ✗err:{rule_fail}")
     (RUN_DIR / "summary.md").write_text(
-        f"# Diagnostics\n\n- Probes: {len(steps)}\n- OK: {ok_count}\n- ~ (idle/skip): {warn_count}\n- Errors: {err_count}\n"
+        "# Diagnostics\n\n"
+        f"- Probes: {len(steps)}\n"
+        f"- OK: {ok_count}\n"
+        f"- ~ (idle/skip): {warn_count}\n"
+        f"- Errors: {err_count}\n"
+        f"- Rules: {len(rules)}\n"
+        f"- Rule OK: {rule_ok}\n"
+        f"- Rule warnings: {rule_warn_total}\n"
+        f"- Rule errors: {rule_fail}\n"
     )
     return results, (0 if err_count == 0 else 1)
 

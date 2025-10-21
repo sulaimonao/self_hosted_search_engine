@@ -19,6 +19,8 @@ const BROWSER_ALLOWED_CHANNELS = new Set([
   'settings:state',
 ]);
 
+const LLM_CHANNEL = 'llm:frame';
+
 const NOOP_UNSUBSCRIBE = () => {};
 
 function subscribe(channel, handler) {
@@ -160,6 +162,29 @@ function createBrowserAPI() {
   };
 }
 
+function createLlmAPI() {
+  return {
+    stream: (payload) => ipcRenderer.invoke('llm:stream', payload ?? {}),
+    abort: (requestId) => ipcRenderer.invoke('llm:abort', requestId ?? null),
+    onFrame: (handler) => {
+      if (typeof handler !== 'function') {
+        return NOOP_UNSUBSCRIBE;
+      }
+      const listener = (_event, frame) => {
+        try {
+          handler(frame);
+        } catch (error) {
+          console.warn('[desktop] llm frame handler threw', error);
+        }
+      };
+      ipcRenderer.on(LLM_CHANNEL, listener);
+      return () => {
+        ipcRenderer.removeListener(LLM_CHANNEL, listener);
+      };
+    },
+  };
+}
+
 spoofNavigator();
 
 contextBridge.exposeInMainWorld('desktop', {
@@ -193,3 +218,4 @@ contextBridge.exposeInMainWorld('desktop', {
 });
 
 contextBridge.exposeInMainWorld('browserAPI', createBrowserAPI());
+contextBridge.exposeInMainWorld('llm', createLlmAPI());

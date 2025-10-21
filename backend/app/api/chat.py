@@ -328,9 +328,17 @@ class _StreamAccumulator:
         content = message.get("content")
         if isinstance(content, str):
             trimmed = content.strip()
-            if trimmed and trimmed != self.answer:
-                self.answer = trimmed
-                delta.answer = self.answer
+            if trimmed:
+                previous_answer = self.answer
+                if trimmed != previous_answer:
+                    self.answer = trimmed
+                    delta.answer = self.answer
+                    if trimmed.startswith(previous_answer):
+                        appended = trimmed[len(previous_answer) :]
+                    else:
+                        appended = self.answer
+                    if appended:
+                        delta.delta = appended
         reasoning_value = None
         for key in ("reasoning", "thinking"):
             raw = message.get(key)
@@ -340,7 +348,7 @@ class _StreamAccumulator:
         if reasoning_value and reasoning_value != self.reasoning:
             self.reasoning = reasoning_value
             delta.reasoning = self.reasoning
-        if delta.answer is None and delta.reasoning is None:
+        if delta.answer is None and delta.reasoning is None and delta.delta is None:
             return None
         self.payload = chunk
         return delta
@@ -348,7 +356,7 @@ class _StreamAccumulator:
 
 def _iter_streaming_response(
     response: requests.Response,
-) -> Iterator[tuple[Mapping[str, Any], ChatStreamDelta, "_StreamAccumulator"]]:
+) -> Iterator[tuple[Mapping[str, Any], ChatStreamDelta, "_StreamAccumulator", str]]:
     """Yield incremental updates for a streaming Ollama response."""
 
     accumulator = _StreamAccumulator()
@@ -369,7 +377,7 @@ def _iter_streaming_response(
             continue
         delta = accumulator.update(payload)
         if delta is not None:
-            yield payload, delta, accumulator
+            yield payload, delta, accumulator, decoded
 
 
 
@@ -378,7 +386,7 @@ def _drain_chat_response(response: requests.Response) -> tuple[Mapping[str, Any]
 
     accumulator: _StreamAccumulator | None = None
     final_payload: Mapping[str, Any] | None = None
-    for payload, _delta, acc in _iter_streaming_response(response):
+    for payload, _delta, acc, _raw in _iter_streaming_response(response):
         accumulator = acc
         final_payload = payload
     _close_response_safely(response)
@@ -398,6 +406,33 @@ def _serialize_event(event: ChatStreamMetadata | ChatStreamDelta | ChatStreamCom
 def _ndjson_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
     for event in events:
         yield _serialize_event(event)
+
+
+def _sse_frame(event: str | None, payload: Mapping[str, Any]) -> bytes:
+    prefix = f"event: {event}\n" if event else ""
+    body = json.dumps(payload, ensure_ascii=False)
+    return f"{prefix}data: {body}\n\n".encode("utf-8")
+
+
+def _sse_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
+    for event in events:
+        if isinstance(event, ChatStreamMetadata):
+            data = event.model_dump(exclude_none=True)
+            data.pop("type", None)
+            yield _sse_frame("metadata", data)
+        elif isinstance(event, ChatStreamDelta):
+            data = event.model_dump(exclude_none=True)
+            data.pop("type", None)
+            if "delta" not in data and event.answer is not None:
+                data.setdefault("delta", event.answer)
+            yield _sse_frame("delta", data)
+        elif isinstance(event, ChatStreamComplete):
+            payload = event.payload.model_dump(exclude_none=True)
+            yield _sse_frame("complete", {"payload": payload})
+        elif isinstance(event, ChatStreamError):
+            data = event.model_dump(exclude_none=True)
+            data.pop("type", None)
+            yield _sse_frame("error", data)
 
 
 def _render_response_payload(
@@ -474,19 +509,33 @@ def _stream_chat_response(
     attempt_index: int,
     response: requests.Response,
     trace_id: str | None,
+    request_id: str | None,
     streaming_start: float,
     chat_span: Any,
     image_context: str | None,
     image_used: bool,
+    transport: str,
 ) -> Response:
-    metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
+    metadata = ChatStreamMetadata(
+        attempt=attempt_index,
+        model=candidate,
+        trace_id=trace_id,
+        request_id=request_id,
+    )
+    chunk_samples: list[str] = []
+    frame_count = 0
+    end_reason = "unknown"
 
     def _events() -> Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]:
+        nonlocal frame_count, end_reason
         yield metadata
         accumulator: _StreamAccumulator | None = None
         try:
-            for payload, delta, acc in _iter_streaming_response(response):
+            for payload, delta, acc, raw in _iter_streaming_response(response):
                 accumulator = acc
+                if raw and len(chunk_samples) < 3:
+                    chunk_samples.append(raw[:80])
+                frame_count += 1
                 yield delta
             if accumulator is None or accumulator.payload is None:
                 raise ValueError("Upstream response stream was empty")
@@ -501,6 +550,7 @@ def _stream_chat_response(
                 image_context=image_context,
                 image_used=image_used,
             )
+            end_reason = "complete"
             yield ChatStreamComplete(payload=payload_model)
         except Exception as exc:  # pragma: no cover - defensive streaming guard
             g.chat_error_class = exc.__class__.__name__
@@ -510,46 +560,52 @@ def _stream_chat_response(
                 "chat.error",
                 trace=trace_id,
                 model=candidate,
+                request_id=request_id,
+                transport=transport,
                 attempt=attempt_index,
                 msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
             )
             if chat_span is not None:
                 chat_span.set_attribute("chat.success", False)
+            end_reason = "error"
             yield ChatStreamError(
                 error="stream_error",
                 hint="upstream response terminated unexpectedly",
                 trace_id=trace_id,
             )
         finally:
+            log_event(
+                "INFO",
+                "chat.stream_summary",
+                trace=trace_id,
+                model=candidate,
+                request_id=request_id,
+                transport=transport,
+                frame_count=frame_count,
+                chunks=chunk_samples,
+                end=end_reason,
+            )
             _close_response_safely(response)
 
-    resp = Response(stream_with_context(_ndjson_stream(_events())), mimetype="application/x-ndjson")
+    if transport == "sse":
+        resp = Response(stream_with_context(_sse_stream(_events())), mimetype="text/event-stream")
+        resp.headers.setdefault("Cache-Control", "no-store, no-transform")
+    else:
+        resp = Response(stream_with_context(_ndjson_stream(_events())), mimetype="application/x-ndjson")
+        resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers["X-LLM-Model"] = candidate
-    resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers.setdefault("X-Accel-Buffering", "no")
+    resp.headers.setdefault("X-Stream-Transport", transport)
     return resp
 
 
-
-@bp.post("/chat")
-def chat_invoke() -> Response:
-    start = time.perf_counter()
-    try:
-        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
-    except ValidationError as exc:
-        g.chat_error_class = "ValidationError"
-        g.chat_error_message = "invalid_request"
-        return (
-            jsonify(
-                {
-                    "error": "validation_error",
-                    "detail": exc.errors(),
-                    "trace_id": getattr(g, "trace_id", None),
-                }
-            ),
-            400,
-        )
-
+def _handle_chat_request(
+    chat_request: ChatRequest,
+    *,
+    streaming_requested: bool,
+    preferred_transport: str,
+    route: str,
+) -> Response:
     sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
 
     chat_logger = current_app.config.get("CHAT_LOGGER")
@@ -565,28 +621,24 @@ def chat_invoke() -> Response:
     server_time = chat_request.server_time
     server_timezone = chat_request.server_timezone
     server_time_utc = chat_request.server_time_utc
+    request_id = chat_request.request_id
+
+    if request_id:
+        setattr(g, "chat_request_id", request_id)
 
     trace_id = getattr(g, "trace_id", None)
     primary_model, fallback_model, _ = _configured_models()
-
-    accept_header = (request.headers.get("Accept") or "").lower()
-    stream_flag = request.args.get("stream")
-    if chat_request.stream is not None:
-        streaming_requested = bool(chat_request.stream)
-    elif stream_flag is not None:
-        streaming_requested = stream_flag.strip().lower() not in {"0", "false", "no", "off"}
-    else:
-        streaming_requested = "application/json" not in accept_header
 
     trace_inputs = {
         "message_count": len(sanitized_messages),
         "requested_model": requested_model,
         "has_context": bool(text_context or image_context),
+        "request_id": request_id,
     }
 
     with start_span(
         "http.chat",
-        attributes={"http.route": "/api/chat", "http.method": request.method},
+        attributes={"http.route": route, "http.method": request.method},
         inputs=trace_inputs,
     ) as chat_span:
         candidates: list[str] = []
@@ -639,22 +691,22 @@ def chat_invoke() -> Response:
                 "chat.request",
                 trace=trace_id,
                 model=candidate,
+                request_id=request_id,
                 alias=alias_label if alias_label and alias_label != candidate else None,
                 attempt=attempt_index,
                 url=url_value,
-                has_text=bool(text_context),
-                has_img=bool(image_context),
+                context_chars=(len(text_context) if isinstance(text_context, str) else 0),
+                prompt_chars=sum(len(item.get("content", "")) for item in prepared_messages),
             )
 
-            if hasattr(chat_logger, "info"):
-                chat_logger.info("forwarding chat request to ollama (model=%s)", candidate)
+            if chat_span is not None:
+                chat_span.set_attribute("chat.attempt", attempt_index)
 
-            request_payload: dict[str, Any] = {
-                "model": candidate,
-                "messages": prepared_messages,
-                "stream": bool(streaming_requested),
-                "system": system_prompt,
-            }
+            request_payload = {"model": candidate, "messages": prepared_messages}
+            if system_prompt:
+                request_payload["system"] = system_prompt
+            if image_context:
+                request_payload["images"] = [image_context]
             if _supports_json_format(candidate):
                 request_payload["format"] = "json"
             else:
@@ -663,6 +715,7 @@ def chat_invoke() -> Response:
                     "chat.json_disabled",
                     trace=trace_id,
                     model=candidate,
+                    request_id=request_id,
                 )
 
             response = None
@@ -693,6 +746,7 @@ def chat_invoke() -> Response:
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    request_id=request_id,
                     attempt=attempt_index,
                     error=g.chat_error_class,
                     msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
@@ -720,6 +774,7 @@ def chat_invoke() -> Response:
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    request_id=request_id,
                     code=404,
                     msg=reason,
                 )
@@ -735,6 +790,7 @@ def chat_invoke() -> Response:
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    request_id=request_id,
                     code=response.status_code,
                     msg=g.chat_error_message,
                 )
@@ -752,15 +808,18 @@ def chat_invoke() -> Response:
                 )
 
             if streaming_requested:
+                transport = "sse" if preferred_transport == "sse" else "ndjson"
                 return _stream_chat_response(
                     candidate=candidate,
                     attempt_index=attempt_index,
                     response=response,
                     trace_id=trace_id,
+                    request_id=request_id,
                     streaming_start=attempt_start,
                     chat_span=chat_span,
                     image_context=image_context,
                     image_used=image_used,
+                    transport=transport,
                 )
 
             try:
@@ -773,6 +832,7 @@ def chat_invoke() -> Response:
                     "chat.error",
                     trace=trace_id,
                     model=candidate,
+                    request_id=request_id,
                     msg=g.chat_error_message,
                 )
                 return (
@@ -854,6 +914,63 @@ def chat_invoke() -> Response:
             503,
         )
 
+@bp.post("/chat")
+def chat_invoke() -> Response:
+    try:
+        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        g.chat_error_class = "ValidationError"
+        g.chat_error_message = "invalid_request"
+        return (
+            jsonify(
+                {
+                    "error": "validation_error",
+                    "detail": exc.errors(),
+                    "trace_id": getattr(g, "trace_id", None),
+                }
+            ),
+            400,
+        )
 
+    accept_header = (request.headers.get("Accept") or "").lower()
+    stream_flag = request.args.get("stream")
+    if chat_request.stream is not None:
+        streaming_requested = bool(chat_request.stream)
+    elif stream_flag is not None:
+        streaming_requested = stream_flag.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        streaming_requested = "application/json" not in accept_header
 
-__all__ = ["bp"]
+    preferred_transport = "ndjson" if streaming_requested else "json"
+    return _handle_chat_request(
+        chat_request,
+        streaming_requested=streaming_requested,
+        preferred_transport=preferred_transport,
+        route="/api/chat",
+    )
+
+@bp.post("/chat/stream")
+def chat_stream_invoke() -> Response:
+    try:
+        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        g.chat_error_class = "ValidationError"
+        g.chat_error_message = "invalid_request"
+        return (
+            jsonify(
+                {
+                    "error": "validation_error",
+                    "detail": exc.errors(),
+                    "trace_id": getattr(g, "trace_id", None),
+                }
+            ),
+            400,
+        )
+
+    return _handle_chat_request(
+        chat_request,
+        streaming_requested=True,
+        preferred_transport="sse",
+        route="/api/chat/stream",
+    )
+

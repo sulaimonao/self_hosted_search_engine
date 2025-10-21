@@ -28,6 +28,7 @@ export interface ChatSendRequest {
   serverTime?: string | null;
   serverTimezone?: string | null;
   serverUtc?: string | null;
+  requestId?: string | null;
   signal?: AbortSignal;
   onEvent?: (event: ChatStreamEvent) => void;
 }
@@ -230,6 +231,7 @@ export class ChatClient {
       server_time: request.serverTime ?? undefined,
       server_timezone: request.serverTimezone ?? undefined,
       server_time_utc: request.serverUtc ?? undefined,
+      request_id: request.requestId ?? undefined,
     };
 
     const response = await fetch(resolveApi("/api/chat"), {

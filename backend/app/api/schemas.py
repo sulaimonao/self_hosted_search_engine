@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
@@ -64,6 +64,11 @@ class ChatRequest(BaseModel):
     server_time: str | None = None
     server_timezone: str | None = None
     server_time_utc: str | None = None
+    request_id: str | None = Field(
+        default=None,
+        alias="request_id",
+        validation_alias=AliasChoices("request_id", "requestId"),
+    )
 
     model_config = ConfigDict(extra="ignore")
 
@@ -76,6 +81,7 @@ class ChatRequest(BaseModel):
         "server_time",
         "server_timezone",
         "server_time_utc",
+        "request_id",
         mode="before",
     )
     @classmethod
@@ -205,6 +211,11 @@ class ChatStreamMetadata(BaseModel):
     attempt: int = Field(ge=1)
     model: str | None = None
     trace_id: str | None = Field(default=None, alias="trace_id")
+    request_id: str | None = Field(
+        default=None,
+        alias="request_id",
+        validation_alias=AliasChoices("request_id", "requestId"),
+    )
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -216,6 +227,7 @@ class ChatStreamDelta(BaseModel):
     answer: str | None = None
     reasoning: str | None = None
     citations: list[str] | None = None
+    delta: str | None = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -226,6 +238,14 @@ class ChatStreamDelta(BaseModel):
             return None
         trimmed = str(value).strip()
         return trimmed or None
+
+    @field_validator("delta", mode="before")
+    @classmethod
+    def _trim_delta(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value)
+        return trimmed if trimmed else None
 
     @field_validator("citations", mode="before")
     @classmethod
