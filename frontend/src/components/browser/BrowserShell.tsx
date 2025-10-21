@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, Stethoscope } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 
@@ -36,6 +36,7 @@ import { SettingsSheet } from "@/components/browser/SettingsSheet";
 import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
+import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
 
 const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
@@ -109,13 +110,24 @@ export function BrowserShell() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const fallbackWebviewRef = useRef<ElectronWebviewElement | null>(null);
   const viewContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const [supportsWebview, setSupportsWebview] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
   const hasBrowserAPI = Boolean(browserAPI);
 
   const pageTitle = activeTab?.title || activeTab?.url || "New Tab";
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const ua = window.navigator?.userAgent ?? "";
+    setSupportsWebview(/Electron/i.test(ua));
+  }, []);
 
   useEffect(() => {
     if (!browserAPI || !viewContainerRef.current) {
@@ -145,10 +157,147 @@ export function BrowserShell() {
     if (hasBrowserAPI) {
       return;
     }
-    if (activeTab?.url && iframeRef.current) {
-      iframeRef.current.src = activeTab.url;
+    const webview = fallbackWebviewRef.current;
+    if (!webview || !activeTab?.url) {
+      return;
+    }
+    try {
+      const currentUrl = typeof webview.getURL === "function" ? webview.getURL() : webview.getAttribute("src") || "";
+      if (currentUrl !== activeTab.url) {
+        if (typeof webview.loadURL === "function") {
+          void webview.loadURL(activeTab.url).catch((error) => {
+            console.warn("[browser] failed to load fallback webview URL", error);
+          });
+        } else {
+          webview.setAttribute("src", activeTab.url);
+        }
+      }
+    } catch (error) {
+      console.warn("[browser] failed to sync fallback webview", error);
     }
   }, [activeTab?.url, hasBrowserAPI]);
+
+  useEffect(() => {
+    if (hasBrowserAPI) {
+      return;
+    }
+    const webview = fallbackWebviewRef.current;
+    const tabId = activeTab?.id;
+    if (!webview || !tabId) {
+      return;
+    }
+
+    const updateNavigationState = (url?: string) => {
+      const store = useAppStore.getState();
+      const canGoBack = Boolean(webview.canGoBack?.());
+      const canGoForward = Boolean(webview.canGoForward?.());
+      const title = typeof webview.getTitle === "function" ? webview.getTitle() : undefined;
+      const nextUrl = url ?? (typeof webview.getURL === "function" ? webview.getURL() : undefined) ?? activeTab?.url ?? "";
+      store.updateTab(tabId, {
+        url: nextUrl,
+        canGoBack,
+        canGoForward,
+        isLoading: false,
+        error: null,
+        title: title && title.trim() ? title : nextUrl,
+      });
+    };
+
+    const handleDidNavigate = (event: { url?: string }) => {
+      updateNavigationState(event?.url);
+    };
+
+    const handleDidStartLoading = () => {
+      useAppStore.getState().updateTab(tabId, { isLoading: true });
+    };
+
+    const handleDidStopLoading = () => {
+      updateNavigationState();
+    };
+
+    const handleTitleUpdated = (event: { title?: string }) => {
+      if (event?.title) {
+        useAppStore.getState().updateTab(tabId, { title: event.title });
+      }
+    };
+
+    const handleFaviconUpdated = (event: { favicons?: string[] }) => {
+      const favicon = Array.isArray(event?.favicons) && event.favicons.length > 0 ? event.favicons[0] : null;
+      useAppStore.getState().updateTab(tabId, { favicon });
+    };
+
+    const handleDidFailLoad = (_event: unknown, errorCode?: number, errorDescription?: string) => {
+      useAppStore.getState().updateTab(tabId, {
+        isLoading: false,
+        error: {
+          code: errorCode,
+          description: errorDescription || "Navigation failed",
+        },
+      });
+    };
+
+    const listeners: [string, (...args: unknown[]) => void][] = [
+      ["did-start-loading", handleDidStartLoading],
+      ["did-stop-loading", handleDidStopLoading],
+      ["did-navigate", handleDidNavigate as (...args: unknown[]) => void],
+      ["did-navigate-in-page", handleDidNavigate as (...args: unknown[]) => void],
+      ["page-title-updated", handleTitleUpdated as (...args: unknown[]) => void],
+      ["page-favicon-updated", handleFaviconUpdated as (...args: unknown[]) => void],
+      ["did-fail-load", handleDidFailLoad as (...args: unknown[]) => void],
+      ["dom-ready", () => updateNavigationState()],
+    ];
+
+    listeners.forEach(([event, handler]) => {
+      try {
+        webview.addEventListener?.(event, handler);
+      } catch (error) {
+        console.warn(`[browser] failed to attach ${event} listener`, error);
+      }
+    });
+
+    return () => {
+      listeners.forEach(([event, handler]) => {
+        try {
+          webview.removeEventListener?.(event, handler);
+        } catch (error) {
+          console.warn(`[browser] failed to detach ${event} listener`, error);
+        }
+      });
+    };
+  }, [activeTab?.id, activeTab?.url, hasBrowserAPI]);
+
+  const handleBack = useCallback(() => {
+    if (browserAPI) {
+      browserAPI.back({ tabId: activeTab?.id });
+      return;
+    }
+    const webview = fallbackWebviewRef.current;
+    if (webview?.canGoBack?.()) {
+      webview.goBack?.();
+    }
+  }, [browserAPI, activeTab?.id]);
+
+  const handleForward = useCallback(() => {
+    if (browserAPI) {
+      browserAPI.forward({ tabId: activeTab?.id });
+      return;
+    }
+    const webview = fallbackWebviewRef.current;
+    if (webview?.canGoForward?.()) {
+      webview.goForward?.();
+    }
+  }, [browserAPI, activeTab?.id]);
+
+  const handleReload = useCallback(() => {
+    if (browserAPI) {
+      browserAPI.reload({ tabId: activeTab?.id });
+      return;
+    }
+    const webview = fallbackWebviewRef.current;
+    if (webview) {
+      webview.reload?.();
+    }
+  }, [browserAPI, activeTab?.id]);
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -162,7 +311,7 @@ export function BrowserShell() {
               variant="outline"
               size="icon"
               disabled={!activeTab?.canGoBack}
-              onClick={() => browserAPI?.back({ tabId: activeTab?.id })}
+              onClick={handleBack}
             >
               <ArrowLeft size={16} />
             </Button>
@@ -170,14 +319,14 @@ export function BrowserShell() {
               variant="outline"
               size="icon"
               disabled={!activeTab?.canGoForward}
-              onClick={() => browserAPI?.forward({ tabId: activeTab?.id })}
+              onClick={handleForward}
             >
               <ArrowRight size={16} />
             </Button>
             <Button
               variant="outline"
               size="icon"
-              onClick={() => browserAPI?.reload({ tabId: activeTab?.id })}
+              onClick={handleReload}
               disabled={!activeTab}
             >
               <RotateCcw size={16} />
@@ -254,6 +403,14 @@ export function BrowserShell() {
           <Button variant="outline" size="icon" onClick={() => openPanel("chat")}>💬</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("shadow")}>🕶️</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("agentLog")}>🧠</Button>
+          <Button
+            variant="outline"
+            size="icon"
+            title="Diagnostics"
+            onClick={() => setDiagnosticsOpen(true)}
+          >
+            <Stethoscope size={16} />
+          </Button>
           <NotificationBell />
         </div>
       </header>
@@ -262,12 +419,20 @@ export function BrowserShell() {
         {hasBrowserAPI ? (
           <div className="h-full w-full" aria-hidden />
         ) : (
-          <iframe
-            ref={iframeRef}
-            title={activeTab?.title ?? "tab"}
-            className="h-full w-full"
-            sandbox="allow-same-origin allow-forms allow-scripts allow-popups allow-top-navigation-by-user-activation"
-          />
+          supportsWebview ? (
+            <webview
+              ref={fallbackWebviewRef}
+              src={activeTab?.url ?? "https://wikipedia.org"}
+              title={activeTab?.title ?? "tab"}
+              className="h-full w-full border-0"
+              partition="persist:main"
+              allowpopups
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-muted/40 text-sm text-muted-foreground">
+              Embedded preview requires the desktop app.
+            </div>
+          )
         )}
 
         {activeTab?.error ? (
@@ -301,6 +466,13 @@ export function BrowserShell() {
       <DownloadsTray />
       <PermissionPrompt />
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <DiagnosticsDrawer
+        open={diagnosticsOpen}
+        onOpenChange={setDiagnosticsOpen}
+        webviewRef={fallbackWebviewRef}
+        browserAPI={browserAPI}
+        supportsWebview={supportsWebview}
+      />
       <ToastGate />
     </div>
   );

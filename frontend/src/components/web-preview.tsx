@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
 } from "react";
@@ -86,12 +87,14 @@ export function WebPreview({
   }, [url]);
 
   const [supportsWebview, setSupportsWebview] = useState(false);
+  const webviewRef = useRef<ElectronWebviewElement | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    setSupportsWebview(Boolean(window.appBridge?.supportsWebview));
+    const ua = window.navigator?.userAgent ?? "";
+    setSupportsWebview(/Electron/i.test(ua) || Boolean(window.appBridge?.supportsWebview));
   }, []);
 
 
@@ -132,7 +135,12 @@ export function WebPreview({
                   size="icon"
                   aria-label="Go back"
                   disabled={!canGoBack}
-                  onClick={onHistoryBack}
+                  onClick={() => {
+                    if (supportsWebview) {
+                      webviewRef.current?.goBack?.();
+                    }
+                    onHistoryBack();
+                  }}
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
@@ -148,7 +156,12 @@ export function WebPreview({
                   size="icon"
                   aria-label="Go forward"
                   disabled={!canGoForward}
-                  onClick={onHistoryForward}
+                  onClick={() => {
+                    if (supportsWebview) {
+                      webviewRef.current?.goForward?.();
+                    }
+                    onHistoryForward();
+                  }}
                 >
                   <ArrowRight className="h-4 w-4" />
                 </Button>
@@ -163,7 +176,12 @@ export function WebPreview({
                   variant="ghost"
                   size="icon"
                   aria-label="Reload"
-                  onClick={onReload}
+                  onClick={() => {
+                    if (supportsWebview) {
+                      webviewRef.current?.reload?.();
+                    }
+                    onReload();
+                  }}
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -240,19 +258,18 @@ export function WebPreview({
       ) : null}
       <div className="relative flex-1 min-h-0 w-full overflow-hidden">
         {supportsWebview ? (
-          <webview key={reloadKey} src={url} className="block h-full w-full border-0" allowpopups />
-        ) : (
-          <iframe
+          <webview
+            ref={webviewRef}
             key={reloadKey}
             src={url}
-            title="Web preview"
             className="block h-full w-full border-0"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-            onLoad={() => {
-              // Previously attempted to clear a selection error state here, but no state setter exists.
-              // Keeping the handler in case future logic needs to respond to iframe load events.
-            }}
+            partition="persist:main"
+            allowpopups
           />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+            Preview is available in the desktop app.
+          </div>
         )}
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/65 backdrop-blur-sm">
