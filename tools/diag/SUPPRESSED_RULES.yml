@@ -1,0 +1,5 @@
+# Suppressed diagnostics rules.
+# - rule: R1
+#   paths:
+#     - frontend/legacy/**
+#   reason: "Legacy browser shell slated for removal"

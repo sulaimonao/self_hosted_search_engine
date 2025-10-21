@@ -114,6 +114,9 @@ codex_task_shadow_desktop.md
 /frontend/dist
 !scripts/system_check_has_critical.py
 !tools/diag/
-!tools/diag/engine.py
-!tools/diag/__init__.py
+!tools/diag/*.py
+!tools/diag/**/*.py
 !tools/diag/manifest.json
+!tools/e2e_diag.py
+!tools/__init__.py
+!engine/agents/repo_summary.py
