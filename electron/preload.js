@@ -137,6 +137,13 @@ function createBrowserAPI() {
     showDownload: (id) => ipcRenderer.invoke('downloads:show-in-folder', { id }),
     getSettings: () => ipcRenderer.invoke('settings:get'),
     updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),
+    openExternal: (url) => {
+      const target = typeof url === 'string' ? url.trim() : '';
+      if (!target) {
+        return Promise.resolve({ ok: false, error: 'invalid_url' });
+      }
+      return ipcRenderer.invoke('browser:open-external', { url: target });
+    },
     respondToPermission: (decision) => {
       if (!decision || typeof decision !== 'object') {
         return;

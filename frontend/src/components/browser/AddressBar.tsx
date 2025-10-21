@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/state/useAppStore";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
-import { normalizeAddressInput } from "@/lib/url";
+import { isSearchHostUrl, normalizeAddressInput } from "@/lib/url";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 
 export function AddressBar() {
@@ -20,6 +20,9 @@ export function AddressBar() {
   const [value, setValue] = useState(activeTab?.url ?? "");
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
   const searchMode = useBrowserRuntimeStore((state) => state.settings?.searchMode ?? "auto");
+  const openSearchExternally = useBrowserRuntimeStore(
+    (state) => state.settings?.openSearchExternally ?? false,
+  );
 
   useEffect(() => {
     setValue(activeTab?.url ?? "");
@@ -32,7 +35,12 @@ export function AddressBar() {
         event.preventDefault();
         if (!activeTab) return;
         const nextUrl = normalizeAddressInput(value, { searchMode });
+        const shouldOpenExternally = openSearchExternally && isSearchHostUrl(nextUrl);
         if (browserAPI) {
+          if (shouldOpenExternally && typeof browserAPI.openExternal === "function") {
+            void browserAPI.openExternal(nextUrl);
+            return;
+          }
           browserAPI.navigate(nextUrl, { tabId: activeTab.id, transition: "typed" });
         } else {
           updateTab(activeTab.id, { url: nextUrl, title: value.trim() || nextUrl });

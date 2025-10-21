@@ -2,7 +2,8 @@ export type SearchMode = "auto" | "query";
 
 const SCHEME_REGEX = /^https?:\/\//i;
 const DOMAIN_LIKE_REGEX = /^[\w.-]+\.[a-z]{2,}(?:[:/?#].*)?$/i;
-const GOOGLE_HOSTS = new Set(["google.com", "www.google.com"]);
+const SEARCH_HOSTNAMES = ["google.com", "www.google.com"];
+const SEARCH_HOSTS = new Set(SEARCH_HOSTNAMES);
 
 function toGoogleSearch(query: string) {
   const trimmed = query.trim();
@@ -18,7 +19,7 @@ function ensureGoogleEmbeddable(candidate: string): string {
   try {
     const url = new URL(candidate);
     const host = url.hostname.toLowerCase();
-    if (!GOOGLE_HOSTS.has(host)) {
+    if (!SEARCH_HOSTS.has(host)) {
       return candidate;
     }
     if (host === "google.com") {
@@ -33,6 +34,16 @@ function ensureGoogleEmbeddable(candidate: string): string {
     return url.toString();
   } catch {
     return candidate;
+  }
+}
+
+export function isSearchHostUrl(candidate: string): boolean {
+  try {
+    const url = new URL(candidate);
+    const host = url.hostname.toLowerCase();
+    return SEARCH_HOSTS.has(host);
+  } catch {
+    return false;
   }
 }
 
