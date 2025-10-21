@@ -7,7 +7,6 @@ function api(path: string) {
 
 import type {
   ChatMessage,
-  ChatResponsePayload,
   CrawlScope,
   SeedRecord,
   SeedRegistryResponse,
@@ -38,6 +37,10 @@ import type {
   CapabilitySnapshot,
   MetaHealthResponse,
 } from "@/lib/types";
+
+import { chatClient, type ChatPayloadMessage, type ChatSendRequest, type ChatSendResult } from "@/lib/chatClient";
+
+export { ChatClient, ChatRequestError, chatClient, type ChatSendResult, type ChatSendRequest } from "@/lib/chatClient";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -1003,10 +1006,7 @@ function normalizeSearchPayload(
   };
 }
 
-interface SerializableMessage {
-  role: "user" | "assistant" | "system";
-  content: string;
-}
+type SerializableMessage = Pick<ChatPayloadMessage, "role" | "content">;
 
 function serializeMessages(history: ChatMessage[], nextUser: string): SerializableMessage[] {
   const values: SerializableMessage[] = [];
@@ -1023,33 +1023,6 @@ function serializeMessages(history: ChatMessage[], nextUser: string): Serializab
   return values;
 }
 
-export class ChatRequestError extends Error {
-  status: number;
-  traceId: string | null;
-  code?: string;
-  hint?: string;
-  tried?: string[];
-
-  constructor(
-    message: string,
-    options: {
-      status: number;
-      traceId: string | null;
-      code?: string;
-      hint?: string;
-      tried?: string[];
-    },
-  ) {
-    super(message);
-    this.name = "ChatRequestError";
-    this.status = options.status;
-    this.traceId = options.traceId;
-    this.code = options.code;
-    this.hint = options.hint;
-    this.tried = options.tried;
-  }
-}
-
 export interface ChatSendOptions {
   model?: string | null;
   url?: string | null;
@@ -1060,135 +1033,8 @@ export interface ChatSendOptions {
   serverTime?: string | null;
   serverTimezone?: string | null;
   serverUtc?: string | null;
+  stream?: boolean;
   onStreamEvent?: (event: ChatStreamEvent) => void;
-}
-
-export interface ChatSendResult {
-  payload: ChatResponsePayload;
-  traceId: string | null;
-  model: string | null;
-}
-
-interface ChatStreamConsumeOptions {
-  onEvent?: (event: ChatStreamEvent) => void;
-  fallbackTraceId: string | null;
-  fallbackModel: string | null;
-}
-
-type ChatErrorEvent = Extract<ChatStreamEvent, { type: "error" }>;
-
-function isChatErrorEvent(event: ChatStreamEvent): event is ChatErrorEvent {
-  return event.type === "error";
-}
-
-async function consumeChatStream(
-  response: Response,
-  options: ChatStreamConsumeOptions,
-): Promise<ChatSendResult> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new ChatRequestError("Streaming response is not supported in this environment", {
-      status: response.status ?? 500,
-      traceId: options.fallbackTraceId,
-    });
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let metadata: ChatStreamEvent | null = null;
-  let finalPayload: ChatResponsePayload | null = null;
-
-  const getMetadataTraceId = (): string | null => {
-    if (!metadata) {
-      return null;
-    }
-    if (metadata.type === "metadata") {
-      return metadata.trace_id ?? null;
-    }
-    if (isChatErrorEvent(metadata)) {
-      return metadata.trace_id ?? null;
-    }
-    return null;
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      buffer += decoder.decode(new Uint8Array(), { stream: false });
-    } else if (value) {
-      buffer += decoder.decode(value, { stream: true });
-    }
-
-    let newlineIndex = buffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const chunk = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      if (chunk) {
-        try {
-          const event = JSON.parse(chunk) as ChatStreamEvent;
-          options.onEvent?.(event);
-          if (event.type === "metadata") {
-            metadata = event;
-          } else if (event.type === "delta") {
-            // handled by callback
-          } else if (event.type === "complete") {
-            finalPayload = event.payload;
-          } else if (isChatErrorEvent(event)) {
-            const errorEvent: ChatErrorEvent = event;
-            const trace = errorEvent.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
-            throw new ChatRequestError(event.error || "chat stream error", {
-              status: response.status ?? 500,
-              traceId: trace,
-            });
-          }
-        } catch (error) {
-          console.warn("Skipping malformed stream chunk", error);
-        }
-      }
-      newlineIndex = buffer.indexOf("\n");
-    }
-
-    if (done) {
-      break;
-    }
-  }
-
-  const trimmed = buffer.trim();
-  if (trimmed) {
-    try {
-      const event = JSON.parse(trimmed) as ChatStreamEvent;
-      options.onEvent?.(event);
-      if (event.type === "metadata") {
-        metadata = event;
-      } else if (event.type === "complete") {
-        finalPayload = event.payload;
-      } else if (isChatErrorEvent(event)) {
-        const errorEvent: ChatErrorEvent = event;
-        const trace = errorEvent.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
-        throw new ChatRequestError(event.error || "chat stream error", {
-          status: response.status ?? 500,
-          traceId: trace,
-        });
-      }
-    } catch (error) {
-      console.warn("Ignoring trailing stream chunk", error);
-    }
-  }
-
-  if (!finalPayload) {
-    throw new ChatRequestError("Chat stream ended without completion", {
-      status: response.status ?? 500,
-      traceId: getMetadataTraceId() ?? options.fallbackTraceId,
-    });
-  }
-
-  const metadataModel = metadata && metadata.type === "metadata" ? metadata.model : null;
-
-  return {
-    payload: finalPayload,
-    traceId: finalPayload.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId,
-    model: finalPayload.model ?? metadataModel ?? options.fallbackModel,
-  };
 }
 
 export async function sendChat(
@@ -1196,104 +1042,133 @@ export async function sendChat(
   input: string,
   options: ChatSendOptions = {},
 ): Promise<ChatSendResult> {
-  const headers = { ...JSON_HEADERS, Accept: "application/x-ndjson" } as Record<string, string>;
-  const response = await fetch(api("/api/chat"), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      messages: serializeMessages(history, input),
-      model: options.model ?? undefined,
-      url: options.url ?? undefined,
-      text_context: options.textContext ?? undefined,
-      image_context: options.imageContext ?? undefined,
-      client_timezone: options.clientTimezone ?? undefined,
-      server_time: options.serverTime ?? undefined,
-      server_timezone: options.serverTimezone ?? undefined,
-      server_time_utc: options.serverUtc ?? undefined,
-    }),
+  const serialized = serializeMessages(history, input);
+  const request: ChatSendRequest = {
+    messages: serialized,
+    model: options.model ?? undefined,
+    stream: options.stream,
+    url: options.url ?? undefined,
+    textContext: options.textContext ?? undefined,
+    imageContext: options.imageContext ?? undefined,
+    clientTimezone: options.clientTimezone ?? undefined,
+    serverTime: options.serverTime ?? undefined,
+    serverTimezone: options.serverTimezone ?? undefined,
+    serverUtc: options.serverUtc ?? undefined,
     signal: options.signal,
-  });
+    onEvent: options.onStreamEvent,
+  };
+  return chatClient.send(request);
+}
 
-  const traceIdHeader = response.headers.get("X-Request-Id");
-  const servedModel = response.headers.get("X-LLM-Model") ?? options.model ?? null;
-  const contentType = response.headers.get("Content-Type")?.toLowerCase() ?? "";
+export interface ChatContextResponse {
+  url?: string | null;
+  summary?: string | null;
+  memories?: unknown[];
+  messages?: unknown[];
+  selection?: { text: string; word_count: number } | null;
+  history?: unknown[];
+  metadata?: Record<string, unknown> | null;
+  query?: string | null;
+}
 
-  if (contentType.includes("application/x-ndjson") && response.body) {
-    return consumeChatStream(response, {
-      onEvent: options.onStreamEvent,
-      fallbackTraceId: traceIdHeader,
-      fallbackModel: servedModel,
-    });
+export async function fetchChatContext(
+  threadId: string,
+  params: {
+    url?: string | null;
+    include?: string[];
+    selection?: string | null;
+    title?: string | null;
+    locale?: string | null;
+    time?: string | null;
+  } = {},
+): Promise<ChatContextResponse> {
+  const normalizedThread = threadId.trim();
+  if (!normalizedThread) {
+    throw new Error("threadId is required to fetch chat context");
   }
-
+  const search = new URLSearchParams();
+  const includeTokens = params.include ?? [];
+  if (includeTokens.length > 0) {
+    search.set("include", includeTokens.join(","));
+  }
+  if (params.url) {
+    search.set("url", params.url);
+  }
+  if (params.selection) {
+    search.set("selection", params.selection);
+  }
+  if (params.title) {
+    search.set("title", params.title);
+  }
+  if (params.locale) {
+    search.set("locale", params.locale);
+  }
+  if (params.time) {
+    search.set("time", params.time);
+  }
+  const endpoint = `/api/chat/${encodeURIComponent(normalizedThread)}/context?${search.toString()}`;
+  const response = await fetch(api(endpoint));
   if (!response.ok) {
-    let payload: Record<string, unknown> | null = null;
-    try {
-      payload = (await response.clone().json()) as Record<string, unknown>;
-    } catch {
-      payload = null;
-    }
-
-    const fallbackText = await response.text();
-    let message = fallbackText || `Chat request failed (${response.status})`;
-    let code: string | undefined;
-    let hint: string | undefined;
-    let tried: string[] | undefined;
-    if (payload) {
-      if (typeof payload.error === "string" && payload.error.trim()) {
-        code = payload.error.trim();
-      }
-      if (typeof payload.hint === "string" && payload.hint.trim()) {
-        hint = payload.hint.trim();
-        message = hint;
-      }
-      if (Array.isArray(payload.tried)) {
-        tried = payload.tried.filter((item): item is string => typeof item === "string");
-      }
-      const messageValue = payload["message"];
-      const detailValue =
-        typeof messageValue === "string"
-          ? messageValue
-          : (payload["detail"] as unknown);
-      const detail = typeof detailValue === "string" ? detailValue : null;
-      if (typeof detail === "string" && detail.trim()) {
-        message = detail.trim();
-      } else if (!hint && typeof payload.error === "string" && payload.error.trim()) {
-        message = payload.error.trim();
-      }
-    }
-
-    throw new ChatRequestError(message, {
-      status: response.status,
-      traceId: traceIdHeader,
-      code,
-      hint,
-      tried,
-    });
+    const detail = await response.text();
+    throw new Error(detail || `Failed to load chat context (${response.status})`);
   }
+  const data = (await response.json()) as ChatContextResponse;
+  return data;
+}
 
-  const data = (await response.json()) as Record<string, unknown>;
-  const payload: ChatResponsePayload = {
-    reasoning: typeof data.reasoning === "string" ? data.reasoning : "",
-    answer: typeof data.answer === "string" ? data.answer : "",
-    citations: Array.isArray(data.citations)
-      ? data.citations.filter((item): item is string => typeof item === "string")
-      : [],
-    model: typeof data.model === "string" ? data.model : servedModel,
-    trace_id: typeof data.trace_id === "string" ? data.trace_id : traceIdHeader ?? null,
-    autopilot:
-      data.autopilot === undefined
-        ? undefined
-        : typeof data.autopilot === "object" && data.autopilot !== null
-        ? (data.autopilot as AutopilotDirective)
-        : null,
-  };
+export async function storeChatMessage(
+  threadId: string,
+  payload: { id?: string | null; role: string; content: string; tokens?: number | null },
+): Promise<void> {
+  const normalizedThread = threadId.trim();
+  if (!normalizedThread) {
+    throw new Error("threadId is required to store chat message");
+  }
+  const response = await fetch(api(`/api/chat/${encodeURIComponent(normalizedThread)}/message`), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      id: payload.id ?? undefined,
+      role: payload.role,
+      content: payload.content,
+      tokens: payload.tokens ?? undefined,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Unable to persist chat message (${response.status})`);
+  }
+}
 
-  return {
-    payload,
-    traceId: payload.trace_id ?? traceIdHeader,
-    model: payload.model ?? servedModel,
-  };
+export async function runAutopilotTool(
+  endpoint: string,
+  options: { method?: string; payload?: Record<string, unknown> } = {},
+): Promise<Record<string, unknown>> {
+  const trimmed = endpoint.trim();
+  if (!trimmed) {
+    throw new Error("Tool endpoint is required");
+  }
+  const method = (options.method ?? "POST").toUpperCase();
+  const headers: Record<string, string> = {};
+  let body: string | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    Object.assign(headers, JSON_HEADERS);
+    body = JSON.stringify(options.payload ?? {});
+  }
+  const response = await fetch(api(trimmed), {
+    method,
+    headers,
+    body,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `Tool request failed (${response.status})`);
+  }
+  try {
+    return text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    return { ok: true, result: text };
+  }
 }
 
 export interface CrawlJobRequest {

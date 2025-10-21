@@ -45,9 +45,36 @@ def store_chat_message(thread_id: str):
 def chat_context(thread_id: str):
     user_id = request.args.get("user", "local").strip() or "local"
     query = request.args.get("q")
+    url = request.args.get("url")
+    include_raw = request.args.get("include", "")
+    include_tokens = {token.strip().lower() for token in include_raw.split(",") if token.strip()}
+    selection = request.args.get("selection")
+    title = request.args.get("title")
+    locale = request.args.get("locale") or request.args.get("client_locale")
+    client_time = request.args.get("time") or request.args.get("client_time")
+    history_limit = request.args.get("history_limit", type=int) or 10
+    metadata = {
+        key: value
+        for key, value in {
+            "url": url,
+            "title": title,
+            "client_locale": (locale.strip() if isinstance(locale, str) else None),
+            "client_time": (client_time.strip() if isinstance(client_time, str) else None),
+        }.items()
+        if isinstance(value, str) and value.strip()
+    }
+    metadata_payload = metadata or None
     state_db: AppStateDB = current_app.config["APP_STATE_DB"]
     context = assemble_context(
-        state_db, user_id=user_id, thread_id=thread_id, query=query
+        state_db,
+        user_id=user_id,
+        thread_id=thread_id,
+        query=query,
+        url=url,
+        include=include_tokens,
+        selection=selection,
+        metadata=metadata_payload,
+        history_limit=history_limit,
     )
     return jsonify(context)
 

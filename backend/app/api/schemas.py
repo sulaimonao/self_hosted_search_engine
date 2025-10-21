@@ -56,6 +56,7 @@ class ChatRequest(BaseModel):
 
     model: str | None = None
     messages: list[ChatMessage] = Field(default_factory=list)
+    stream: bool | None = None
     url: str | None = None
     text_context: str | None = None
     image_context: str | None = None
@@ -90,6 +91,53 @@ class ChatRequest(BaseModel):
             raise ValueError("messages must contain at least one entry")
         return self
 
+    @field_validator("stream", mode="before")
+    @classmethod
+    def _coerce_stream(cls, value: Any) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in _BOOL_TRUE:
+                return True
+            if lowered in _BOOL_FALSE:
+                return False
+            if not lowered:
+                return None
+        if isinstance(value, (int, float)):
+            return bool(value)
+        raise ValueError("stream must be a boolean flag")
+
+
+class AutopilotToolDirective(BaseModel):
+    """Actionable tool exposed to the frontend for follow-up execution."""
+
+    label: str
+    endpoint: str
+    method: Literal["GET", "POST"] | None = None
+    payload: dict[str, Any] | None = None
+    description: str | None = None
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("label", "endpoint", mode="before")
+    @classmethod
+    def _trim_required(cls, value: Any) -> str:
+        trimmed = str(value or "").strip()
+        if not trimmed:
+            raise ValueError("tool label and endpoint must be provided")
+        return trimmed
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _trim_optional(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
 
 class AutopilotDirective(BaseModel):
     """Directive requesting the UI to run follow-up autonomous actions."""
@@ -97,6 +145,7 @@ class AutopilotDirective(BaseModel):
     mode: Literal["browser"]
     query: str
     reason: str | None = None
+    tools: list[AutopilotToolDirective] | None = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -107,6 +156,14 @@ class AutopilotDirective(BaseModel):
         if not trimmed:
             raise ValueError("query must be provided")
         return trimmed
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _trim_reason(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
 
 
 class ChatResponsePayload(BaseModel):
@@ -330,6 +387,7 @@ class SearchQueryParams(BaseModel):
 
 __all__ = [
     "AutopilotDirective",
+    "AutopilotToolDirective",
     "ChatMessage",
     "ChatRequest",
     "ChatResponsePayload",

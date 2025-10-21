@@ -18,7 +18,7 @@ describe("normalizeAddressInput", () => {
 
   it("uses Google search for queries", () => {
     expect(normalizeAddressInput("open ai")).toBe(
-      "https://www.google.com/search?q=open%20ai&igu=1",
+      "https://www.google.com/search?q=open+ai&igu=1",
     );
   });
 

@@ -26,6 +26,7 @@ required.
 - [API surface](#api-surface)
 - [Discovery & enrichment flows](#discovery--enrichment-flows)
 - [LLM integration](#llm-integration)
+- [Chat + Page Context + Tools](#chat--page-context--tools)
 - [Diagnostics snapshot API](#diagnostics-snapshot-api)
 
 ## Stack overview
@@ -778,6 +779,25 @@ chat fallback smoke test in one go.
 The default behaviour stays fully local: no external APIs are contacted unless
 Ollama is enabled. Set `SMART_USE_LLM=true` in `.env` if you want the toggle
 pre-enabled for every user.
+
+## Chat + Page Context + Tools
+
+- `/api/chat` accepts `{ model, messages[], stream }` payloads and streams
+  NDJSON deltas. The frontend automatically retries without streaming when the
+  browser runtime cannot consume a stream, and surfaces the model + trace ID
+  from the response.
+- A **Use page context** toggle now lives next to the model picker. When
+  enabled, the UI captures the active tab’s URL + selection, calls
+  `/api/chat/<thread_id>/context?include=selection,history,metadata`, prepends
+  the resolved context as a system message, and shows an indicator pill with the
+  current host and word count.
+- Assistant replies can include `autopilot.tools` directives. The chat panel
+  renders each entry as a chip that POSTs to `/api/tools/*`, reporting success
+  or errors inline so you can drive the built-in browser helpers without
+  leaving the conversation.
+- The diagnostics job adds a “Chat OK” probe (`POST /api/chat` with
+  `stream:false`), recording the status, model, and preview text in the
+  generated summary.
 
 ## Shadow mode & embedding queue
 

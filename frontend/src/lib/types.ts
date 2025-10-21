@@ -163,6 +163,15 @@ export interface AutopilotDirective {
   mode: "browser";
   query: string;
   reason?: string | null;
+  tools?: AutopilotToolDirective[] | null;
+}
+
+export interface AutopilotToolDirective {
+  label: string;
+  endpoint: string;
+  method?: "GET" | "POST";
+  payload?: Record<string, unknown>;
+  description?: string | null;
 }
 
 export type ChatStreamEvent =
