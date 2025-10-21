@@ -54,6 +54,7 @@ export type BrowserSettings = {
     host?: string;
     port?: string;
   };
+  openSearchExternally: boolean;
 };
 
 export type BrowserPermissionPrompt = {
@@ -98,6 +99,7 @@ export interface BrowserAPI {
   getSettings: () => Promise<BrowserSettings>;
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
   onSettings: (handler: (settings: BrowserSettings) => void) => (() => void) | void;
+  openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 type Unsubscribe = () => void;

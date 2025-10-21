@@ -100,6 +100,20 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+              <div>
+                <p className="text-sm font-medium">Open searches externally</p>
+                <p className="text-xs text-muted-foreground">
+                  Launches matching search domains in your default system browser.
+                </p>
+              </div>
+              <Switch
+                checked={settings?.openSearchExternally ?? false}
+                onCheckedChange={(checked) =>
+                  applyPatch({ openSearchExternally: Boolean(checked) })
+                }
+              />
+            </div>
           </section>
           <section className="space-y-2">
             <h3 className="text-sm font-medium">Spellcheck</h3>

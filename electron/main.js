@@ -88,6 +88,7 @@ const DEFAULT_SETTINGS = {
   searchMode: 'auto',
   spellcheckLanguage: 'en-US',
   proxy: { mode: 'system', host: '', port: '' },
+  openSearchExternally: false,
 };
 
 function resolveFrontendUrl() {
@@ -154,6 +155,9 @@ function normalizeSettings(candidate) {
     }
     if (typeof candidate.spellcheckLanguage === 'string' && candidate.spellcheckLanguage.trim()) {
       base.spellcheckLanguage = candidate.spellcheckLanguage.trim();
+    }
+    if (typeof candidate.openSearchExternally === 'boolean') {
+      base.openSearchExternally = candidate.openSearchExternally;
     }
     if (candidate.proxy && typeof candidate.proxy === 'object') {
       const proxy = {
@@ -1073,6 +1077,21 @@ ipcMain.handle('settings:get', async () => runtimeSettings ?? DEFAULT_SETTINGS);
 ipcMain.handle('settings:update', async (_event, patch = {}) => {
   updateRuntimeSettings(patch);
   return runtimeSettings;
+});
+
+ipcMain.handle('browser:open-external', async (_event, payload = {}) => {
+  const target = typeof payload.url === 'string' ? payload.url.trim() : '';
+  if (!target) {
+    return { ok: false, error: 'invalid_url' };
+  }
+  try {
+    const url = new URL(target);
+    await shell.openExternal(url.toString());
+    return { ok: true };
+  } catch (error) {
+    console.error('Failed to open external browser URL', { url: target, error });
+    return { ok: false, error: error?.message || String(error) };
+  }
 });
 
 ipcMain.handle('permissions:list', async (_event, payload = {}) => {
