@@ -21,7 +21,7 @@
     "start:web": "node scripts/start-next.mjs",
     "build:desktop": "npm run build:web && electron-builder",
     "desktop": "npm-run-all -s start:web electron",
-    "lint": "next lint"
+    "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",

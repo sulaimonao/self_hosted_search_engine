@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Iterable, Mapping, Iterator
+import uuid
+from typing import Any, Iterable, Mapping, Iterator, Literal
 
 import requests
 from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
@@ -312,6 +313,59 @@ def _close_response_safely(response: Any) -> None:
             LOGGER.debug("failed to close chat response", exc_info=True)
 
 
+def _preview_bytes(value: str, limit: int = 80) -> str:
+    """Return a UTF-8 safe preview clipped to the requested byte length."""
+
+    if not value:
+        return ""
+    encoded = value.encode("utf-8", errors="ignore")
+    if len(encoded) <= limit:
+        return value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _log_stream_summary(
+    *,
+    request_id: str,
+    model: str,
+    transport: Literal["ndjson", "sse", "json"],
+    frames: int,
+    previews: list[str],
+    end: str,
+    trace_id: str | None,
+    error: str | None = None,
+) -> None:
+    """Emit structured logging for chat streaming completions."""
+
+    log_event(
+        "INFO",
+        "chat.stream_summary",
+        trace=trace_id,
+        request=request_id,
+        model=model,
+        transport=transport,
+        frames=frames,
+        previews=previews,
+        end=end,
+        error=error,
+    )
+
+
+def _resolve_request_id(candidate: str | None) -> str:
+    """Determine the request identifier for downstream logging."""
+
+    trace_id = getattr(g, "trace_id", None)
+    header_request = request.headers.get("X-Request-Id") if request else None
+    for value in (candidate, header_request, trace_id):
+        if isinstance(value, str) and value.strip():
+            resolved = value.strip()
+            g.chat_request_id = resolved
+            return resolved
+    generated = uuid.uuid4().hex
+    g.chat_request_id = generated
+    return generated
+
+
 class _StreamAccumulator:
     """Track the latest streaming payload and accumulated text."""
 
@@ -328,9 +382,15 @@ class _StreamAccumulator:
         content = message.get("content")
         if isinstance(content, str):
             trimmed = content.strip()
-            if trimmed and trimmed != self.answer:
-                self.answer = trimmed
-                delta.answer = self.answer
+            if trimmed:
+                previous = self.answer
+                if trimmed != previous:
+                    if previous and trimmed.startswith(previous):
+                        delta.delta = trimmed[len(previous) :]
+                    else:
+                        delta.delta = trimmed
+                    self.answer = trimmed
+                    delta.answer = self.answer
         reasoning_value = None
         for key in ("reasoning", "thinking"):
             raw = message.get(key)
@@ -398,6 +458,15 @@ def _serialize_event(event: ChatStreamMetadata | ChatStreamDelta | ChatStreamCom
 def _ndjson_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
     for event in events:
         yield _serialize_event(event)
+
+
+def _sse_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
+    for event in events:
+        if hasattr(event, "model_dump"):
+            payload = event.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+        else:  # pragma: no cover - defensive fallback
+            payload = event  # type: ignore[assignment]
+        yield ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
 
 
 def _render_response_payload(
@@ -478,15 +547,26 @@ def _stream_chat_response(
     chat_span: Any,
     image_context: str | None,
     image_used: bool,
+    transport: Literal["ndjson", "sse"],
+    request_id: str,
 ) -> Response:
     metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
+    previews: list[str] = []
+    frame_count = 0
+    end_reason = "unknown"
+    error_message: str | None = None
 
     def _events() -> Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]:
+        nonlocal frame_count, end_reason, error_message
         yield metadata
         accumulator: _StreamAccumulator | None = None
         try:
             for payload, delta, acc in _iter_streaming_response(response):
                 accumulator = acc
+                frame_count += 1
+                preview_source = delta.delta or delta.answer or ""
+                if preview_source and len(previews) < 3:
+                    previews.append(_preview_bytes(preview_source))
                 yield delta
             if accumulator is None or accumulator.payload is None:
                 raise ValueError("Upstream response stream was empty")
@@ -501,20 +581,23 @@ def _stream_chat_response(
                 image_context=image_context,
                 image_used=image_used,
             )
+            end_reason = "complete"
             yield ChatStreamComplete(payload=payload_model)
         except Exception as exc:  # pragma: no cover - defensive streaming guard
             g.chat_error_class = exc.__class__.__name__
             g.chat_error_message = str(exc)
+            error_message = _truncate(str(exc), _MAX_ERROR_PREVIEW)
             log_event(
                 "ERROR",
                 "chat.error",
                 trace=trace_id,
                 model=candidate,
                 attempt=attempt_index,
-                msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
+                msg=error_message,
             )
             if chat_span is not None:
                 chat_span.set_attribute("chat.success", False)
+            end_reason = "error"
             yield ChatStreamError(
                 error="stream_error",
                 hint="upstream response terminated unexpectedly",
@@ -522,40 +605,47 @@ def _stream_chat_response(
             )
         finally:
             _close_response_safely(response)
+            _log_stream_summary(
+                request_id=request_id,
+                model=candidate,
+                transport=transport,
+                frames=frame_count,
+                previews=previews,
+                end=end_reason,
+                trace_id=trace_id,
+                error=error_message,
+            )
 
-    resp = Response(stream_with_context(_ndjson_stream(_events())), mimetype="application/x-ndjson")
+    if transport == "sse":
+        body = stream_with_context(_sse_stream(_events()))
+        resp = Response(body, mimetype="text/event-stream")
+        resp.headers.setdefault("Cache-Control", "no-store, no-transform")
+    else:
+        body = stream_with_context(_ndjson_stream(_events()))
+        resp = Response(body, mimetype="application/x-ndjson")
+        resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers["X-LLM-Model"] = candidate
-    resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers.setdefault("X-Accel-Buffering", "no")
+    resp.headers["X-Request-Id"] = request_id
     return resp
 
 
 
-@bp.post("/chat")
-def chat_invoke() -> Response:
-    start = time.perf_counter()
-    try:
-        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
-    except ValidationError as exc:
-        g.chat_error_class = "ValidationError"
-        g.chat_error_message = "invalid_request"
-        return (
-            jsonify(
-                {
-                    "error": "validation_error",
-                    "detail": exc.errors(),
-                    "trace_id": getattr(g, "trace_id", None),
-                }
-            ),
-            400,
-        )
-
+def _execute_chat_request(
+    chat_request: ChatRequest,
+    *,
+    start_time: float,
+    streaming_override: bool | None,
+    stream_transport: Literal["ndjson", "sse"],
+) -> Response:
     sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
 
     chat_logger = current_app.config.get("CHAT_LOGGER")
     if hasattr(chat_logger, "info"):
         preview = " | ".join(entry.get("content", "") for entry in sanitized_messages)
         chat_logger.info("chat request received: %s", preview.strip())
+
+    request_id = _resolve_request_id(chat_request.request_id)
 
     requested_model = chat_request.model
     url_value = chat_request.url
@@ -571,7 +661,9 @@ def chat_invoke() -> Response:
 
     accept_header = (request.headers.get("Accept") or "").lower()
     stream_flag = request.args.get("stream")
-    if chat_request.stream is not None:
+    if streaming_override is not None:
+        streaming_requested = bool(streaming_override)
+    elif chat_request.stream is not None:
         streaming_requested = bool(chat_request.stream)
     elif stream_flag is not None:
         streaming_requested = stream_flag.strip().lower() not in {"0", "false", "no", "off"}
@@ -582,6 +674,8 @@ def chat_invoke() -> Response:
         "message_count": len(sanitized_messages),
         "requested_model": requested_model,
         "has_context": bool(text_context or image_context),
+        "request_id": request_id,
+        "transport": stream_transport if streaming_requested else "json",
     }
 
     with start_span(
@@ -618,9 +712,7 @@ def chat_invoke() -> Response:
         attempted: list[str] = []
         missing_reasons: list[str] = []
 
-        for attempt_index, (alias_label, candidate) in enumerate(
-            candidate_pairs, start=1
-        ):
+        for attempt_index, (alias_label, candidate) in enumerate(candidate_pairs, start=1):
             attempted.append(candidate)
             prepared_messages, image_used, system_prompt = _prepare_messages(
                 candidate=candidate,
@@ -654,6 +746,7 @@ def chat_invoke() -> Response:
                 "messages": prepared_messages,
                 "stream": bool(streaming_requested),
                 "system": system_prompt,
+                "request_id": request_id,
             }
             if _supports_json_format(candidate):
                 request_payload["format"] = "json"
@@ -697,16 +790,26 @@ def chat_invoke() -> Response:
                     error=g.chat_error_class,
                     msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
                 )
-                return (
-                    jsonify(
-                        {
-                            "error": "upstream_unavailable",
-                            "message": str(exc),
-                            "trace_id": trace_id,
-                        }
-                    ),
-                    502,
+                error_response = jsonify(
+                    {
+                        "error": "upstream_unavailable",
+                        "message": str(exc),
+                        "trace_id": trace_id,
+                    }
                 )
+                error_response.status_code = 502
+                error_response.headers["X-Request-Id"] = request_id
+                _log_stream_summary(
+                    request_id=request_id,
+                    model=candidate,
+                    transport=stream_transport if streaming_requested else "json",
+                    frames=0,
+                    previews=[],
+                    end="error",
+                    trace_id=trace_id,
+                    error=g.chat_error_message,
+                )
+                return error_response
 
             if response is None:  # pragma: no cover - defensive guard
                 continue
@@ -739,17 +842,27 @@ def chat_invoke() -> Response:
                     msg=g.chat_error_message,
                 )
                 response.close()
-                return (
-                    jsonify(
-                        {
-                            "error": "upstream_error",
-                            "status": response.status_code,
-                            "message": g.chat_error_message,
-                            "trace_id": trace_id,
-                        }
-                    ),
-                    response.status_code,
+                error_response = jsonify(
+                    {
+                        "error": "upstream_error",
+                        "status": response.status_code,
+                        "message": g.chat_error_message,
+                        "trace_id": trace_id,
+                    }
                 )
+                error_response.status_code = response.status_code
+                error_response.headers["X-Request-Id"] = request_id
+                _log_stream_summary(
+                    request_id=request_id,
+                    model=candidate,
+                    transport=stream_transport if streaming_requested else "json",
+                    frames=0,
+                    previews=[],
+                    end="error",
+                    trace_id=trace_id,
+                    error=g.chat_error_message,
+                )
+                return error_response
 
             if streaming_requested:
                 return _stream_chat_response(
@@ -761,6 +874,8 @@ def chat_invoke() -> Response:
                     chat_span=chat_span,
                     image_context=image_context,
                     image_used=image_used,
+                    transport=stream_transport,
+                    request_id=request_id,
                 )
 
             try:
@@ -775,16 +890,26 @@ def chat_invoke() -> Response:
                     model=candidate,
                     msg=g.chat_error_message,
                 )
-                return (
-                    jsonify(
-                        {
-                            "error": "invalid_response",
-                            "message": str(exc),
-                            "trace_id": trace_id,
-                        }
-                    ),
-                    502,
+                error_response = jsonify(
+                    {
+                        "error": "invalid_response",
+                        "message": str(exc),
+                        "trace_id": trace_id,
+                    }
                 )
+                error_response.status_code = 502
+                error_response.headers["X-Request-Id"] = request_id
+                _log_stream_summary(
+                    request_id=request_id,
+                    model=candidate,
+                    transport="json",
+                    frames=0,
+                    previews=[],
+                    end="error",
+                    trace_id=trace_id,
+                    error=g.chat_error_message,
+                )
+                return error_response
 
             if not isinstance(payload_json, Mapping):
                 g.chat_error_class = "InvalidResponse"
@@ -796,16 +921,26 @@ def chat_invoke() -> Response:
                     model=candidate,
                     msg=g.chat_error_message,
                 )
-                return (
-                    jsonify(
-                        {
-                            "error": "invalid_response",
-                            "message": g.chat_error_message,
-                            "trace_id": trace_id,
-                        }
-                    ),
-                    502,
+                error_response = jsonify(
+                    {
+                        "error": "invalid_response",
+                        "message": g.chat_error_message,
+                        "trace_id": trace_id,
+                    }
                 )
+                error_response.status_code = 502
+                error_response.headers["X-Request-Id"] = request_id
+                _log_stream_summary(
+                    request_id=request_id,
+                    model=candidate,
+                    transport="json",
+                    frames=0,
+                    previews=[],
+                    end="error",
+                    trace_id=trace_id,
+                    error=g.chat_error_message,
+                )
+                return error_response
 
             accumulator = _StreamAccumulator()
             if accumulator.update(payload_json) is None:
@@ -823,8 +958,21 @@ def chat_invoke() -> Response:
                 image_used=image_used,
             )
 
+            preview_source = response_payload.answer or response_payload.reasoning or ""
+            previews = [_preview_bytes(preview_source)] if preview_source else []
+            _log_stream_summary(
+                request_id=request_id,
+                model=candidate,
+                transport="json",
+                frames=1,
+                previews=previews,
+                end="complete",
+                trace_id=response_payload.trace_id or trace_id,
+            )
+
             flask_response = jsonify(response_payload.model_dump(exclude_none=True))
             flask_response.headers["X-LLM-Model"] = candidate
+            flask_response.headers["X-Request-Id"] = request_id
             return flask_response
 
         tried = [name for name in attempted if name]
@@ -842,18 +990,103 @@ def chat_invoke() -> Response:
         )
         if chat_span is not None:
             chat_span.set_attribute("chat.success", False)
-        return (
-            jsonify(
-                {
-                    "error": "model_not_found",
-                    "tried": tried,
-                    "hint": hint,
-                    "trace_id": trace_id,
-                }
-            ),
-            503,
+        error_response = jsonify(
+            {
+                "error": "model_not_found",
+                "tried": tried,
+                "hint": hint,
+                "trace_id": trace_id,
+            }
         )
+        error_response.status_code = 503
+        error_response.headers["X-Request-Id"] = request_id
+        _log_stream_summary(
+            request_id=request_id,
+            model=primary_model,
+            transport=stream_transport if streaming_requested else "json",
+            frames=0,
+            previews=[],
+            end="error",
+            trace_id=trace_id,
+            error=combined,
+        )
+        return error_response
 
+
+@bp.post("/chat")
+def chat_invoke() -> Response:
+    start = time.perf_counter()
+    try:
+        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        g.chat_error_class = "ValidationError"
+        g.chat_error_message = "invalid_request"
+        request_id = _resolve_request_id(None)
+        error_response = jsonify(
+            {
+                "error": "validation_error",
+                "detail": exc.errors(),
+                "trace_id": getattr(g, "trace_id", None),
+            }
+        )
+        error_response.status_code = 400
+        error_response.headers["X-Request-Id"] = request_id
+        _log_stream_summary(
+            request_id=request_id,
+            model="unknown",
+            transport="json",
+            frames=0,
+            previews=[],
+            end="error",
+            trace_id=getattr(g, "trace_id", None),
+            error="validation_error",
+        )
+        return error_response
+
+    return _execute_chat_request(
+        chat_request,
+        start_time=start,
+        streaming_override=None,
+        stream_transport="ndjson",
+    )
+
+
+@bp.post("/chat/stream")
+def chat_stream() -> Response:
+    start = time.perf_counter()
+    try:
+        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        g.chat_error_class = "ValidationError"
+        g.chat_error_message = "invalid_request"
+        request_id = _resolve_request_id(None)
+        error_response = jsonify(
+            {
+                "error": "validation_error",
+                "detail": exc.errors(),
+                "trace_id": getattr(g, "trace_id", None),
+            }
+        )
+        error_response.status_code = 400
+        error_response.headers["X-Request-Id"] = request_id
+        _log_stream_summary(
+            request_id=request_id,
+            model="unknown",
+            transport="sse",
+            frames=0,
+            previews=[],
+            end="error",
+            trace_id=getattr(g, "trace_id", None),
+            error="validation_error",
+        )
+        return error_response
+
+    return _execute_chat_request(
+        chat_request,
+        start_time=start,
+        streaming_override=True,
+        stream_transport="sse",
+    )
 
 
 __all__ = ["bp"]

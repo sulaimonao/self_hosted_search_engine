@@ -8,6 +8,7 @@ from . import (  # noqa: F401
     checks_browser_shell,
     checks_electron_prefs,
     checks_headers,
+    checks_llm_stream,
     checks_meta,
     checks_next_build,
     checks_ports_scripts,
