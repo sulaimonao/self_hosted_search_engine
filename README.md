@@ -214,8 +214,9 @@ Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to shut everything down.
 
 - The preventive diagnostics engine lives under `tools/diag/` and exposes a
   `python3 tools/e2e_diag.py --fail-on=high` entrypoint. Artifacts land in
-  `diagnostics/run_latest/` after each run; pass `--watch`, `--smoke`, or
-  `--format sarif` for additional coverage.
+  `diagnostics/run_latest/` after each run; pass `--watch`, `--smoke`,
+  `--format sarif`, or `--since HEAD~1` for targeted coverage. Export
+  `DIAG_TIMEOUT` (seconds) to abort long-running scans with exit code `2`.
 - Enable the bundled pre-commit hook via `git config core.hooksPath .githooks`
   to run the diagnostics automatically before commits.
 - See [`docs/diagnostics.md`](docs/diagnostics.md) for rule documentation,
@@ -227,8 +228,9 @@ Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to shut everything down.
   `true`; otherwise, the Next.js dev server starts normally and the results are
   cached to `diagnostics/system_check_last.json`.
 - Skip the entire preflight with `SKIP_SYSTEM_CHECK=1 make dev`. Adjust the
-  browser harness timeout by exporting `DIAG_TIMEOUT` (milliseconds) before
-  running `npm run desktop`, `npm run diagnose:browser`, or the Make target.
+  diagnostics/browser harness timeout by exporting `DIAG_TIMEOUT` (seconds)
+  before running `npm run desktop`, `npm run diagnose:browser`, or the Make
+  target.
 - The backend endpoint merges filesystem checks, the diagnostics snapshot job,
   and `/api/llm/health`. When successful it also enqueues a lightweight warmup
   job so the agent model metadata is ready for the first chat.

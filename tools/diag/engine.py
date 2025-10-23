@@ -359,10 +359,18 @@ class Results:
 class RuleContext:
     """Expose repository information to rules."""
 
-    def __init__(self, root: Path, discovery: DiscoveryResult, *, smoke: bool) -> None:
+    def __init__(
+        self,
+        root: Path,
+        discovery: DiscoveryResult,
+        *,
+        smoke: bool,
+        scope: Optional[Set[str]] = None,
+    ) -> None:
         self.root = root
         self.discovery = discovery
         self.smoke = smoke
+        self.scope = set(scope) if scope else None
         self._text_cache: Dict[str, str] = {}
 
     def resolve(self, relative_path: str) -> Path:
@@ -411,7 +419,7 @@ def _matches_patterns(relative_path: str, patterns: Sequence[str]) -> bool:
     )
 
 
-def _discover_files(root: Path) -> DiscoveryResult:
+def _discover_files(root: Path, scope: Optional[Set[str]] = None) -> DiscoveryResult:
     files: List[str] = []
     matched_suffixes: Set[str] = set()
     unmatched_suffixes: Set[str] = set()
@@ -423,6 +431,8 @@ def _discover_files(root: Path) -> DiscoveryResult:
             full_path = Path(dirpath) / filename
             relative = full_path.relative_to(root)
             relative_posix = relative.as_posix()
+            if scope is not None and relative_posix not in scope:
+                continue
             matched = _matches_patterns(relative_posix, patterns)
             if matched:
                 files.append(relative_posix)
@@ -458,14 +468,56 @@ class DiagnosticsEngine:
         skip: Optional[Set[str]] = None,
         baseline_path: Optional[Path] = None,
         write_artifacts: bool = True,
+        scope: Optional[Set[str]] = None,
     ) -> Tuple[Results, ExitCode, Dict[str, str]]:
-        discovery = _discover_files(self.root)
-        context = RuleContext(self.root, discovery, smoke=smoke)
+        discovery = _discover_files(self.root, scope)
+        context = RuleContext(self.root, discovery, smoke=smoke, scope=scope)
         suppression_index = SuppressionIndex(self.root, context)
         baseline = Baseline.load(self.root / (baseline_path or BASELINE_DEFAULT))
         results = Results()
 
+        artefacts: Dict[str, str] = {}
+
+        def _flush_artifacts() -> None:
+            nonlocal artefacts
+            if write_artifacts:
+                artefacts = self._write_artifacts(results)
+
+        if write_artifacts:
+            artefacts = self._write_artifacts(results)
+
+        from .probes import iter_probes  # Local import to avoid circular dependency
+
+        probes = list(iter_probes())
+        probe_ids = {probe.id for probe in probes}
+
+        def _record_findings(findings: Iterable[Finding]) -> None:
+            for finding in findings:
+                if suppression_index.is_suppressed(finding):
+                    results.add_suppressed(finding)
+                    continue
+                if baseline.contains(finding):
+                    results.add_baseline(finding)
+                    continue
+                results.add(finding)
+
+        for probe in probes:
+            if only and probe.id not in only:
+                continue
+            if skip and probe.id in skip:
+                continue
+            try:
+                findings = list(probe.check(context))
+            except Exception as exc:  # pragma: no cover - protective guard
+                results.errors.append(f"{probe.id}: {exc}")
+                _flush_artifacts()
+                continue
+            _record_findings(findings)
+            _flush_artifacts()
+
         for rule in iter_rules():
+            if rule.id in probe_ids:
+                continue
             if only and rule.id not in only:
                 continue
             if skip and rule.id in skip:
@@ -476,32 +528,24 @@ class DiagnosticsEngine:
                 findings = list(rule.check(context))
             except Exception as exc:  # pragma: no cover - protective guard
                 results.errors.append(f"{rule.id}: {exc}")
+                _flush_artifacts()
                 continue
-            for finding in findings:
-                if suppression_index.is_suppressed(finding):
-                    results.add_suppressed(finding)
-                    continue
-                if baseline.contains(finding):
-                    results.add_baseline(finding)
-                    continue
-                results.add(finding)
+            _record_findings(findings)
+            _flush_artifacts()
 
         exit_code = self._compute_exit_code(results, fail_on)
-        artefacts: Dict[str, str] = {}
         if write_artifacts:
             artefacts = self._write_artifacts(results)
         return results, exit_code, artefacts
 
     def _compute_exit_code(self, results: Results, fail_on: Severity) -> ExitCode:
+        if results.errors:
+            return ExitCode.TOOL_FAILURE
         highest = results.highest_severity()
         if highest is None:
             return ExitCode.OK
         if highest.rank >= fail_on.rank:
             return ExitCode.ERROR
-        if fail_on is Severity.HIGH and highest is Severity.MEDIUM:
-            return ExitCode.WARN
-        if fail_on is Severity.MEDIUM and highest is Severity.LOW:
-            return ExitCode.WARN
         return ExitCode.OK
 
     def _write_artifacts(self, results: Results) -> Dict[str, str]:
