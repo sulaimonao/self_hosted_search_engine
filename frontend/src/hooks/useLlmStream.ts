@@ -10,7 +10,7 @@ type LlmFramePayload = {
 type LlmBridge = {
   stream: (payload: { requestId: string; body: Record<string, unknown> }) => Promise<unknown> | unknown;
   onFrame: (handler: (payload: LlmFramePayload) => void) => void | (() => void);
-  abort?: (payload?: { requestId?: string | null }) => Promise<unknown> | unknown;
+  abort?: (requestId?: string | null) => Promise<unknown> | unknown;
 };
 
 type LlmStreamSnapshot = {
@@ -240,7 +240,7 @@ export function useLlmStream(): LlmStreamHook {
       const effectiveId = requestId ?? state.requestId;
       if (target && typeof target.abort === "function") {
         try {
-          target.abort({ requestId: effectiveId });
+          target.abort(effectiveId);
         } catch (error) {
           console.warn("[llm] abort failed", error);
         }

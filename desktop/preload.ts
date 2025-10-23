@@ -361,7 +361,7 @@ function exposeBridge() {
         ipcRenderer.removeListener('llm:frame', listener);
       };
     },
-    abort: (requestId?: string | null) => ipcRenderer.invoke('llm:abort', { requestId: requestId ?? null }),
+    abort: (requestId?: string | null) => ipcRenderer.invoke('llm:abort', requestId ?? null),
   });
 }
 
