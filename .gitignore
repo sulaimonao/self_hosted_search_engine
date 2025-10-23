@@ -96,6 +96,7 @@ diagnostics/*
 !tests/backend/test_source_follow.py
 !tests/backend/test_ollama_client_cli.py
 !tests/backend/test_metrics_histogram.py
+!tests/backend/test_chat_stream_accumulator.py
 !tests/test_crawl_client.py
 !tests/unit/test_agent_tools_repo.py
 !tests/unit/test_observability.py

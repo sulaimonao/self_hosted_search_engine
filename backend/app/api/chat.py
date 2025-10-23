@@ -385,11 +385,17 @@ class _StreamAccumulator:
             if trimmed:
                 previous = self.answer
                 if trimmed != previous:
+                    delta_text = ""
+                    next_answer = previous
                     if previous and trimmed.startswith(previous):
-                        delta.delta = trimmed[len(previous) :]
+                        delta_text = trimmed[len(previous) :]
+                        next_answer = trimmed
                     else:
-                        delta.delta = trimmed
-                    self.answer = trimmed
+                        delta_text = trimmed
+                        next_answer = previous + delta_text
+                    if delta_text:
+                        delta.delta = delta_text
+                    self.answer = next_answer
                     delta.answer = self.answer
         reasoning_value = None
         for key in ("reasoning", "thinking"):

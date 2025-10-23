@@ -144,3 +144,25 @@ def test_llm_stream_integrity(tmp_path: Path) -> None:
     ]
     rule_ids = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
     assert "R20_stream_integrity" in rule_ids
+
+
+def test_llm_stream_accumulator_detection(tmp_path: Path) -> None:
+    files = [
+        (
+            "backend/app/api/chat.py",
+            """
+class _StreamAccumulator:
+    def __init__(self) -> None:
+        self.answer = ""
+
+    def update(self, chunk):
+        content = chunk.get("message", {}).get("content", "").strip()
+        if content and content != self.answer:
+            self.answer = content
+            return {"delta": content}
+        return None
+            """,
+        ),
+    ]
+    rule_ids = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    assert "R20_stream_integrity" in rule_ids
