@@ -88,4 +88,18 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
                 )
             )
 
+    backend_chat = context.read_text("backend/app/api/chat.py")
+    if backend_chat and "_StreamAccumulator" in backend_chat:
+        if "previous +" not in backend_chat:
+            findings.append(
+                Finding(
+                    id="llm-stream:accumulator-no-append",
+                    rule_id="R20_stream_integrity",
+                    severity=Severity.HIGH,
+                    summary="Chat stream accumulator does not append incremental chunks to the existing answer.",
+                    suggestion="Append new token text to the existing answer when upstream chunks are not cumulative.",
+                    file="backend/app/api/chat.py",
+                )
+            )
+
     return findings
