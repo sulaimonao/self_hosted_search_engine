@@ -1,3 +1,9 @@
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:5050";
 
 const API_BASE_URL = (() => {
@@ -25,7 +31,15 @@ const baseConfig = {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
+  output: "standalone",
+  webpack(config) {
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      "@shared": path.resolve(__dirname, "../shared"),
+    };
+
+    return config;
+  },
   ...baseConfig,
 };
 
