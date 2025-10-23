@@ -9,7 +9,7 @@ artifacts that are uploaded from CI and can be consumed by editor tooling.
 ```bash
 python3 tools/e2e_diag.py [--smoke] [--watch] [--fail-on=high|medium|low] \
   [--only=R1,R2] [--skip=R3] [--baseline diagnostics/baseline.json] \
-  [--format text|md|json|sarif]
+  [--format text|md|json|sarif] [--since <ref|timestamp>]
 ```
 
 Key flags:
@@ -17,11 +17,23 @@ Key flags:
 - `--smoke`: enable optional runtime checks (Electron binary presence,
   backend health probe).
 - `--watch`: rerun diagnostics when tracked files change.
-- `--fail-on`: control which severities cause exit code `2`.
+- `--fail-on`: control which severities cause exit code `1`.
 - `--only` / `--skip`: filter rule execution.
 - `--baseline`: ignore historical findings stored in JSON format.
 - `--format`: choose the stdout rendering while artifacts are always written to
   `diagnostics/run_latest/`.
+- `--since`: scope the scan to files changed since a Git ref (e.g. `main` or
+  `HEAD~1`) or a timestamp understood by `git log --since`.
+
+Environment variables:
+
+- `DIAG_TIMEOUT`: abort the run after _n_ seconds (exit code `2`).
+
+Exit codes:
+
+- `0` – no findings at/above the configured `--fail-on` threshold.
+- `1` – findings meet or exceed `--fail-on`.
+- `2` – runtime errors or a timeout halted execution.
 
 ## Artifacts
 
@@ -31,6 +43,9 @@ Each run overwrites `diagnostics/run_latest/` with:
   and filtered findings.
 - `summary.txt` / `summary.md`: human-readable snapshots.
 - `checks.sarif`: SARIF v2.1.0 for IDE integration.
+
+Artifacts are refreshed incrementally while the rule/probe engine executes so
+partial results survive unexpected failures or timeouts.
 
 Artifacts embed the diagnostics schema version (`1.0.0`) for forward
 compatibility.
