@@ -5,7 +5,7 @@ from typing import Iterable, Sequence
 
 import pytest
 
-from tools.diag import DiagnosticsEngine, Severity
+from tools.diag import DiagnosticsEngine, Finding, Severity
 
 
 def _write_files(root: Path, files: Sequence[tuple[str, str]]) -> None:
@@ -15,11 +15,11 @@ def _write_files(root: Path, files: Sequence[tuple[str, str]]) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def _run_rules(tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]) -> list[str]:
+def _run_rules(tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]) -> list[Finding]:
     _write_files(tmp_path, files)
     engine = DiagnosticsEngine(tmp_path)
     results, _, _ = engine.run(smoke=False, fail_on=Severity.HIGH, only=set(only), write_artifacts=False)
-    return [finding.rule_id for finding in results.findings]
+    return list(results.findings)
 
 
 def test_browser_shell_iframe_and_history(tmp_path: Path) -> None:
@@ -40,7 +40,8 @@ def test_browser_shell_iframe_and_history(tmp_path: Path) -> None:
             """,
         )
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R1", "R2"})
+    findings = _run_rules(tmp_path, files, only={"R1", "R2"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R1" in rule_ids
     assert "R2" in rule_ids
 
@@ -56,8 +57,8 @@ def test_browser_shell_webview_prevents_r3(tmp_path: Path) -> None:
             """,
         )
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R3"})
-    assert rule_ids == []
+    findings = _run_rules(tmp_path, files, only={"R3"})
+    assert findings == []
 
 
 def test_electron_preferences_rules(tmp_path: Path) -> None:
@@ -80,7 +81,8 @@ def test_electron_preferences_rules(tmp_path: Path) -> None:
             """,
         )
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R4", "R5", "R6", "R7"})
+    findings = _run_rules(tmp_path, files, only={"R4", "R5", "R6", "R7"})
+    rule_ids = {finding.rule_id for finding in findings}
     for expected in ("R4", "R5", "R6", "R7"):
         assert expected in rule_ids
 
@@ -98,7 +100,8 @@ def test_headers_missing_accept_language(tmp_path: Path) -> None:
             """,
         )
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R9"})
+    findings = _run_rules(tmp_path, files, only={"R9"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R9" in rule_ids
 
 
@@ -113,7 +116,8 @@ def test_proxy_absolute_fetch(tmp_path: Path) -> None:
             """,
         )
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R10"})
+    findings = _run_rules(tmp_path, files, only={"R10"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R10" in rule_ids
 
 
@@ -132,7 +136,8 @@ def test_missing_scripts(tmp_path: Path) -> None:
             """,
         ),
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R11"})
+    findings = _run_rules(tmp_path, files, only={"R11"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R11" in rule_ids
 
 
@@ -142,7 +147,8 @@ def test_llm_stream_integrity(tmp_path: Path) -> None:
         ("desktop/preload.ts", "export const noop = true;"),
         ("frontend/src/hooks/useLlmStream.ts", "export function useLlmStream() { return null as any; }")
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    findings = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R20_stream_integrity" in rule_ids
 
 
@@ -164,5 +170,87 @@ class _StreamAccumulator:
             """,
         ),
     ]
-    rule_ids = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    findings = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
+    rule_ids = {finding.rule_id for finding in findings}
     assert "R20_stream_integrity" in rule_ids
+
+
+def test_env_keys_missing_from_example(tmp_path: Path) -> None:
+    files = [
+        (
+            "backend/core/config.py",
+            """
+import os
+
+API_TOKEN = os.getenv("API_TOKEN")
+            """,
+        ),
+        (".env.example", "# Sample env file\nEXISTING=1\n"),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R14"})
+    assert findings
+    assert findings[0].rule_id == "R14"
+    assert "API_TOKEN" in findings[0].summary
+
+
+def test_env_keys_documented(tmp_path: Path) -> None:
+    files = [
+        (
+            "backend/core/config.py",
+            """
+import os
+
+API_TOKEN = os.environ["API_TOKEN"]
+            """,
+        ),
+        (".env.example", "API_TOKEN=changeme\n"),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R14"})
+    assert findings == []
+
+
+def test_pyproject_vs_requirements_drift(tmp_path: Path) -> None:
+    files = [
+        (
+            "pyproject.toml",
+            """
+[project]
+dependencies = ["fastapi>=0.100", "uvicorn[standard]"]
+            """,
+        ),
+        (
+            "requirements.txt",
+            """
+fastapi==0.101
+requests>=2.31
+            """,
+        ),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R21_dependency_sync"})
+    summaries = {finding.summary for finding in findings}
+    assert any("requests" in summary for summary in summaries)
+    assert any("uvicorn" in summary for summary in summaries)
+    severities = {finding.severity for finding in findings}
+    assert Severity.MEDIUM in severities
+    assert Severity.LOW in severities
+
+
+def test_pyproject_vs_requirements_aligned(tmp_path: Path) -> None:
+    files = [
+        (
+            "pyproject.toml",
+            """
+[project]
+dependencies = ["fastapi>=0.100", "uvicorn[standard]"]
+            """,
+        ),
+        (
+            "requirements.txt",
+            """
+fastapi==0.101
+uvicorn[standard]==0.22
+            """,
+        ),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R21_dependency_sync"})
+    assert findings == []
