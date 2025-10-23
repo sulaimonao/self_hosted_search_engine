@@ -854,13 +854,19 @@ ipcMain.handle(
 
 ipcMain.handle(
   'llm:abort',
-  (event, payload: { requestId?: string | null } | undefined) => {
+  (event, payload: { requestId?: string | null } | string | null | undefined) => {
     const contentsId = event.sender.id;
     const entry = activeLlmStreams.get(contentsId);
     if (!entry) {
       return { ok: false, active: false };
     }
-    if (payload?.requestId && payload.requestId !== entry.requestId) {
+    const requestId =
+      typeof payload === 'string' || payload === null
+        ? payload
+        : payload && typeof payload === 'object'
+          ? payload.requestId ?? null
+          : null;
+    if (requestId && requestId !== entry.requestId) {
       return { ok: false, mismatch: true };
     }
     entry.controller.abort();
