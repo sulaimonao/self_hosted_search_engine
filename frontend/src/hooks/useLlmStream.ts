@@ -45,28 +45,50 @@ const defaultSnapshot: LlmStreamSnapshot = {
   error: null,
 };
 
-let bridge: LlmBridge | null = null;
-let bridgeUnsubscribe: (() => void) | null = null;
-let state: LlmStreamSnapshot = defaultSnapshot;
-const listeners = new Set<() => void>();
+class Store<T> {
+  private value: T;
+  private listeners = new Set<() => void>();
 
-function emit(next: LlmStreamSnapshot) {
-  state = next;
-  for (const listener of listeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.warn("[llm] listener error", error);
+  constructor(initial: T) {
+    this.value = initial;
+  }
+
+  get() {
+    return this.value;
+  }
+
+  set(next: T) {
+    if (Object.is(this.value, next)) {
+      return;
     }
+    this.value = next;
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[llm] listener error", error);
+      }
+    }
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 }
 
+let bridge: LlmBridge | null = null;
+let bridgeUnsubscribe: (() => void) | null = null;
+const store = new Store<LlmStreamSnapshot>(defaultSnapshot);
+
 function update(mutator: (current: LlmStreamSnapshot) => LlmStreamSnapshot) {
-  emit(mutator(state));
+  store.set(mutator(store.get()));
 }
 
 function getSnapshot() {
-  return state;
+  return store.get();
 }
 
 function resolveBridge(): LlmBridge | null {
@@ -198,20 +220,33 @@ function handleFrame(payload: LlmFramePayload) {
   if (!payload || typeof payload.frame !== "string") {
     return;
   }
-  const parsed = parseSseFrame(payload.frame);
-  if (!parsed) {
+  const frames = payload.frame
+    .split(/\n\n+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (frames.length === 0) {
     return;
   }
-  update((current) => applyFrame(current, parsed, payload.requestId ?? null));
+  for (const frame of frames) {
+    const parsed = parseSseFrame(`${frame}\n\n`);
+    if (!parsed) {
+      continue;
+    }
+    update((current) => applyFrame(current, parsed, payload.requestId ?? null));
+  }
 }
 
 export function useLlmStream(): LlmStreamHook {
   ensureBridge();
   const subscribe = useCallback((listener: () => void) => {
-    listeners.add(listener);
+    const unsubscribe = store.subscribe(listener);
     ensureBridge();
     return () => {
-      listeners.delete(listener);
+      try {
+        unsubscribe();
+      } catch (error) {
+        console.warn("[llm] failed to unsubscribe store", error);
+      }
     };
   }, []);
 
@@ -223,7 +258,7 @@ export function useLlmStream(): LlmStreamHook {
     if (!target || typeof target.stream !== "function") {
       throw new Error("LLM stream bridge unavailable");
     }
-    update(() => ({ ...defaultSnapshot, requestId }));
+    store.set({ ...defaultSnapshot, requestId });
     try {
       await target.stream({ requestId, body });
     } catch (error) {
@@ -237,7 +272,7 @@ export function useLlmStream(): LlmStreamHook {
     (requestId?: string | null) => {
       ensureBridge();
       const target = bridge;
-      const effectiveId = requestId ?? state.requestId;
+      const effectiveId = requestId ?? store.get().requestId;
       if (target && typeof target.abort === "function") {
         try {
           target.abort(effectiveId);

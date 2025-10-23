@@ -677,6 +677,8 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       partition: MAIN_SESSION_KEY,
+      webviewTag: true,
+      spellcheck: true,
     },
   });
 
@@ -726,7 +728,25 @@ app.whenReady().then(async () => {
 
   mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
+    const originalUserAgent = headers['User-Agent'];
     headers['User-Agent'] = DESKTOP_USER_AGENT;
+
+    if (originalUserAgent) {
+      headers['sec-ch-ua'] =
+        headers['sec-ch-ua'] ?? details.requestHeaders['sec-ch-ua'] ??
+        '"Chromium";v="129", "Not A(Brand";v="99"';
+      headers['sec-ch-ua-mobile'] =
+        headers['sec-ch-ua-mobile'] ?? details.requestHeaders['sec-ch-ua-mobile'] ?? '?0';
+      headers['sec-ch-ua-platform'] =
+        headers['sec-ch-ua-platform'] ??
+        details.requestHeaders['sec-ch-ua-platform'] ??
+        '"macOS"';
+    }
+
+    if (!headers['Accept-Language']) {
+      headers['Accept-Language'] = app.getLocale();
+    }
+
     callback({ requestHeaders: headers });
   });
 

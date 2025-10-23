@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   protocol,
+  session,
   shell,
 } from "electron";
 import path from "node:path";
@@ -18,6 +19,8 @@ let liveView: BrowserView | null = null;
 let backendProc: ReturnType<typeof spawn> | null = null;
 let isQuitting = false;
 let appProtocolRegistered = false;
+
+const MAIN_SESSION_KEY = "persist:main";
 
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const IS_DEV = Boolean(FRONTEND_URL) || process.env.NODE_ENV === "development";
@@ -136,6 +139,8 @@ function attachLiveView(browserWindow: BrowserWindow) {
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
+      partition: MAIN_SESSION_KEY,
+      nodeIntegration: false,
     },
   });
   browserWindow.setBrowserView(liveView);
@@ -175,6 +180,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      spellcheck: true,
+      webviewTag: true,
+      partition: MAIN_SESSION_KEY,
     },
   });
 
@@ -234,6 +242,27 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  const mainSession = session.fromPartition(MAIN_SESSION_KEY);
+  mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    const userAgent = headers["User-Agent"];
+    if (userAgent) {
+      headers["sec-ch-ua"] =
+        headers["sec-ch-ua"] ?? details.requestHeaders["sec-ch-ua"] ??
+        '"Chromium";v="129", "Not A(Brand";v="99"';
+      headers["sec-ch-ua-mobile"] =
+        headers["sec-ch-ua-mobile"] ?? details.requestHeaders["sec-ch-ua-mobile"] ?? "?0";
+      headers["sec-ch-ua-platform"] =
+        headers["sec-ch-ua-platform"] ??
+        details.requestHeaders["sec-ch-ua-platform"] ??
+        '"macOS"';
+    }
+    if (!headers["Accept-Language"]) {
+      headers["Accept-Language"] = app.getLocale();
+    }
+    callback({ requestHeaders: headers });
+  });
+
   try {
     const dataDir = process.env.DATA_DIR ?? path.join(app.getPath("userData"), "omnidata");
     fs.mkdirSync(dataDir, { recursive: true });
