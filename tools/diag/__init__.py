@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .engine import DiagnosticsEngine, ExitCode, Finding, Results, RuleContext, Severity, register, parse_fail_on
+from .probes import Probe, iter_probes
 
 # Import rule packs so the decorators execute at import time.
 from . import (  # noqa: F401
@@ -17,6 +18,11 @@ from . import (  # noqa: F401
     checks_security_basics,
     checks_smoke_runtime,
 )
+from .probes import (  # noqa: F401
+    electron_webprefs,
+    headers_pass,
+    sse_stream_integrity,
+)
 
 __all__ = [
     "DiagnosticsEngine",
@@ -27,4 +33,6 @@ __all__ = [
     "Severity",
     "register",
     "parse_fail_on",
+    "Probe",
+    "iter_probes",
 ]
