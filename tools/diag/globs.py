@@ -51,6 +51,16 @@ FILE_GLOBS: Dict[str, Sequence[str]] = {
     "text": ("**/*.txt",),
     "sql": ("**/*.sql",),
     "images": ("**/*.svg", "**/*.ico"),
+    "artifacts": (
+        "**/*.log",
+        "**/*.jsonl",
+        "**/*.ndjson",
+        "**/*.toc",
+        "**/*.sqlite*",
+        "**/*.duckdb",
+        "**/*.seg",
+        "**/*.bin",
+    ),
     "lockfiles": (
         "**/package-lock.json",
         "**/pnpm-lock.yaml",
