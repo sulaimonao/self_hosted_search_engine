@@ -98,6 +98,17 @@ def test_schema_parser_includes_tool_directives():
     }
 
 
+def test_schema_parser_handles_iterable_payloads():
+    empty = chat_module._coerce_schema(json.dumps([]))
+    assert empty["answer"] == "No data retrieved, but model responded successfully."
+    array_payload = chat_module._coerce_schema(json.dumps(["alpha", {"result": "beta"}]))
+    assert "alpha" in array_payload["answer"]
+    assert "beta" in array_payload["answer"]
+    direct_iterable = chat_module._coerce_schema(["first", "second"])
+    assert "first" in direct_iterable["answer"]
+    assert "second" in direct_iterable["answer"]
+
+
 def test_chat_logging_records_prompt(caplog, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(chat_bp)

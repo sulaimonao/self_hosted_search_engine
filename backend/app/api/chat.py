@@ -46,6 +46,7 @@ _MODEL_ALIASES: dict[str, str] = {
     # legacy names mapped to current defaults
     "gemma:2b": "gemma3",
 }
+_EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
 
 
 def _coerce_model(name: str | None) -> str | None:
@@ -111,6 +112,32 @@ def _strip_code_fence(text: str) -> str:
         if "```" in stripped:
             stripped = stripped.split("```", 1)[0]
     return stripped.strip()
+
+
+def _stringify_iterable(items: Iterable[Any]) -> str:
+    parts: list[str] = []
+    for entry in items:
+        if isinstance(entry, str):
+            candidate = entry.strip()
+        elif isinstance(entry, Mapping):
+            try:
+                candidate = json.dumps(entry, ensure_ascii=False)
+            except TypeError:
+                candidate = str(entry)
+        else:
+            candidate = str(entry).strip()
+        if candidate:
+            parts.append(candidate)
+    return " ".join(parts).strip()
+
+
+def _iterable_schema_fallback(items: Iterable[Any]) -> dict[str, Any]:
+    message = _stringify_iterable(items) or _EMPTY_RESPONSE_FALLBACK
+    return {
+        "reasoning": "",
+        "answer": message,
+        "citations": [],
+    }
 
 
 def _coerce_message_text(value: Any) -> str:
@@ -181,16 +208,37 @@ def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     return result
 
 
-def _coerce_schema(text: str) -> dict[str, Any]:
-    candidate = _strip_code_fence(text)
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = candidate[start : end + 1]
-    try:
-        data = json.loads(candidate)
-    except json.JSONDecodeError as exc:  # pragma: no cover - repair attempts best effort
-        raise ValueError(f"Model response was not valid JSON: {exc}") from exc
+def _coerce_schema(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        data = dict(value)
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        return _iterable_schema_fallback(value)
+    else:
+        candidate = _strip_code_fence(str(value))
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:  # pragma: no cover - repair attempts best effort
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                snippet = candidate[start : end + 1]
+                try:
+                    parsed = json.loads(snippet)
+                except json.JSONDecodeError as second_exc:  # pragma: no cover - best effort repair
+                    raise ValueError(f"Model response was not valid JSON: {exc}") from second_exc
+            else:
+                raise ValueError(f"Model response was not valid JSON: {exc}") from exc
+        if isinstance(parsed, Mapping):
+            data = dict(parsed)
+        elif isinstance(parsed, Iterable) and not isinstance(parsed, (str, bytes, bytearray)):
+            return _iterable_schema_fallback(parsed)
+        else:
+            fallback_text = str(parsed).strip() or _EMPTY_RESPONSE_FALLBACK
+            return {
+                "reasoning": "",
+                "answer": fallback_text,
+                "citations": [],
+            }
 
     reasoning = data.get("reasoning")
     if not isinstance(reasoning, str):

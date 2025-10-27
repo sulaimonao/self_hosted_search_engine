@@ -102,7 +102,31 @@ export function ChatPanel({
               const reasoningText = (message.reasoning ?? "").trim();
               const answerText = (message.answer ?? "").trim();
               const fallbackContent = (message.content ?? "").trim();
-              const displayAnswer = answerText || fallbackContent;
+              const recordMessage = message as Record<string, unknown>;
+              const fallbackExtra =
+                ["message", "output", "text"]
+                  .map((field) => {
+                    const candidate = recordMessage[field];
+                    return typeof candidate === "string" ? candidate.trim() : "";
+                  })
+                  .find((value) => Boolean(value)) ?? "";
+              const serializedFallback =
+                fallbackExtra || answerText || fallbackContent || reasoningText
+                  ? ""
+                  : (() => {
+                      try {
+                        return JSON.stringify(recordMessage);
+                      } catch {
+                        return "";
+                      }
+                    })();
+              const displayAnswer =
+                answerText ||
+                fallbackContent ||
+                fallbackExtra ||
+                reasoningText ||
+                serializedFallback ||
+                "No response provided.";
               const hasReasoning = Boolean(reasoningText);
 
               return (
