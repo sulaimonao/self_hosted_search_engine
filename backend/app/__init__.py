@@ -59,6 +59,7 @@ def create_app() -> Flask:
     from .api import memory as memory_api
     from .api import llm as llm_api
     from .api import diagnostics as diagnostics_api
+    from .api import self_heal as self_heal_api
     from .api import shipit_diag as shipit_diag_api
     from .api import index as index_api
     from .api import jobs as jobs_api
@@ -399,6 +400,7 @@ def create_app() -> Flask:
     app.register_blueprint(research_api.bp)
     app.register_blueprint(web_search_api.bp)
     app.register_blueprint(diagnostics_api.bp)
+    app.register_blueprint(self_heal_api.bp)
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(meta_api.bp)
