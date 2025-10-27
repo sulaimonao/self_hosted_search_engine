@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Iterable, List
 
 from .engine import Finding, RuleContext, Severity, register
@@ -103,3 +104,164 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
             )
 
     return findings
+
+
+@register(
+    "R21_chat_message_guard",
+    description="Chat API must emit a contentful message field with punctuation guards",
+    severity=Severity.MEDIUM,
+)
+def rule_chat_message_guard(_: RuleContext) -> Iterable[Finding]:
+    try:
+        from flask import Flask
+
+        from backend.app.api import chat as chat_module
+        from backend.app.api.chat import bp as chat_bp
+    except Exception as exc:  # pragma: no cover - import guard
+        return [
+            Finding(
+                id="llm-chat:import-error",
+                rule_id="R21_chat_message_guard",
+                severity=Severity.MEDIUM,
+                summary="Unable to import chat API for diagnostics.",
+                suggestion="Ensure backend dependencies are installed so diagnostics can instantiate the chat blueprint.",
+                evidence=str(exc),
+            )
+        ]
+
+    app = Flask(__name__)
+    app.testing = True
+    app.register_blueprint(chat_bp)
+    app.config.update(APP_CONFIG=SimpleNamespace(ollama_url="http://ollama"))
+
+    class _DummyResponse:
+        def __init__(self, payload):
+            self._payload = payload
+            self.status_code = 200
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+        def close(self):
+            return None
+
+    def _fake_post(url, json, stream, timeout):  # noqa: ANN001 - requests compatibility
+        return _DummyResponse(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "**",
+                }
+            }
+        )
+
+    original_post = chat_module.requests.post
+    chat_module.requests.post = _fake_post
+    try:
+        with app.test_client() as client:
+            response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "hi"}], "stream": False})
+    finally:
+        chat_module.requests.post = original_post
+
+    if response.status_code != 200:
+        return [
+            Finding(
+                id="llm-chat:status",
+                rule_id="R21_chat_message_guard",
+                severity=Severity.MEDIUM,
+                summary="Chat API returned non-200 status under diagnostic stub.",
+                suggestion="Review chat API error handling for punctuation guard scenarios.",
+                evidence=f"status={response.status_code}",
+            )
+        ]
+
+    data = response.get_json() or {}
+    message = str(data.get("message") or "").strip()
+    has_alpha = any(ch.isalpha() for ch in message)
+    if len(message) < 4 or not has_alpha:
+        preview = message or "<empty>"
+        return [
+            Finding(
+                id="llm-chat:message-guard",
+                rule_id="R21_chat_message_guard",
+                severity=Severity.MEDIUM,
+                summary="Chat API did not coerce a contentful message field.",
+                suggestion="Ensure punctuation-only responses fall back to a readable assistant reply.",
+                evidence=preview,
+            )
+        ]
+    return []
+
+
+@register(
+    "R22_llm_models_alias",
+    description="LLM models alias endpoint should mirror the canonical route",
+    severity=Severity.MEDIUM,
+)
+def rule_llm_models_alias(_: RuleContext) -> Iterable[Finding]:
+    try:
+        from flask import Flask
+
+        from backend.app.api import llm as llm_module
+        from backend.app.api.llm import bp as llm_bp
+    except Exception as exc:  # pragma: no cover - import guard
+        return [
+            Finding(
+                id="llm-models:import-error",
+                rule_id="R22_llm_models_alias",
+                severity=Severity.MEDIUM,
+                summary="Unable to import LLM API for diagnostics.",
+                suggestion="Ensure backend dependencies are installed so diagnostics can probe the models endpoint.",
+                evidence=str(exc),
+            )
+        ]
+
+    app = Flask(__name__)
+    app.testing = True
+    app.register_blueprint(llm_bp)
+
+    engine_config = SimpleNamespace(
+        ollama=SimpleNamespace(base_url="http://ollama"),
+        models=SimpleNamespace(llm_primary="mock-primary", llm_fallback="mock-fallback", embed="mock-embed"),
+    )
+    app.config.update(
+        RAG_ENGINE_CONFIG=engine_config,
+        RAG_EMBED_MANAGER=None,
+    )
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+            self.status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def _fake_get(url, timeout):  # noqa: ANN001 - requests compatibility
+        return _FakeResponse({"models": [{"name": "mock-model"}]})
+
+    original_get = llm_module.shared_requests.get
+    llm_module.shared_requests.get = _fake_get
+    try:
+        with app.test_client() as client:
+            canonical = client.get("/api/llm/models")
+            alias = client.get("/api/llm/llm_models")
+    finally:
+        llm_module.shared_requests.get = original_get
+
+    if canonical.status_code != 200 or alias.status_code != 200:
+        return [
+            Finding(
+                id="llm-models:alias-status",
+                rule_id="R22_llm_models_alias",
+                severity=Severity.MEDIUM,
+                summary="/api/llm/models and /api/llm/llm_models should both return 200.",
+                suggestion="Ensure the alias route delegates to the canonical implementation.",
+                evidence=f"models={canonical.status_code} alias={alias.status_code}",
+            )
+        ]
+    return []

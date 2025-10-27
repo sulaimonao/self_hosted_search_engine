@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
-from typing import Any, Iterable, Mapping, Iterator, Literal
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Mapping, Optional, Union
 
 import requests
 from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
@@ -47,6 +48,62 @@ _MODEL_ALIASES: dict[str, str] = {
     "gemma:2b": "gemma3",
 }
 _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
+_TEXTUAL_CONTENT_PATTERN = re.compile(r"[A-Za-z]")
+_MISSING_TEXT_FALLBACK = "I’m here, but I didn’t receive usable text from the model."
+
+
+def _looks_like_json(text: str) -> bool:
+    stripped = text.lstrip()
+    if not stripped:
+        return False
+    if stripped.startswith("{") or stripped.startswith("["):
+        return True
+    return "```json" in text.lower()
+
+
+def _guard_contentful_text(candidate: str, *, fallback: str | None = None) -> str:
+    text = (candidate or "").strip()
+    if len(text) >= 4 and _TEXTUAL_CONTENT_PATTERN.search(text):
+        return text
+    fallback_text = (fallback or "").strip()
+    if len(fallback_text) >= 4 and _TEXTUAL_CONTENT_PATTERN.search(fallback_text):
+        return fallback_text
+    return _MISSING_TEXT_FALLBACK
+
+
+def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[str, Any]:
+    """Normalize model/tool output into a consistent schema."""
+
+    if resp is None:
+        return {"message": ""}
+
+    if isinstance(resp, str):
+        return {"message": resp.strip()}
+
+    if isinstance(resp, list):
+        if not resp:
+            return {"message": "No data retrieved, but the model responded."}
+        combined = " ".join(str(item) for item in resp).strip()
+        return {"message": combined or "No data retrieved, but the model responded."}
+
+    if isinstance(resp, Mapping):
+        data = dict(resp)
+        message = ""
+        raw_message = data.get("message")
+        if isinstance(raw_message, str) and raw_message.strip():
+            message = raw_message.strip()
+        else:
+            for key in ("answer", "output", "text", "content"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    message = value.strip()
+                    break
+        if not message:
+            message = str(resp).strip()
+        data["message"] = message
+        return data
+
+    return {"message": str(resp).strip()}
 
 
 def _coerce_model(name: str | None) -> str | None:
@@ -208,7 +265,7 @@ def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     return result
 
 
-def _coerce_schema(value: Any) -> dict[str, Any]:
+def _coerce_model_schema(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         data = dict(value)
     elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
@@ -555,35 +612,53 @@ def _render_response_payload(
     chat_span: Any,
     image_context: str | None,
     image_used: bool,
+    json_mode: bool,
 ) -> ChatResponsePayload:
     content = _extract_model_content(payload_json)
     reasoning_text = _extract_model_reasoning(payload_json).strip()
-    try:
-        structured = _coerce_schema(content)
-    except ValueError as exc:  # pragma: no cover - repair attempts best effort
-        LOGGER.debug("Falling back to raw chat content: %s", exc)
+    structured: dict[str, Any] | None = None
+
+    if json_mode and _looks_like_json(content):
+        try:
+            structured = _coerce_model_schema(content)
+        except ValueError as exc:  # pragma: no cover - repair attempts best effort
+            LOGGER.debug("Falling back to raw chat content: %s", exc)
+
+    if structured is None:
         structured = {
             "reasoning": reasoning_text or accumulator.reasoning or "",
             "answer": content.strip() or accumulator.answer or "",
             "citations": [],
         }
-    else:
-        if reasoning_text and not structured.get("reasoning"):
-            structured["reasoning"] = reasoning_text
+
+    if reasoning_text and not structured.get("reasoning"):
+        structured["reasoning"] = reasoning_text
     if accumulator.reasoning and not structured.get("reasoning"):
         structured["reasoning"] = accumulator.reasoning
     if accumulator.answer and not structured.get("answer"):
         structured["answer"] = accumulator.answer
+
     citations = structured.get("citations") or []
     if not isinstance(citations, list):
         citations = []
+
+    answer_text = _guard_contentful_text(
+        str(structured.get("answer") or ""),
+        fallback=accumulator.answer or content,
+    )
+    reasoning_value = (structured.get("reasoning") or "").strip() or (accumulator.reasoning or reasoning_text)
+    autopilot = _coerce_autopilot(structured.get("autopilot"))
+    structured["answer"] = answer_text
+    structured["message"] = answer_text
+
     response_payload = ChatResponsePayload(
-        reasoning=(structured.get("reasoning") or "").strip(),
-        answer=(structured.get("answer") or "").strip(),
+        reasoning=(reasoning_value or "").strip(),
+        answer=answer_text,
+        message=answer_text,
         citations=[str(item) for item in citations if isinstance(item, (str, int, float))],
         model=candidate,
         trace_id=trace_id,
-        autopilot=structured.get("autopilot"),
+        autopilot=autopilot,
     )
     g.chat_model = candidate
     g.chat_fallback_used = attempt_index > 1
@@ -624,6 +699,7 @@ def _stream_chat_response(
     image_used: bool,
     transport: Literal["ndjson", "sse"],
     request_id: str,
+    json_mode: bool,
 ) -> Response:
     metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
     previews: list[str] = []
@@ -655,6 +731,7 @@ def _stream_chat_response(
                 chat_span=chat_span,
                 image_context=image_context,
                 image_used=image_used,
+                json_mode=json_mode,
             )
             end_reason = "complete"
             yield ChatStreamComplete(payload=payload_model)
@@ -823,8 +900,10 @@ def _execute_chat_request(
                 "system": system_prompt,
                 "request_id": request_id,
             }
+            json_mode = False
             if _supports_json_format(candidate):
                 request_payload["format"] = "json"
+                json_mode = True
             else:
                 log_event(
                     "INFO",
@@ -951,6 +1030,7 @@ def _execute_chat_request(
                     image_used=image_used,
                     transport=stream_transport,
                     request_id=request_id,
+                    json_mode=json_mode,
                 )
 
             try:
@@ -1031,6 +1111,7 @@ def _execute_chat_request(
                 chat_span=chat_span,
                 image_context=image_context,
                 image_used=image_used,
+                json_mode=json_mode,
             )
 
             preview_source = response_payload.answer or response_payload.reasoning or ""
@@ -1045,7 +1126,8 @@ def _execute_chat_request(
                 trace_id=response_payload.trace_id or trace_id,
             )
 
-            flask_response = jsonify(response_payload.model_dump(exclude_none=True))
+            payload_dict = _coerce_schema(response_payload.model_dump(exclude_none=True))
+            flask_response = jsonify(payload_dict)
             flask_response.headers["X-LLM-Model"] = candidate
             flask_response.headers["X-Request-Id"] = request_id
             return flask_response

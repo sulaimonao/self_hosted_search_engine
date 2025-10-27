@@ -51,7 +51,7 @@ def test_schema_parser_allows_user_granted_browser_control():
     }
 
     serialized = json.dumps(payload)
-    parsed = chat_module._coerce_schema(serialized)
+    parsed = chat_module._coerce_model_schema(serialized)
 
     assert parsed["autopilot"] == {
         "mode": "browser",
@@ -80,7 +80,7 @@ def test_schema_parser_includes_tool_directives():
     }
 
     serialized = json.dumps(payload)
-    parsed = chat_module._coerce_schema(serialized)
+    parsed = chat_module._coerce_model_schema(serialized)
 
     assert parsed["autopilot"] == {
         "mode": "browser",
@@ -99,12 +99,12 @@ def test_schema_parser_includes_tool_directives():
 
 
 def test_schema_parser_handles_iterable_payloads():
-    empty = chat_module._coerce_schema(json.dumps([]))
+    empty = chat_module._coerce_model_schema(json.dumps([]))
     assert empty["answer"] == "No data retrieved, but model responded successfully."
-    array_payload = chat_module._coerce_schema(json.dumps(["alpha", {"result": "beta"}]))
+    array_payload = chat_module._coerce_model_schema(json.dumps(["alpha", {"result": "beta"}]))
     assert "alpha" in array_payload["answer"]
     assert "beta" in array_payload["answer"]
-    direct_iterable = chat_module._coerce_schema(["first", "second"])
+    direct_iterable = chat_module._coerce_model_schema(["first", "second"])
     assert "first" in direct_iterable["answer"]
     assert "second" in direct_iterable["answer"]
 
@@ -190,6 +190,40 @@ def test_chat_non_streaming_response(monkeypatch):
     response = client.post("/api/chat", json=payload)
     assert response.status_code == 200
     result = response.get_json()
-    assert result["answer"] == "Hello there"
+    assert "Hello there" in result["answer"]
+    assert result["message"] == result["answer"]
     assert captured["json"]["stream"] is False
     assert captured["stream"] is False
+
+
+def test_chat_response_sets_message_field(monkeypatch):
+    app = Flask(__name__)
+    app.register_blueprint(chat_bp)
+    app.testing = True
+
+    app.config.update(APP_CONFIG=SimpleNamespace(ollama_url="http://ollama"))
+
+    payload = {
+        "model": "llama2",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "stream": False,
+    }
+
+    upstream = {
+        "message": {
+            "role": "assistant",
+            "content": "**",
+        }
+    }
+
+    def fake_post(url, json, stream, timeout):  # noqa: ANN001 - requests compatibility
+        return DummyResponse([], json_payload=upstream)
+
+    monkeypatch.setattr(chat_module.requests, "post", fake_post)
+
+    client = app.test_client()
+    response = client.post("/api/chat", json=payload)
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["answer"] == "I’m here, but I didn’t receive usable text from the model."
+    assert result["message"] == result["answer"]

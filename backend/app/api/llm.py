@@ -154,6 +154,13 @@ def llm_models() -> Any:
     return jsonify(payload)
 
 
+@bp.get("/llm_models")
+def llm_models_alias() -> Any:
+    """Back-compat alias for legacy frontend clients."""
+
+    return llm_models()
+
+
 @bp.post("/autopull")
 def llm_autopull() -> Any:
     config = _get_app_config()

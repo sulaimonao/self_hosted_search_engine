@@ -9,6 +9,7 @@ export interface ChatMessage {
   proposedActions?: ProposedAction[];
   reasoning?: string | null;
   answer?: string | null;
+  message?: string | null;
   citations?: string[];
   traceId?: string | null;
   model?: string | null;
@@ -153,6 +154,7 @@ export interface OllamaStatus {
 export interface ChatResponsePayload {
   reasoning: string;
   answer: string;
+  message: string;
   citations: string[];
   model?: string | null;
   trace_id?: string | null;

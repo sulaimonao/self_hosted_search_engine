@@ -700,19 +700,25 @@ export function ChatPanel() {
       updateMessage(assistantId, (message) => ({
         ...message,
         streaming: false,
-        content: result.payload.answer || result.payload.reasoning || message.content || "",
+        content:
+          result.payload.message ||
+          result.payload.answer ||
+          result.payload.reasoning ||
+          message.content ||
+          "",
         answer: result.payload.answer || null,
         reasoning: result.payload.reasoning || null,
         citations: result.payload.citations ?? [],
         traceId: result.payload.trace_id ?? streamedTrace ?? message.traceId ?? null,
         model: result.payload.model ?? streamedModel ?? message.model ?? null,
         autopilot: result.payload.autopilot ?? null,
+        message: result.payload.message || null,
       }));
 
       void storeChatMessage(threadId, {
         id: assistantId,
         role: "assistant",
-        content: result.payload.answer || result.payload.reasoning || "",
+        content: result.payload.message || result.payload.answer || result.payload.reasoning || "",
       }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
     } catch (error) {
       if (
@@ -967,7 +973,28 @@ export function ChatPanel() {
           <div className="space-y-4 p-3 pr-1">
             {messages.map((message) => {
               const isAssistant = message.role === "assistant";
-              const bodyText = message.answer ?? message.content ?? "";
+              const recordMessage = message as Record<string, unknown>;
+              const fallbackFields = [
+                typeof message.message === "string" ? message.message : "",
+                typeof message.answer === "string" ? message.answer : "",
+                typeof message.content === "string" ? message.content : "",
+              ];
+              const extraFields = ["output", "text"].map((field) => {
+                const value = recordMessage[field];
+                return typeof value === "string" ? value : "";
+              });
+              const serialized =
+                (() => {
+                  try {
+                    return JSON.stringify(recordMessage);
+                  } catch {
+                    return "";
+                  }
+                })() || "";
+              const bodyText =
+                [...fallbackFields, ...extraFields].find((value) => value && value.trim())?.trim() ||
+                serialized ||
+                "";
               const activeStream =
                 llmStreamSupported &&
                 llmStream.requestId &&

@@ -9,9 +9,9 @@ from flask import Blueprint, current_app, jsonify, request
 bp = Blueprint("web_search_api", __name__, url_prefix="/api")
 _FALLBACK_RESULT = [
     {
-        "title": "No live data retrieved",
+        "title": "No live results",
         "url": "",
-        "snippet": "Fallback response used.",
+        "snippet": "Returned fallback to avoid blank responses.",
     }
 ]
 

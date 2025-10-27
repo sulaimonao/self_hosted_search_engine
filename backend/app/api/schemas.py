@@ -180,6 +180,7 @@ class ChatResponsePayload(BaseModel):
 
     reasoning: str = ""
     answer: str = ""
+    message: str = ""
     citations: list[str] = Field(default_factory=list)
     model: str | None = None
     trace_id: str | None = None
@@ -187,7 +188,7 @@ class ChatResponsePayload(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    @field_validator("reasoning", "answer", mode="before")
+    @field_validator("reasoning", "answer", "message", mode="before")
     @classmethod
     def _normalize_response_text(cls, value: Any) -> str:
         if value is None:
