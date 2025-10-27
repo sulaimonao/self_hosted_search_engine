@@ -82,6 +82,8 @@ class Store<T> {
 let bridge: LlmBridge | null = null;
 let bridgeUnsubscribe: (() => void) | null = null;
 const store = new Store<LlmStreamSnapshot>(defaultSnapshot);
+let frameAccumulator = "";
+let frameAccumulatorRequestId: string | null = null;
 
 function update(mutator: (current: LlmStreamSnapshot) => LlmStreamSnapshot) {
   store.set(mutator(store.get()));
@@ -100,6 +102,11 @@ function resolveBridge(): LlmBridge | null {
     return null;
   }
   return candidate;
+}
+
+function resetFrameAccumulator(nextRequestId: string | null) {
+  frameAccumulator = "";
+  frameAccumulatorRequestId = nextRequestId;
 }
 
 function ensureBridge() {
@@ -220,19 +227,42 @@ function handleFrame(payload: LlmFramePayload) {
   if (!payload || typeof payload.frame !== "string") {
     return;
   }
-  const frames = payload.frame
-    .split(/\n\n+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  if (frames.length === 0) {
+  const rawRequestId =
+    typeof payload.requestId === "string" && payload.requestId.trim().length > 0
+      ? payload.requestId.trim()
+      : null;
+  const activeSnapshot = store.get();
+  const activeRequestId = activeSnapshot.requestId;
+
+  if (rawRequestId && frameAccumulatorRequestId && rawRequestId !== frameAccumulatorRequestId) {
+    resetFrameAccumulator(rawRequestId);
+  } else if (rawRequestId && !frameAccumulatorRequestId) {
+    frameAccumulatorRequestId = rawRequestId;
+  } else if (!frameAccumulatorRequestId && activeRequestId) {
+    frameAccumulatorRequestId = activeRequestId;
+  }
+
+  frameAccumulator += `${payload.frame}\n\n`;
+  const segments = frameAccumulator.split(/\n\n+/);
+  frameAccumulator = segments.pop() ?? "";
+  if (segments.length === 0) {
     return;
   }
-  for (const frame of frames) {
-    const parsed = parseSseFrame(`${frame}\n\n`);
+
+  const requestHint = rawRequestId ?? frameAccumulatorRequestId ?? activeRequestId ?? null;
+  for (const segment of segments) {
+    const normalized = segment.trim();
+    if (!normalized) {
+      continue;
+    }
+    const parsed = parseSseFrame(`${normalized}\n\n`);
     if (!parsed) {
       continue;
     }
-    update((current) => applyFrame(current, parsed, payload.requestId ?? null));
+    update((current) => applyFrame(current, parsed, requestHint));
+    if (parsed.type === "complete" || parsed.type === "error") {
+      resetFrameAccumulator(null);
+    }
   }
 }
 
@@ -259,6 +289,7 @@ export function useLlmStream(): LlmStreamHook {
       throw new Error("LLM stream bridge unavailable");
     }
     store.set({ ...defaultSnapshot, requestId });
+    resetFrameAccumulator(requestId);
     try {
       await target.stream({ requestId, body });
     } catch (error) {
@@ -281,6 +312,9 @@ export function useLlmStream(): LlmStreamHook {
         }
       }
       if (effectiveId) {
+        if (frameAccumulatorRequestId && frameAccumulatorRequestId === effectiveId) {
+          resetFrameAccumulator(null);
+        }
         update((current) =>
           current.requestId === effectiveId ? { ...current, done: true } : current,
         );

@@ -192,4 +192,36 @@ contextBridge.exposeInMainWorld('desktop', {
   },
 });
 
+contextBridge.exposeInMainWorld('llm', {
+  stream: async (payload) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('stream payload required');
+    }
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId.trim() : '';
+    if (!requestId) {
+      throw new Error('requestId is required');
+    }
+    const body = payload.body && typeof payload.body === 'object' ? { ...payload.body } : {};
+    return ipcRenderer.invoke('llm:stream', { requestId, body });
+  },
+  onFrame: (handler) => {
+    if (typeof handler !== 'function') {
+      return NOOP_UNSUBSCRIBE;
+    }
+    const listener = (_event, data) => {
+      try {
+        const payload = data && typeof data === 'object' ? data : { requestId: null, frame: '' };
+        handler(payload);
+      } catch (error) {
+        console.warn('[llm] frame handler error', error);
+      }
+    };
+    ipcRenderer.on('llm:frame', listener);
+    return () => {
+      ipcRenderer.removeListener('llm:frame', listener);
+    };
+  },
+  abort: (requestId) => ipcRenderer.invoke('llm:abort', requestId ?? null),
+});
+
 contextBridge.exposeInMainWorld('browserAPI', createBrowserAPI());

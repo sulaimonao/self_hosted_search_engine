@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { randomUUID } = require('crypto');
+const { TextDecoder } = require('util');
 
 const { runBrowserDiagnostics } = require('../scripts/diagnoseBrowser');
 const { initializeBrowserData } = require('./browser-data');
@@ -50,6 +51,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/
 let mainWindow;
 let lastBrowserDiagnostics = null;
 let initialBrowserDiagnosticsPromise = null;
+const activeLlmStreams = new Map();
 
 app.setAppLogsPath();
 app.commandLine.appendSwitch(
@@ -83,6 +85,33 @@ const runtimeNetworkState = {
   localeCountryCode: null,
   locale: null,
 };
+
+function flushSseBuffer(target, requestId, buffer) {
+  if (!target || target.isDestroyed?.()) {
+    return '';
+  }
+  let working = typeof buffer === 'string' ? buffer : '';
+  let index = working.indexOf('\n\n');
+  while (index !== -1) {
+    const frame = working.slice(0, index);
+    working = working.slice(index + 2);
+    if (frame.trim().length > 0 && !target.isDestroyed?.()) {
+      target.send('llm:frame', { requestId, frame });
+    }
+    index = working.indexOf('\n\n');
+  }
+  return working;
+}
+
+function sendSseError(target, requestId, payload) {
+  if (!target || target.isDestroyed?.()) {
+    return;
+  }
+  target.send('llm:frame', {
+    requestId,
+    frame: `data: ${JSON.stringify(payload)}\n\n`,
+  });
+}
 
 const DEFAULT_SETTINGS = {
   thirdPartyCookies: true,
@@ -773,6 +802,117 @@ function closeBrowserTab(tabId) {
 
   return true;
 }
+
+ipcMain.handle(
+  'llm:stream',
+  async (event, payload = {}) => {
+    const sender = event?.sender;
+    const contentsId = typeof sender?.id === 'number' ? sender.id : null;
+    const baseId =
+      typeof payload?.requestId === 'string' && payload.requestId.trim().length > 0
+        ? payload.requestId.trim()
+        : '';
+    const requestId = baseId || randomUUID();
+    const rawBody = payload?.body;
+    const body =
+      rawBody && typeof rawBody === 'object' ? { ...rawBody } : {};
+    if (typeof body.request_id !== 'string' || body.request_id.trim().length === 0) {
+      body.request_id = requestId;
+    }
+    body.stream = true;
+
+    const controller = new AbortController();
+    if (contentsId !== null) {
+      const existing = activeLlmStreams.get(contentsId);
+      if (existing) {
+        try {
+          existing.controller.abort();
+        } catch (abortError) {
+          console.warn('Failed to abort existing LLM stream', abortError);
+        }
+      }
+      activeLlmStreams.set(contentsId, { controller, requestId });
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+        method: 'POST',
+        headers: { ...JSON_HEADERS, Accept: 'text/event-stream' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        sendSseError(sender, requestId, {
+          type: 'error',
+          error: response.ok ? 'stream_unavailable' : `http_${response.status}`,
+          status: response.status,
+        });
+        return { ok: false, status: response.status };
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        buffer = flushSseBuffer(sender, requestId, buffer);
+      }
+      buffer += decoder.decode();
+      flushSseBuffer(sender, requestId, buffer);
+      return { ok: true };
+    } catch (error) {
+      const aborted = controller.signal.aborted;
+      const message = error instanceof Error ? error.message : String(error ?? 'stream_failed');
+      sendSseError(sender, requestId, {
+        type: 'error',
+        error: aborted ? 'aborted' : message,
+      });
+      return { ok: false, error: message, aborted };
+    } finally {
+      if (contentsId !== null) {
+        const entry = activeLlmStreams.get(contentsId);
+        if (entry && entry.requestId === requestId) {
+          activeLlmStreams.delete(contentsId);
+        }
+      }
+    }
+  },
+);
+
+ipcMain.handle(
+  'llm:abort',
+  (event, payload) => {
+    const contentsId = typeof event?.sender?.id === 'number' ? event.sender.id : null;
+    if (contentsId === null) {
+      return { ok: false, active: false };
+    }
+    const entry = activeLlmStreams.get(contentsId);
+    if (!entry) {
+      return { ok: false, active: false };
+    }
+    let requestId = null;
+    if (typeof payload === 'string' || payload === null) {
+      requestId = payload;
+    } else if (payload && typeof payload === 'object') {
+      requestId = payload.requestId ?? null;
+    }
+    if (requestId && requestId !== entry.requestId) {
+      return { ok: false, mismatch: true };
+    }
+    try {
+      entry.controller.abort();
+    } catch (error) {
+      console.warn('Failed to abort LLM stream', error);
+    }
+    activeLlmStreams.delete(contentsId);
+    return { ok: true };
+  },
+);
 
 ipcMain.handle('shadow:capture', async (_event, payload) => {
   try {

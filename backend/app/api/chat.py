@@ -113,6 +113,29 @@ def _strip_code_fence(text: str) -> str:
     return stripped.strip()
 
 
+def _coerce_message_text(value: Any) -> str:
+    """Flatten structured Ollama chat message content to plain text."""
+
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Mapping):
+        text_val = value.get("text")
+        if isinstance(text_val, str):
+            return text_val.strip()
+        nested = value.get("content")
+        if nested is not None and nested is not value:
+            return _coerce_message_text(nested)
+        return ""
+    if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+        parts: list[str] = []
+        for entry in value:
+            text = _coerce_message_text(entry)
+            if text:
+                parts.append(text)
+        return "".join(parts).strip()
+    return ""
+
+
 def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
@@ -225,9 +248,9 @@ def _coerce_schema(text: str) -> dict[str, Any]:
 def _extract_model_content(payload: Mapping[str, Any]) -> str:
     message = payload.get("message")
     if isinstance(message, Mapping):
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
+        content_text = _coerce_message_text(message.get("content"))
+        if content_text:
+            return content_text
     response_field = payload.get("response")
     if isinstance(response_field, str) and response_field.strip():
         return response_field
@@ -379,24 +402,22 @@ class _StreamAccumulator:
         if not isinstance(message, Mapping):
             return None
         delta = ChatStreamDelta()
-        content = message.get("content")
-        if isinstance(content, str):
-            trimmed = content.strip()
-            if trimmed:
-                previous = self.answer
-                if trimmed != previous:
-                    delta_text = ""
-                    next_answer = previous
-                    if previous and trimmed.startswith(previous):
-                        delta_text = trimmed[len(previous) :]
-                        next_answer = trimmed
-                    else:
-                        delta_text = trimmed
-                        next_answer = previous + delta_text
-                    if delta_text:
-                        delta.delta = delta_text
-                    self.answer = next_answer
-                    delta.answer = self.answer
+        content_text = _coerce_message_text(message.get("content"))
+        if content_text:
+            previous = self.answer
+            if content_text != previous:
+                delta_text = ""
+                next_answer = previous
+                if previous and content_text.startswith(previous):
+                    delta_text = content_text[len(previous) :]
+                    next_answer = content_text
+                else:
+                    delta_text = content_text
+                    next_answer = previous + delta_text
+                if delta_text:
+                    delta.delta = delta_text
+                self.answer = next_answer
+                delta.answer = self.answer
         reasoning_value = None
         for key in ("reasoning", "thinking"):
             raw = message.get(key)
