@@ -68,6 +68,8 @@ def create_app() -> Flask:
     from .api import plan as plan_api
     from .api import shadow as shadow_api
     from .api import research as research_api
+    from .api import reasoning as reasoning_api
+    from .api import web_search as web_search_api
     from .api import seeds as seeds_api
     from .api import search as search_api
     from .api import shipit_crawl as shipit_crawl_api
@@ -390,8 +392,10 @@ def create_app() -> Flask:
     app.register_blueprint(memory_api.bp)
     app.register_blueprint(chat_history_api.bp)
     app.register_blueprint(chat_api.bp)
+    app.register_blueprint(reasoning_api.bp)
     app.register_blueprint(llm_api.bp)
     app.register_blueprint(research_api.bp)
+    app.register_blueprint(web_search_api.bp)
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)

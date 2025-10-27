@@ -47,6 +47,8 @@ diagnostics/*
 !backend/app/api/meta.py
 !backend/app/api/sources.py
 !backend/app/api/schemas.py
+!backend/app/api/reasoning.py
+!backend/app/api/web_search.py
 !backend/app/middleware/request_id.py
 !backend/app/middleware/__init__.py
 !backend/app/services/ollama_client.py
@@ -86,6 +88,8 @@ diagnostics/*
 !tests/api/test_extract_api.py
 !tests/api/test_jobs_status.py
 !tests/api/test_research_api.py
+!tests/api/test_web_search_api.py
+!tests/api/test_reasoning_api.py
 !tests/e2e/test_agent_browser.py
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
