@@ -54,6 +54,7 @@ def create_app() -> Flask:
     from .api import progress as progress_api
     from .api import visits as visits_api
     from .api import docs as docs_api
+    from .api import domains as domains_api
     from .api import chat_history as chat_history_api
     from .api import memory as memory_api
     from .api import llm as llm_api
@@ -389,6 +390,7 @@ def create_app() -> Flask:
     app.register_blueprint(progress_api.bp)
     app.register_blueprint(visits_api.bp)
     app.register_blueprint(docs_api.bp)
+    app.register_blueprint(domains_api.bp)
     app.register_blueprint(memory_api.bp)
     app.register_blueprint(chat_history_api.bp)
     app.register_blueprint(chat_api.bp)

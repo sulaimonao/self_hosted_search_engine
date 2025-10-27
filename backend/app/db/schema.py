@@ -492,6 +492,21 @@ def _migration_006_sources(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_007_domain_profiles(connection: sqlite3.Connection) -> None:
+    schema_path = Path(__file__).resolve().parent / "domain_profiles.sql"
+    try:
+        sql = schema_path.read_text("utf-8")
+    except OSError:
+        LOGGER.warning("domain profile schema missing at %s", schema_path)
+        return
+    script = sql.strip()
+    if not script:
+        LOGGER.debug("domain profile schema file %s is empty", schema_path)
+        return
+    with connection:
+        connection.executescript(script)
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -499,6 +514,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("004_pending_vectors_text", _migration_004_pending_vectors_text),
     ("005_browser_features", _migration_005_browser_features),
     ("006_sources", _migration_006_sources),
+    ("007_domain_profiles", _migration_007_domain_profiles),
 ]
 
 MIGRATION_IDS = tuple(migration_id for migration_id, _ in _MIGRATIONS)

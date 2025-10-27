@@ -35,6 +35,7 @@ diagnostics/*
 !backend/app/api/progress.py
 !backend/app/api/visits.py
 !backend/app/api/docs.py
+!backend/app/api/domains.py
 !backend/app/api/memory.py
 !backend/app/api/chat_history.py
 !backend/app/api/browser.py
@@ -63,6 +64,10 @@ diagnostics/*
 !backend/app/services/embeddings.py
 !backend/app/services/__init__.py
 !backend/app/services/source_follow.py
+!backend/app/services/domain_profiles.py
+!backend/tools/__init__.py
+!backend/tools/termsearch/__init__.py
+!backend/tools/termsearch/core.py
 !backend/app/db/__init__.py
 !backend/app/db/schema.py
 !backend/app/db/store.py
@@ -83,6 +88,7 @@ diagnostics/*
 !tests/api/test_progress_api.py
 !tests/api/test_visits_api.py
 !tests/api/test_docs_api.py
+!tests/api/test_domains_api.py
 !tests/api/test_meta_api.py
 !tests/api/test_sources_api.py
 !tests/api/test_extract_api.py
@@ -102,6 +108,8 @@ diagnostics/*
 !tests/backend/test_metrics_histogram.py
 !tests/backend/test_chat_stream_accumulator.py
 !tests/test_crawl_client.py
+!tests/tools/termsearch/test_fts_safe.py
+!tests/tools/termsearch/test_query_apostrophe.py
 !tests/unit/test_agent_tools_repo.py
 !tests/unit/test_observability.py
 !tests/server/test_tool_logging.py

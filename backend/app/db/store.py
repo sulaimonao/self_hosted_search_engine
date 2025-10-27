@@ -773,6 +773,146 @@ class AppStateDB:
             )
 
     # ------------------------------------------------------------------
+    # Domain profiles
+    # ------------------------------------------------------------------
+    def count_documents_for_site(self, site: str) -> int:
+        """Return the number of documents recorded for ``site``."""
+
+        normalized = (site or "").strip().lower()
+        if not normalized:
+            return 0
+
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS total FROM documents WHERE site = ?",
+                (normalized,),
+            ).fetchone()
+            total = int(row["total"] if row else 0)
+            if total > 0:
+                return total
+            fallback_pattern = f"%://{normalized}/%"
+            fallback_row = self._conn.execute(
+                "SELECT COUNT(*) AS total FROM documents WHERE url LIKE ?",
+                (fallback_pattern,),
+            ).fetchone()
+        return int(fallback_row["total"] if fallback_row else 0)
+
+    def list_known_subdomains(self, host: str, limit: int = 10) -> list[str]:
+        """Return distinct subdomains rooted under ``host`` observed in documents."""
+
+        normalized = (host or "").strip().lower()
+        if not normalized:
+            return []
+        limit_value = max(1, min(int(limit or 1), 50))
+        pattern = f"%.{normalized}"
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT DISTINCT site
+                FROM documents
+                WHERE site LIKE ?
+                ORDER BY site ASC
+                LIMIT ?
+                """,
+                (pattern, limit_value),
+            ).fetchall()
+        subdomains: list[str] = []
+        for row in rows:
+            value = row["site"] if isinstance(row, Mapping) else row[0]
+            if not value:
+                continue
+            text = str(value).strip().lower()
+            if text and text != normalized:
+                subdomains.append(text)
+        return subdomains
+
+    def upsert_domain_profile(
+        self,
+        *,
+        host: str,
+        pages_cached: int,
+        robots_txt: str | None,
+        robots_allows: int,
+        robots_disallows: int,
+        requires_account: bool,
+        clearance: str,
+        sitemaps: Sequence[str] | None,
+        subdomains: Sequence[str] | None,
+        last_scanned: float | None,
+    ) -> None:
+        normalized = (host or "").strip().lower()
+        if not normalized:
+            return
+
+        def _clean_list(values: Sequence[str] | None) -> list[str]:
+            cleaned: list[str] = []
+            if not values:
+                return cleaned
+            seen: set[str] = set()
+            for value in values:
+                text = str(value).strip()
+                if not text:
+                    continue
+                lowered = text.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                cleaned.append(text)
+            return cleaned
+
+        serialized_sitemaps = _serialize(_clean_list(sitemaps))
+        serialized_subdomains = _serialize(_clean_list(subdomains))
+        robots_text = (robots_txt or "").strip() or None
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO domain_profiles(
+                    host, pages_cached, robots_txt, robots_allows, robots_disallows,
+                    requires_account, clearance, sitemaps, subdomains, last_scanned
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(host) DO UPDATE SET
+                    pages_cached = excluded.pages_cached,
+                    robots_txt = excluded.robots_txt,
+                    robots_allows = excluded.robots_allows,
+                    robots_disallows = excluded.robots_disallows,
+                    requires_account = excluded.requires_account,
+                    clearance = excluded.clearance,
+                    sitemaps = excluded.sitemaps,
+                    subdomains = excluded.subdomains,
+                    last_scanned = excluded.last_scanned
+                """,
+                (
+                    normalized,
+                    int(pages_cached),
+                    robots_text,
+                    int(robots_allows),
+                    int(robots_disallows),
+                    1 if requires_account else 0,
+                    (clearance or "public").strip() or "public",
+                    serialized_sitemaps,
+                    serialized_subdomains,
+                    float(last_scanned) if last_scanned is not None else None,
+                ),
+            )
+
+    def get_domain_profile(self, host: str) -> dict[str, Any] | None:
+        normalized = (host or "").strip().lower()
+        if not normalized:
+            return None
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT * FROM domain_profiles WHERE host = ?",
+                (normalized,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["requires_account"] = bool(payload.get("requires_account"))
+        payload["sitemaps"] = _deserialize(payload.get("sitemaps"), [])
+        payload["subdomains"] = _deserialize(payload.get("subdomains"), [])
+        return payload
+
+    # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
     def schema_diagnostics(self, *, refresh: bool = False) -> dict[str, Any]:
@@ -806,6 +946,18 @@ class AppStateDB:
                 "created_at": "INTEGER",
                 "updated_at": "INTEGER",
                 "next_attempt_at": "INTEGER",
+            },
+            "domain_profiles": {
+                "host": "TEXT",
+                "pages_cached": "INTEGER",
+                "robots_txt": "TEXT",
+                "robots_allows": "INTEGER",
+                "robots_disallows": "INTEGER",
+                "requires_account": "INTEGER",
+                "clearance": "TEXT",
+                "sitemaps": "TEXT",
+                "subdomains": "TEXT",
+                "last_scanned": "REAL",
             },
         }
         tables: dict[str, dict[str, str]] = {}
