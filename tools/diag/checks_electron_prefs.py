@@ -1,6 +1,7 @@
 """Electron BrowserWindow preference checks."""
 from __future__ import annotations
 
+import re
 from typing import Iterable, List, Tuple
 
 from .engine import Finding, RuleContext, Severity, register
@@ -21,6 +22,8 @@ BROWSER_PATTERNS = (
     "desktop/*.ts",
     "desktop/*.js",
 )
+
+USER_AGENT_RE = re.compile(r"DESKTOP_USER_AGENT\s*=\s*['\"]([^'\"]+)['\"]")
 
 
 def _find_block(text: str, start_index: int) -> Tuple[int, int]:
@@ -187,4 +190,63 @@ def rule_disable_hardware(context: RuleContext) -> Iterable[Finding]:
                 line_hint=line_no,
             )
         )
+    return findings
+
+
+@register(
+    "R26_robot_captcha_risk",
+    description="Desktop browser session should spoof UA and locale headers to avoid bot detection",
+    severity=Severity.MEDIUM,
+)
+def rule_robot_captcha_risk(context: RuleContext) -> Iterable[Finding]:
+    findings: List[Finding] = []
+    targets = (
+        "desktop/main.ts",
+        "desktop/main.js",
+        "desktop/**/main.ts",
+        "desktop/**/main.js",
+        "electron/main.js",
+    )
+    for relative in context.iter_patterns(*targets):
+        text = context.read_text(relative)
+        if not text:
+            continue
+        match = USER_AGENT_RE.search(text)
+        if not match:
+            findings.append(
+                Finding(
+                    id=f"{relative}:ua-missing",
+                    rule_id="R26_robot_captcha_risk",
+                    severity=Severity.MEDIUM,
+                    summary="Desktop main process does not override the renderer user agent.",
+                    suggestion="Define DESKTOP_USER_AGENT with a stable Chrome UA before issuing navigation requests.",
+                    file=relative,
+                )
+            )
+        else:
+            ua = match.group(1)
+            lowered = ua.lower()
+            if "headless" in lowered or "electron" in lowered or "puppeteer" in lowered:
+                findings.append(
+                    Finding(
+                        id=f"{relative}:ua-robotic",
+                        rule_id="R26_robot_captcha_risk",
+                        severity=Severity.MEDIUM,
+                        summary="Configured desktop user agent contains headless or electron identifiers that trigger captchas.",
+                        suggestion="Use a mainstream Chrome/Safari UA string without Headless/Electron tokens.",
+                        file=relative,
+                        evidence=ua,
+                    )
+                )
+        if "Accept-Language" not in text:
+            findings.append(
+                Finding(
+                    id=f"{relative}:accept-language",
+                    rule_id="R26_robot_captcha_risk",
+                    severity=Severity.MEDIUM,
+                    summary="Requests do not ensure an Accept-Language header, increasing captcha risk.",
+                    suggestion="Default Accept-Language via session.webRequest.onBeforeSendHeaders to mirror a real browser.",
+                    file=relative,
+                )
+            )
     return findings

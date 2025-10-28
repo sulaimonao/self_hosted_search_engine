@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TabsBar } from "@/components/browser/Tabs";
 import { AddressBar } from "@/components/browser/AddressBar";
+import { NavHistory } from "@/components/browser/nav-history";
 import { ModeToggle } from "@/components/browser/ModeToggle";
 import { StatusBar } from "@/components/browser/StatusBar";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
@@ -112,7 +113,11 @@ export function BrowserShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const fallbackWebviewRef = useRef<ElectronWebviewElement | null>(null);
+  const fallbackIframeRef = useRef<HTMLIFrameElement | null>(null);
   const viewContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const historyRef = useRef(new NavHistory());
+  const [fallbackUrl, setFallbackUrl] = useState<string>(() => activeTab?.url ?? "https://wikipedia.org");
 
   const [supportsWebview, setSupportsWebview] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -129,6 +134,92 @@ export function BrowserShell() {
     const ua = window.navigator?.userAgent ?? "";
     setSupportsWebview(/Electron/i.test(ua));
   }, []);
+
+  const updateTabFromHistory = useCallback(
+    (url: string, options?: { loading?: boolean; title?: string | null }) => {
+      if (!activeTab?.id) {
+        return;
+      }
+      const history = historyRef.current;
+      const normalized = url.trim();
+      if (!normalized) {
+        return;
+      }
+      const nextTitle =
+        options?.title && options.title.trim()
+          ? options.title.trim()
+          : activeTab.title && activeTab.title.trim()
+            ? activeTab.title
+            : normalized;
+      setFallbackUrl((current) => (current === normalized ? current : normalized));
+      useAppStore.getState().updateTab(activeTab.id, {
+        url: normalized,
+        title: nextTitle,
+        canGoBack: history.canBack(),
+        canGoForward: history.canForward(),
+        isLoading: options?.loading ?? false,
+        error: null,
+      });
+    },
+    [activeTab?.id, activeTab?.title],
+  );
+
+  useEffect(() => {
+    if (browserAPI || supportsWebview) {
+      historyRef.current.reset(activeTab?.url ?? "");
+      return;
+    }
+    const history = historyRef.current;
+    const initialUrl = activeTab?.url ?? "https://wikipedia.org";
+    history.reset(initialUrl);
+    if (initialUrl) {
+      updateTabFromHistory(initialUrl, { loading: false });
+    }
+  }, [activeTab?.id, browserAPI, supportsWebview, updateTabFromHistory]);
+
+  useEffect(() => {
+    if (browserAPI || supportsWebview) {
+      return;
+    }
+    const url = activeTab?.url ?? "https://wikipedia.org";
+    const history = historyRef.current;
+    if (!url.trim()) {
+      return;
+    }
+    if (history.current() === url) {
+      return;
+    }
+    history.push(url);
+    updateTabFromHistory(history.current(), { loading: true });
+  }, [activeTab?.url, browserAPI, supportsWebview, updateTabFromHistory]);
+
+  useEffect(() => {
+    if (browserAPI || supportsWebview) {
+      return;
+    }
+    const handler = (event: MessageEvent) => {
+      const data = event?.data;
+      if (!data || typeof data !== "object") {
+        return;
+      }
+      const type = (data as { type?: unknown }).type;
+      if (type !== "browser:navigated") {
+        return;
+      }
+      const url = typeof (data as { url?: unknown }).url === "string" ? data.url : null;
+      const title = typeof (data as { title?: unknown }).title === "string" ? data.title : null;
+      if (!url || !url.trim()) {
+        return;
+      }
+      const history = historyRef.current;
+      history.push(url);
+      updateTabFromHistory(history.current(), { loading: false, title });
+    };
+    window.addEventListener("message", handler);
+    return () => {
+      window.removeEventListener("message", handler);
+    };
+  }, [browserAPI, supportsWebview, updateTabFromHistory]);
 
   useEffect(() => {
     if (!browserAPI || !viewContainerRef.current) {
@@ -272,33 +363,79 @@ export function BrowserShell() {
       browserAPI.back({ tabId: activeTab?.id });
       return;
     }
-    const webview = fallbackWebviewRef.current;
-    if (webview?.canGoBack?.()) {
-      webview.goBack?.();
+    if (supportsWebview) {
+      const webview = fallbackWebviewRef.current;
+      if (webview?.canGoBack?.()) {
+        webview.goBack?.();
+      }
+      return;
     }
-  }, [browserAPI, activeTab?.id]);
+    const history = historyRef.current;
+    const previous = history.back();
+    const target = previous ?? history.current();
+    if (target) {
+      updateTabFromHistory(target, { loading: true });
+    }
+  }, [activeTab?.id, browserAPI, supportsWebview, updateTabFromHistory]);
 
   const handleForward = useCallback(() => {
     if (browserAPI) {
       browserAPI.forward({ tabId: activeTab?.id });
       return;
     }
-    const webview = fallbackWebviewRef.current;
-    if (webview?.canGoForward?.()) {
-      webview.goForward?.();
+    if (supportsWebview) {
+      const webview = fallbackWebviewRef.current;
+      if (webview?.canGoForward?.()) {
+        webview.goForward?.();
+      }
+      return;
     }
-  }, [browserAPI, activeTab?.id]);
+    const history = historyRef.current;
+    const next = history.forward();
+    const target = next ?? history.current();
+    if (target) {
+      updateTabFromHistory(target, { loading: true });
+    }
+  }, [activeTab?.id, browserAPI, supportsWebview, updateTabFromHistory]);
 
   const handleReload = useCallback(() => {
     if (browserAPI) {
       browserAPI.reload({ tabId: activeTab?.id });
       return;
     }
-    const webview = fallbackWebviewRef.current;
-    if (webview) {
-      webview.reload?.();
+    if (supportsWebview) {
+      const webview = fallbackWebviewRef.current;
+      if (webview) {
+        webview.reload?.();
+      }
+      return;
     }
-  }, [browserAPI, activeTab?.id]);
+    const history = historyRef.current;
+    const url = history.current();
+    if (!url) {
+      return;
+    }
+    const iframe = fallbackIframeRef.current;
+    if (iframe) {
+      try {
+        iframe.src = url;
+      } catch (error) {
+        console.warn("[browser] failed to reload iframe", error);
+      }
+    }
+    updateTabFromHistory(url, { loading: true });
+  }, [activeTab?.id, browserAPI, supportsWebview, updateTabFromHistory]);
+
+  const handleIframeLoad = useCallback(() => {
+    if (browserAPI || supportsWebview) {
+      return;
+    }
+    const currentUrl = historyRef.current.current() || fallbackUrl;
+    if (!currentUrl) {
+      return;
+    }
+    updateTabFromHistory(currentUrl, { loading: false });
+  }, [browserAPI, supportsWebview, fallbackUrl, updateTabFromHistory]);
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -420,21 +557,24 @@ export function BrowserShell() {
       <main ref={viewContainerRef} className="relative flex flex-1 overflow-hidden">
         {hasBrowserAPI ? (
           <div className="h-full w-full" aria-hidden />
+        ) : supportsWebview ? (
+          <webview
+            ref={fallbackWebviewRef}
+            src={activeTab?.url ?? "https://wikipedia.org"}
+            title={activeTab?.title ?? "tab"}
+            className="h-full w-full border-0"
+            partition="persist:main"
+            allowpopups
+          />
         ) : (
-          supportsWebview ? (
-            <webview
-              ref={fallbackWebviewRef}
-              src={activeTab?.url ?? "https://wikipedia.org"}
-              title={activeTab?.title ?? "tab"}
-              className="h-full w-full border-0"
-              partition="persist:main"
-              allowpopups
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-muted/40 text-sm text-muted-foreground">
-              Embedded preview requires the desktop app.
-            </div>
-          )
+          <iframe
+            ref={fallbackIframeRef}
+            src={fallbackUrl}
+            title={activeTab?.title ?? "tab"}
+            className="h-full w-full border-0"
+            allow="accelerometer; autoplay; clipboard-read; clipboard-write; encrypted-media; geolocation; microphone; camera; midi; payment"
+            onLoad={handleIframeLoad}
+          />
         )}
 
         {activeTab?.error ? (

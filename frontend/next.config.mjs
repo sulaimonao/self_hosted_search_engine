@@ -4,12 +4,14 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:5050";
+const DEFAULT_BACKEND_PORT = process.env.BACKEND_PORT?.trim() || "5050";
+const DEFAULT_API_BASE_URL = `http://127.0.0.1:${DEFAULT_BACKEND_PORT}`;
 
 const API_BASE_URL = (() => {
-  const explicit = process.env.NEXT_PUBLIC_API_BASE_URL;
+  const explicit =
+    process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_URL || process.env.BACKEND_URL;
   if (explicit && explicit.trim().length > 0) {
-    return explicit;
+    return explicit.trim();
   }
 
   return DEFAULT_API_BASE_URL;

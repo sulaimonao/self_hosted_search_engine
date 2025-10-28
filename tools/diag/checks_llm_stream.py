@@ -107,6 +107,29 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
 
 
 @register(
+    "R24_stream_render_required",
+    description="Renderer chat hook must consume fetch streams progressively",
+    severity=Severity.HIGH,
+)
+def rule_stream_render_required(context: RuleContext) -> Iterable[Finding]:
+    hook_text = context.read_text("frontend/src/hooks/useLlmStream.ts")
+    if not hook_text:
+        return []
+    if "getReader" in hook_text or "readTextStream" in hook_text:
+        return []
+    return [
+        Finding(
+            id="llm-stream:renderer-stream-missing",
+            rule_id="R24_stream_render_required",
+            severity=Severity.HIGH,
+            summary="useLlmStream.ts is not reading the Response body as a stream, preventing progressive rendering.",
+            suggestion="Use response.body.getReader() or the readTextStream helper to yield incremental chunks to the UI.",
+            file="frontend/src/hooks/useLlmStream.ts",
+        )
+    ]
+
+
+@register(
     "R21_chat_message_guard",
     description="Chat API must emit a contentful message field with punctuation guards",
     severity=Severity.MEDIUM,

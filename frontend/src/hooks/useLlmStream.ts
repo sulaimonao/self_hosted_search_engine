@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import type { ChatResponsePayload, ChatStreamEvent } from "@/lib/types";
+import { readTextStream } from "@/lib/stream";
 
 type LlmFramePayload = {
   requestId?: string | null;
@@ -84,6 +85,17 @@ let bridgeUnsubscribe: (() => void) | null = null;
 const store = new Store<LlmStreamSnapshot>(defaultSnapshot);
 let frameAccumulator = "";
 let frameAccumulatorRequestId: string | null = null;
+let fetchController: AbortController | null = null;
+let fetchRequestId: string | null = null;
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+
+function resolveApi(path: string): string {
+  if (!API_BASE) {
+    return path;
+  }
+  return `${API_BASE}${path}`;
+}
 
 function update(mutator: (current: LlmStreamSnapshot) => LlmStreamSnapshot) {
   store.set(mutator(store.get()));
@@ -284,18 +296,92 @@ export function useLlmStream(): LlmStreamHook {
 
   const start = useCallback(async ({ requestId, body }: LlmStreamStartOptions) => {
     ensureBridge();
-    const target = bridge;
-    if (!target || typeof target.stream !== "function") {
-      throw new Error("LLM stream bridge unavailable");
+    const normalizedBody: Record<string, unknown> = { ...(body ?? {}) };
+    if (typeof normalizedBody["request_id"] !== "string" || !normalizedBody["request_id"]) {
+      normalizedBody["request_id"] = requestId;
     }
+    normalizedBody["stream"] = true;
+
     store.set({ ...defaultSnapshot, requestId });
     resetFrameAccumulator(requestId);
+
+    const target = bridge;
+    if (target && typeof target.stream === "function") {
+      try {
+        await target.stream({ requestId, body: normalizedBody });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "stream_failed");
+        update((current) => ({ ...current, done: true, error: message }));
+        throw error;
+      }
+      return;
+    }
+
+    if (typeof window === "undefined" || typeof window.fetch !== "function") {
+      const error = new Error("LLM stream bridge unavailable");
+      update((current) => ({ ...current, done: true, error: error.message }));
+      throw error;
+    }
+
+    const controller = new AbortController();
+    if (fetchController) {
+      try {
+        fetchController.abort();
+      } catch (error) {
+        console.warn("[llm] failed to abort existing stream", error);
+      }
+    }
+    fetchController = controller;
+    fetchRequestId = requestId;
+
     try {
-      await target.stream({ requestId, body });
+      const response = await fetch(resolveApi("/api/chat/stream"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(normalizedBody),
+        signal: controller.signal,
+        credentials: "include",
+      });
+
+      if (!response.ok || !response.body) {
+        const message = `stream_http_${response.status}`;
+        update((current) => ({ ...current, done: true, error: message }));
+        throw new Error(message);
+      }
+
+      let buffer = "";
+      for await (const chunk of readTextStream(response)) {
+        buffer += chunk;
+        let index = buffer.indexOf("\n\n");
+        while (index !== -1) {
+          const frame = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          if (frame.trim()) {
+            handleFrame({ requestId, frame });
+          }
+          index = buffer.indexOf("\n\n");
+        }
+      }
+      if (buffer.trim()) {
+        handleFrame({ requestId, frame: buffer });
+      }
+      update((current) => ({ ...current, done: true }));
     } catch (error) {
+      if (controller.signal.aborted) {
+        update((current) => ({ ...current, done: true }));
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error ?? "stream_failed");
       update((current) => ({ ...current, done: true, error: message }));
-      throw error;
+      throw error instanceof Error ? error : new Error(message);
+    } finally {
+      if (fetchController === controller) {
+        fetchController = null;
+        fetchRequestId = null;
+      }
     }
   }, []);
 
@@ -311,6 +397,18 @@ export function useLlmStream(): LlmStreamHook {
           console.warn("[llm] abort failed", error);
         }
       }
+      if (
+        fetchController &&
+        (!effectiveId || !fetchRequestId || effectiveId === fetchRequestId)
+      ) {
+        try {
+          fetchController.abort();
+        } catch (error) {
+          console.warn("[llm] failed to abort fetch stream", error);
+        }
+        fetchController = null;
+        fetchRequestId = null;
+      }
       if (effectiveId) {
         if (frameAccumulatorRequestId && frameAccumulatorRequestId === effectiveId) {
           resetFrameAccumulator(null);
@@ -323,7 +421,8 @@ export function useLlmStream(): LlmStreamHook {
     [],
   );
 
-  const supported = Boolean(resolveBridge());
+  const supported = Boolean(resolveBridge()) ||
+    (typeof window !== "undefined" && typeof window.fetch === "function");
 
   return {
     state: snapshot,
