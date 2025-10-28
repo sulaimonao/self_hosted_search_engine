@@ -37,6 +37,9 @@ diagnostics/*
 !backend/app/api/docs.py
 !backend/app/api/domains.py
 !backend/app/api/memory.py
+!backend/app/api/agent_logs.py
+!backend/app/api/domain_profiles.py
+!backend/app/api/index_health.py
 !backend/app/api/chat_history.py
 !backend/app/api/browser.py
 !backend/app/api/self_heal.py
@@ -71,6 +74,11 @@ diagnostics/*
 !backend/app/services/__init__.py
 !backend/app/services/source_follow.py
 !backend/app/services/domain_profiles.py
+!backend/app/services/log_bus.py
+!backend/app/services/agent_tracing.py
+!backend/app/services/auth_clearance.py
+!backend/app/services/fallbacks.py
+!backend/app/services/index_health.py
 !backend/tools/__init__.py
 !backend/tools/termsearch/__init__.py
 !backend/tools/termsearch/core.py
@@ -78,6 +86,7 @@ diagnostics/*
 !backend/app/db/schema.py
 !backend/app/db/store.py
 !backend/app/db/migrations/001_init.sql
+!backend/app/db/domain_profiles.py
 !backend/app/__main__.py
 !backend/app/shadow/__init__.py
 !backend/app/shadow/manager.py
@@ -106,6 +115,9 @@ diagnostics/*
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
 !tests/backend/test_vector_index_retry.py
+!tests/backend/test_fallbacks.py
+!tests/backend/test_auth_clearance.py
+!tests/backend/test_index_health.py
 !tests/backend/test_migrations.py
 !tests/backend/test_app_state_browser.py
 !tests/backend/test_agent_runtime.py

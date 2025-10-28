@@ -7,11 +7,13 @@ import { useShallow } from "zustand/react/shallow";
 
 import { CopilotHeader } from "@/components/copilot-header";
 import { ChatMessageMarkdown } from "@/components/chat-message";
+import { AgentTracePanel } from "@/components/AgentTracePanel";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { UsePageContextToggle } from "@/components/UsePageContextToggle";
+import { ReasoningToggle } from "@/components/ReasoningToggle";
 import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 import { useLlmStream } from "@/hooks/useLlmStream";
 import {
@@ -468,6 +470,8 @@ export function ChatPanel() {
         const result = await runAutopilotTool(tool.endpoint, {
           method: tool.method,
           payload: tool.payload ?? undefined,
+          chatId: threadId,
+          messageId,
         });
         const summary = summarizeToolResult(result);
         setToolExecutions((prev) => ({
@@ -484,7 +488,7 @@ export function ChatPanel() {
         setBanner({ intent: "error", text: message });
       }
     },
-    [setBanner],
+    [setBanner, threadId],
   );
 
   const handleLinkNavigation = useCallback(
@@ -948,12 +952,15 @@ export function ChatPanel() {
         timeSummary={timeSummary}
         controlsDisabled={isBusy || installing}
         contextControl={
-          <UsePageContextToggle
-            enabled={usePageContext}
-            disabled={isBusy || installing || !activeTab?.url}
-            onChange={handleContextToggle}
-            summary={contextSummary}
-          />
+          <div className="flex flex-col gap-2">
+            <UsePageContextToggle
+              enabled={usePageContext}
+              disabled={isBusy || installing || !activeTab?.url}
+              onChange={handleContextToggle}
+              summary={contextSummary}
+            />
+            <ReasoningToggle />
+          </div>
         }
       />
       {statusBanner ? (
@@ -1126,20 +1133,7 @@ export function ChatPanel() {
                             ) : null}
                           </div>
                         ) : null}
-                        {message.reasoning ? (
-                          <details className="rounded-md border bg-muted/50 px-3 py-2 text-xs text-foreground/90">
-                            <summary className="cursor-pointer font-medium text-foreground">
-                              Show reasoning
-                            </summary>
-                            <div className="mt-2">
-                              <ChatMessageMarkdown
-                                text={message.reasoning}
-                                onLinkClick={handleLinkNavigation}
-                                className="text-xs"
-                              />
-                            </div>
-                          </details>
-                        ) : null}
+                        <AgentTracePanel chatId={threadId} messageId={message.id} />
                         {message.model || message.traceId ? (
                           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
                             {message.model ? `Model ${message.model}` : null}

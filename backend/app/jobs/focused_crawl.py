@@ -33,6 +33,7 @@ DEFAULT_DISCOVERY_DEPTH = 4
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from crawler.frontier import Candidate
+    from backend.app.services.log_bus import AgentLogBus
 
 
 def _document_key(url: str, content_hash: str) -> str:
@@ -526,6 +527,7 @@ class FocusedCrawlManager:
     db: LearnedWebDB
     state_db: AppStateDB | None = None
     progress_bus: ProgressBus | None = None
+    agent_log_bus: "AgentLogBus" | None = None
 
     def __post_init__(self) -> None:
         import threading
