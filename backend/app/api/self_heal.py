@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Dict, List, Mapping, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.ai.self_heal_prompt import ALLOWED_VERBS, build_prompts
 from backend.app.api.reasoning import route_to_browser  # noqa: F401 - imported for future integration
-from backend.app.services import ollama_client as ollama_services
+from backend.app.llm.ollama_client import (
+    DEFAULT_MODEL as DEFAULT_SELF_HEAL_MODEL,
+    OllamaClient,
+)
 from backend.app.services.progress_bus import ProgressBus
-from engine.llm.ollama_client import ChatMessage, OllamaClient, OllamaClientError
 
 bp = Blueprint("self_heal_api", __name__, url_prefix="/api")
 
@@ -20,7 +22,33 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
 _VALID_VARIANTS = {"lite", "deep", "headless", "repair"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
-_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+@dataclass(slots=True)
+class SelfHealDirective:
+    """Structured directive consumed by the in-tab executor."""
+
+    reason: str
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    plan_confidence: Optional[str] = None
+    needs_user_permission: Optional[bool] = None
+    ask_user: Optional[List[str]] = None
+    fallback: Optional[Dict[str, Any]] = None
+
+    def model_dump(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"reason": self.reason, "steps": self.steps}
+        if self.plan_confidence:
+            payload["plan_confidence"] = self.plan_confidence
+        if self.needs_user_permission is not None:
+            payload["needs_user_permission"] = self.needs_user_permission
+        if self.ask_user:
+            payload["ask_user"] = self.ask_user
+        if self.fallback:
+            payload["fallback"] = self.fallback
+        return payload
+
+
+_OLLAMA_CLIENT = OllamaClient()
 
 
 def _coerce_incident(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -55,44 +83,6 @@ def _coerce_variant(raw: str | None) -> str:
     return DEFAULT_VARIANT
 
 
-def _extract_json_blob(text: str) -> str:
-    stripped = text.strip()
-    if not stripped:
-        raise ValueError("planner returned empty response")
-    match = _CODE_BLOCK_RE.search(stripped)
-    if match:
-        candidate = match.group(1).strip()
-    else:
-        candidate = stripped
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start != -1 and end != -1 and end >= start:
-        return candidate[start : end + 1].strip()
-    return candidate
-
-
-def _call_llm(system_prompt: str, user_prompt: str, *, max_tokens: int = 700) -> str:
-    engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
-    if engine_config is None:
-        raise RuntimeError("RAG_ENGINE_CONFIG missing from app configuration")
-    primary_model = getattr(engine_config.models, "llm_primary", None) or "gpt-oss"
-    resolved_model = ollama_services.resolve_model_name(
-        primary_model,
-        base_url=engine_config.ollama.base_url,
-        chat_only=True,
-    )
-    client = OllamaClient(engine_config.ollama.base_url, timeout=60.0)
-    messages = [
-        ChatMessage(role="system", content=system_prompt),
-        ChatMessage(role="user", content=user_prompt),
-    ]
-    options = {"temperature": 0.1, "num_predict": max_tokens, "format": "json"}
-    try:
-        return client.chat(resolved_model, messages, options=options)
-    except OllamaClientError as exc:  # pragma: no cover - network errors are external
-        raise RuntimeError(f"ollama chat failed: {exc}") from exc
-
-
 def _coerce_str(value: Any) -> str:
     if isinstance(value, str):
         text = value.strip()
@@ -105,23 +95,18 @@ def _parse_plan(response: Any) -> Dict[str, Any]:
     if isinstance(response, Mapping):
         return dict(response)
     if isinstance(response, str):
-        payload = _extract_json_blob(response)
         try:
-            return json.loads(payload)
+            return json.loads(response)
         except json.JSONDecodeError as exc:
             raise ValueError(f"planner returned invalid JSON: {exc}") from exc
     raise TypeError("planner response must be a string or mapping")
 
 
-def _fallback_directive(reason: str) -> Dict[str, Any]:
-    return {
-        "reason": reason,
-        "plan_confidence": "low",
-        "steps": [{"type": "reload"}],
-    }
+def _fallback_directive(reason: str) -> SelfHealDirective:
+    return SelfHealDirective(reason=reason, steps=[{"type": "reload"}], plan_confidence="low")
 
 
-def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[str], bool]:
+def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, List[str], bool]:
     notes: List[str] = []
     steps_payload: List[Dict[str, Any]] = []
     steps_in = plan.get("steps")
@@ -195,21 +180,21 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[
             continue
 
     reason = _coerce_str(plan.get("reason")) or "Planned fix"
-    directive: Dict[str, Any] = {"reason": reason, "steps": steps_payload}
+    directive_payload: Dict[str, Any] = {"reason": reason, "steps": steps_payload}
 
     confidence = _coerce_str(plan.get("plan_confidence")).lower()
     if confidence in {"low", "medium", "high"}:
-        directive["plan_confidence"] = confidence
+        directive_payload["plan_confidence"] = confidence
 
     needs_permission = plan.get("needs_user_permission")
     if isinstance(needs_permission, bool):
-        directive["needs_user_permission"] = needs_permission
+        directive_payload["needs_user_permission"] = needs_permission
 
     ask_user = plan.get("ask_user")
     if isinstance(ask_user, (list, tuple)):
         questions = [question for question in (_coerce_str(item) for item in ask_user) if question]
         if questions:
-            directive["ask_user"] = questions
+            directive_payload["ask_user"] = questions
 
     fallback_info = plan.get("fallback")
     if isinstance(fallback_info, Mapping):
@@ -218,7 +203,7 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[
         if isinstance(headless_hint_raw, (list, tuple)):
             hints = [hint for hint in (_coerce_str(item) for item in headless_hint_raw) if hint]
         enabled_flag = fallback_info.get("enabled")
-        directive["fallback"] = {
+        directive_payload["fallback"] = {
             "enabled": bool(enabled_flag) if enabled_flag is not None else True,
             "headless_hint": hints,
         }
@@ -227,6 +212,14 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Dict[str, Any], List[
         notes.append("Planner produced no executable steps; fallback reload() will be used.")
         return _fallback_directive(reason), notes, True
 
+    directive = SelfHealDirective(
+        reason=directive_payload["reason"],
+        steps=directive_payload["steps"],
+        plan_confidence=directive_payload.get("plan_confidence"),
+        needs_user_permission=directive_payload.get("needs_user_permission"),
+        ask_user=directive_payload.get("ask_user"),
+        fallback=directive_payload.get("fallback"),
+    )
     return directive, notes, False
 
 
@@ -254,25 +247,31 @@ def self_heal():
     )
 
     try:
-        raw_response = _call_llm(system_prompt, user_prompt)
-        preview = raw_response.strip()[:500]
+        plan_payload_raw = _OLLAMA_CLIENT.chat_json(
+            system=system_prompt,
+            user=user_prompt,
+            model=DEFAULT_SELF_HEAL_MODEL,
+        )
+        plan_payload = _parse_plan(plan_payload_raw)
+        serialized = json.dumps(plan_payload, ensure_ascii=False)
+        preview = serialized[:500]
         _publish_diagnostic(
             "planner.response",
-            f"Planner response received ({len(raw_response)} chars).",
+            f"Planner response received ({len(serialized)} chars).",
             preview=preview,
+            model=DEFAULT_SELF_HEAL_MODEL,
         )
-        plan_payload = _parse_plan(raw_response)
         directive, notes, used_fallback = _validate_and_coerce(plan_payload)
         for note in notes:
             _publish_diagnostic("planner.validation", note)
         if used_fallback:
             _publish_diagnostic("planner.fallback", "Planner fallback triggered; reload() selected.")
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
-        LOGGER.exception("Self-heal planner failed: %%s", exc)
+        LOGGER.exception("Self-heal planner failed: %s", exc)
         reason = f"Fallback reload (planner error: {exc})"
         _publish_diagnostic("planner.error", reason)
         directive = _fallback_directive(reason)
 
     mode = "apply" if apply else "plan"
     _publish_diagnostic("planner.complete", f"Planner returning directive (mode={mode}).")
-    return jsonify({"mode": mode, "directive": directive}), 200
+    return jsonify({"mode": mode, "directive": directive.model_dump()}), 200
