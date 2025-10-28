@@ -40,6 +40,7 @@ diagnostics/*
 !backend/app/api/chat_history.py
 !backend/app/api/browser.py
 !backend/app/api/self_heal.py
+!backend/app/api/admin.py
 !backend/app/api/_shipit_jobs.py
 !backend/app/api/shipit_crawl.py
 !backend/app/api/shipit_diag.py
