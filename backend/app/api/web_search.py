@@ -9,7 +9,7 @@ from flask import Blueprint, current_app, jsonify, request
 bp = Blueprint("web_search_api", __name__, url_prefix="/api")
 _FALLBACK_RESULT = [
     {
-        "title": "No live results",
+        "title": "No live data retrieved",
         "url": "",
         "snippet": "Returned fallback to avoid blank responses.",
     }

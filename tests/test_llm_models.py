@@ -88,6 +88,7 @@ def test_llm_health_reports_reachability(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 def test_autopull_disabled_without_flag(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DEV_ALLOW_AUTOPULL", raising=False)
     app = app_module.create_app()
     client = app.test_client()
 

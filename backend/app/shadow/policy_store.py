@@ -164,9 +164,9 @@ class ShadowPolicyStore:
                 domain = self._normalize_domain(key)
                 if not domain:
                     continue
-                self._domains[domain] = ShadowPolicy(policy_id=domain).with_updates(
-                    value
-                )
+                self._domains[domain] = ShadowPolicy(
+                    policy_id=f"domain:{domain}"
+                ).with_updates(value)
         updated_at = content.get("updated_at")
         try:
             self._updated_at = float(updated_at)
@@ -232,7 +232,7 @@ class ShadowPolicyStore:
             raise ValueError("invalid_domain")
         with self._lock:
             existing = self._domains.get(normalized) or ShadowPolicy(
-                policy_id=normalized
+                policy_id=f"domain:{normalized}"
             )
             updated = existing.with_updates(payload)
             self._domains[normalized] = updated

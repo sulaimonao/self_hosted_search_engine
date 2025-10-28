@@ -15,6 +15,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure environment variables from other tests do not leak in."""
 
     monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
 
 
 def test_resolve_base_url_prefers_explicit(monkeypatch: pytest.MonkeyPatch) -> None:

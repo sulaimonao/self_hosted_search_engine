@@ -865,7 +865,8 @@ def _execute_chat_request(
         missing_reasons: list[str] = []
 
         for attempt_index, (alias_label, candidate) in enumerate(candidate_pairs, start=1):
-            attempted.append(candidate)
+            display_model = alias_label or candidate
+            attempted.append(display_model)
             prepared_messages, image_used, system_prompt = _prepare_messages(
                 candidate=candidate,
                 base_messages=sanitized_messages,
@@ -882,8 +883,8 @@ def _execute_chat_request(
                 "INFO",
                 "chat.request",
                 trace=trace_id,
-                model=candidate,
-                alias=alias_label if alias_label and alias_label != candidate else None,
+                model=display_model,
+                alias=candidate if alias_label and alias_label != candidate else None,
                 attempt=attempt_index,
                 url=url_value,
                 has_text=bool(text_context),
@@ -891,10 +892,10 @@ def _execute_chat_request(
             )
 
             if hasattr(chat_logger, "info"):
-                chat_logger.info("forwarding chat request to ollama (model=%s)", candidate)
+                chat_logger.info("forwarding chat request to ollama (model=%s)", display_model)
 
             request_payload: dict[str, Any] = {
-                "model": candidate,
+                "model": display_model,
                 "messages": prepared_messages,
                 "stream": bool(streaming_requested),
                 "system": system_prompt,
@@ -909,7 +910,7 @@ def _execute_chat_request(
                     "INFO",
                     "chat.json_disabled",
                     trace=trace_id,
-                    model=candidate,
+                    model=display_model,
                 )
 
             response = None
@@ -917,7 +918,7 @@ def _execute_chat_request(
             try:
                 with start_span(
                     "llm.chat",
-                    attributes={"llm.model": candidate, "llm.attempt": attempt_index},
+                    attributes={"llm.model": display_model, "llm.attempt": attempt_index},
                     inputs={
                         "message_count": len(prepared_messages),
                         "has_image": bool(image_used),
@@ -939,7 +940,7 @@ def _execute_chat_request(
                     "ERROR",
                     "chat.error",
                     trace=trace_id,
-                    model=candidate,
+                    model=display_model,
                     attempt=attempt_index,
                     error=g.chat_error_class,
                     msg=_truncate(str(exc), _MAX_ERROR_PREVIEW),
@@ -976,7 +977,7 @@ def _execute_chat_request(
                     "ERROR",
                     "chat.error",
                     trace=trace_id,
-                    model=candidate,
+                    model=display_model,
                     code=404,
                     msg=reason,
                 )
@@ -991,7 +992,7 @@ def _execute_chat_request(
                     "ERROR",
                     "chat.error",
                     trace=trace_id,
-                    model=candidate,
+                    model=display_model,
                     code=response.status_code,
                     msg=g.chat_error_message,
                 )
@@ -1008,7 +1009,7 @@ def _execute_chat_request(
                 error_response.headers["X-Request-Id"] = request_id
                 _log_stream_summary(
                     request_id=request_id,
-                    model=candidate,
+                    model=display_model,
                     transport=stream_transport if streaming_requested else "json",
                     frames=0,
                     previews=[],
@@ -1020,7 +1021,7 @@ def _execute_chat_request(
 
             if streaming_requested:
                 return _stream_chat_response(
-                    candidate=candidate,
+                    candidate=display_model,
                     attempt_index=attempt_index,
                     response=response,
                     trace_id=trace_id,
@@ -1118,7 +1119,7 @@ def _execute_chat_request(
             previews = [_preview_bytes(preview_source)] if preview_source else []
             _log_stream_summary(
                 request_id=request_id,
-                model=candidate,
+                model=display_model,
                 transport="json",
                 frames=1,
                 previews=previews,

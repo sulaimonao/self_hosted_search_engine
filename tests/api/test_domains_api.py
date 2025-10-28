@@ -19,14 +19,23 @@ class _DuckDBConnection:
     def execute(self, *args, **kwargs):
         return self
 
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
 
 class _DuckDBStub(SimpleNamespace):
     def connect(self, *args, **kwargs):
         return _DuckDBConnection()
 
 
-if "duckdb" not in sys.modules:
-    sys.modules["duckdb"] = _DuckDBStub()
+try:  # pragma: no cover - exercised indirectly during collection
+    import duckdb  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "duckdb" not in sys.modules:
+        sys.modules["duckdb"] = _DuckDBStub()
 
 
 class _FakeEncoding:
@@ -42,13 +51,19 @@ class _TiktokenStub(SimpleNamespace):
         return _FakeEncoding()
 
 
-if "tiktoken" not in sys.modules:
-    sys.modules["tiktoken"] = _TiktokenStub()
+try:  # pragma: no cover
+    import tiktoken  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "tiktoken" not in sys.modules:
+        sys.modules["tiktoken"] = _TiktokenStub()
 
 
 class _BeautifulSoupStub:
     def __init__(self, *args, **kwargs):
         self._html = args[0] if args else ""
+
+    def __call__(self, *args, **kwargs):
+        return []
 
     def select(self, *args, **kwargs):
         return []
@@ -56,20 +71,29 @@ class _BeautifulSoupStub:
     def find(self, *args, **kwargs):
         return None
 
+    def find_all(self, *args, **kwargs):
+        return []
+
     def get_text(self, *args, **kwargs):
         return self._html
 
 
-if "bs4" not in sys.modules:
-    sys.modules["bs4"] = SimpleNamespace(BeautifulSoup=_BeautifulSoupStub)
+try:  # pragma: no cover
+    import bs4  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "bs4" not in sys.modules:
+        sys.modules["bs4"] = SimpleNamespace(BeautifulSoup=_BeautifulSoupStub)
 
 
 def _trafilatura_extract(html: str, **_kwargs) -> str:
     return ""
 
 
-if "trafilatura" not in sys.modules:
-    sys.modules["trafilatura"] = SimpleNamespace(extract=_trafilatura_extract)
+try:  # pragma: no cover
+    import trafilatura  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "trafilatura" not in sys.modules:
+        sys.modules["trafilatura"] = SimpleNamespace(extract=_trafilatura_extract)
 
 
 class _PlaywrightBrowser(SimpleNamespace):
@@ -100,39 +124,49 @@ def _sync_playwright():
     return _SyncPlaywrightStub()
 
 
-if "playwright.sync_api" not in sys.modules:
-    sync_api_module = ModuleType("playwright.sync_api")
-    sync_api_module.Error = RuntimeError
-    sync_api_module.TimeoutError = RuntimeError
-    sync_api_module.sync_playwright = _sync_playwright
-    sys.modules["playwright.sync_api"] = sync_api_module
-    playwright_module = ModuleType("playwright")
-    playwright_module.sync_api = sync_api_module
-    sys.modules["playwright"] = playwright_module
+try:  # pragma: no cover
+    from playwright import sync_api as _playwright_sync_api  # type: ignore  # noqa: F401
+except (ModuleNotFoundError, ImportError):
+    if "playwright.sync_api" not in sys.modules:
+        sync_api_module = ModuleType("playwright.sync_api")
+        sync_api_module.Error = RuntimeError
+        sync_api_module.TimeoutError = RuntimeError
+        sync_api_module.sync_playwright = _sync_playwright
+        sys.modules["playwright.sync_api"] = sync_api_module
+        playwright_module = ModuleType("playwright")
+        playwright_module.sync_api = sync_api_module
+        sys.modules["playwright"] = playwright_module
 
 
 def _pdf_extract_text(*_args, **_kwargs) -> str:
     return ""
 
 
-if "pdfminer.high_level" not in sys.modules:
-    pdf_high_level = ModuleType("pdfminer.high_level")
-    pdf_high_level.extract_text = _pdf_extract_text
-    sys.modules["pdfminer.high_level"] = pdf_high_level
-    pdfminer_module = ModuleType("pdfminer")
-    pdfminer_module.high_level = pdf_high_level
-    sys.modules["pdfminer"] = pdfminer_module
+try:  # pragma: no cover
+    import pdfminer.high_level  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "pdfminer.high_level" not in sys.modules:
+        pdf_high_level = ModuleType("pdfminer.high_level")
+        pdf_high_level.extract_text = _pdf_extract_text
+        sys.modules["pdfminer.high_level"] = pdf_high_level
+        pdfminer_module = ModuleType("pdfminer")
+        pdfminer_module.high_level = pdf_high_level
+        sys.modules["pdfminer"] = pdfminer_module
 
 
 def _httpx_get(*_args, **_kwargs):
     raise RuntimeError("httpx unavailable in tests")
 
 
-if "httpx" not in sys.modules:
-    httpx_module = ModuleType("httpx")
-    httpx_module.HTTPError = Exception
-    httpx_module.get = _httpx_get
-    sys.modules["httpx"] = httpx_module
+try:  # pragma: no cover
+    import httpx  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "httpx" not in sys.modules:
+        httpx_module = ModuleType("httpx")
+        httpx_module.HTTPError = Exception
+        httpx_module.get = _httpx_get
+        httpx_module.post = _httpx_get
+        sys.modules["httpx"] = httpx_module
 
 
 class _FileSystemEvent:
@@ -152,12 +186,15 @@ if _watchdog_module is None:
     _watchdog_module = ModuleType("watchdog")
     sys.modules["watchdog"] = _watchdog_module
 
-if "watchdog.events" not in sys.modules:
-    watchdog_events = ModuleType("watchdog.events")
-    watchdog_events.FileSystemEvent = _FileSystemEvent
-    watchdog_events.FileSystemEventHandler = _FileSystemEventHandler
-    sys.modules["watchdog.events"] = watchdog_events
-    _watchdog_module.events = watchdog_events
+try:  # pragma: no cover
+    import watchdog.events  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "watchdog.events" not in sys.modules:
+        watchdog_events = ModuleType("watchdog.events")
+        watchdog_events.FileSystemEvent = _FileSystemEvent
+        watchdog_events.FileSystemEventHandler = _FileSystemEventHandler
+        sys.modules["watchdog.events"] = watchdog_events
+        _watchdog_module.events = watchdog_events
 
 
 class _Observer:
@@ -174,11 +211,14 @@ class _Observer:
         return None
 
 
-if "watchdog.observers" not in sys.modules:
-    watchdog_observers = ModuleType("watchdog.observers")
-    watchdog_observers.Observer = _Observer
-    sys.modules["watchdog.observers"] = watchdog_observers
-    _watchdog_module.observers = watchdog_observers
+try:  # pragma: no cover
+    import watchdog.observers  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "watchdog.observers" not in sys.modules:
+        watchdog_observers = ModuleType("watchdog.observers")
+        watchdog_observers.Observer = _Observer
+        sys.modules["watchdog.observers"] = watchdog_observers
+        _watchdog_module.observers = watchdog_observers
 
 
 class _CollectorRegistry:
@@ -200,13 +240,16 @@ def _generate_latest(*args, **kwargs) -> bytes:
     return b""
 
 
-if "prometheus_client" not in sys.modules:
-    prom_module = ModuleType("prometheus_client")
-    prom_module.CollectorRegistry = _CollectorRegistry
-    prom_module.Gauge = _Gauge
-    prom_module.CONTENT_TYPE_LATEST = "text/plain"
-    prom_module.generate_latest = _generate_latest
-    sys.modules["prometheus_client"] = prom_module
+try:  # pragma: no cover
+    import prometheus_client  # type: ignore  # noqa: F401
+except ModuleNotFoundError:
+    if "prometheus_client" not in sys.modules:
+        prom_module = ModuleType("prometheus_client")
+        prom_module.CollectorRegistry = _CollectorRegistry
+        prom_module.Gauge = _Gauge
+        prom_module.CONTENT_TYPE_LATEST = "text/plain"
+        prom_module.generate_latest = _generate_latest
+        sys.modules["prometheus_client"] = prom_module
 
 from backend.app.api import domains as domains_api
 from backend.app.db import AppStateDB

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any, Awaitable
 
 import pytest
 
@@ -173,7 +175,29 @@ def test_handle_sources_enqueues_and_limits(tmp_path: Path) -> None:
         await crawler._handle_sources(candidate, result, queue)
         return queued_candidate
 
-    queued = asyncio.run(_run())
+    def _execute(coro: "asyncio.Future[Candidate]" | "asyncio.coroutines") -> Candidate:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        result_box: dict[str, Any] = {}
+        error_box: list[BaseException] = []
+
+        def _runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(coro)
+            except BaseException as exc:  # pragma: no cover - defensive guard
+                error_box.append(exc)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error_box:
+            raise error_box[0]
+        return result_box["value"]
+
+    queued = _execute(_run())
     assert queued.is_source is True
     assert queued.parent_url == "https://example.com/article"
     assert crawler.source_stats["enqueued"] == 1
