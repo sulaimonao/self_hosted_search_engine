@@ -1,36 +1,20 @@
-export async function* readTextStream(
-  response: Response,
-  options: { decoder?: TextDecoder } = {},
-): AsyncGenerator<string, void, unknown> {
-  const body = response.body;
-  if (!body) {
-    return;
-  }
-  const reader = body.getReader();
-  const decoder = options.decoder ?? new TextDecoder();
+
+export async function* readTextStream(stream: ReadableStream<Uint8Array>): AsyncGenerator<string, void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) {
-        const finalChunk = decoder.decode();
-        if (finalChunk) {
-          yield finalChunk;
-        }
-        break;
-      }
-      if (!value || value.length === 0) {
-        continue;
-      }
-      const text = decoder.decode(value, { stream: true });
-      if (text) {
-        yield text;
-      }
+      if (done) break;
+      if (value) yield decoder.decode(value, { stream: true });
     }
   } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // ignore
-    }
+    reader.releaseLock();
   }
+}
+
+export async function collectText(stream: ReadableStream<Uint8Array>): Promise<string> {
+  let out = '';
+  for await (const chunk of readTextStream(stream)) out += chunk;
+  return out;
 }
