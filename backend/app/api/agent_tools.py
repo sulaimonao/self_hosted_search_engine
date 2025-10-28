@@ -8,7 +8,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from observability import start_span
 
-from ..routes.utils import coerce_chat_identifier
+from .utils import coerce_chat_identifier
 from ..services.agent_tracing import publish_agent_step
 
 bp = Blueprint("agent_tools", __name__, url_prefix="/api/tools")

@@ -8,7 +8,7 @@ import time
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
-from ..routes.utils import coerce_chat_identifier, sse_format
+from .utils import coerce_chat_identifier, sse_format
 from ..services.log_bus import AgentLogBus
 
 

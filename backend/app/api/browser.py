@@ -12,7 +12,7 @@ import time
 
 from backend.app.db import AppStateDB
 
-from ..routes.utils import coerce_chat_identifier
+from .utils import coerce_chat_identifier
 from ..services.agent_tracing import publish_agent_step
 from ..services.fallbacks import smart_fetch
 
