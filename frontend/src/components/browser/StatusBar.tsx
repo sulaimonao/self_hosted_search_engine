@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useHealth } from "@/lib/health";
+import { IndexHealthBadge } from "@/components/index-health/IndexHealthBadge";
 import { useAppStore } from "@/state/useAppStore";
 
 function resolveHealthColor(status: string | undefined) {
@@ -41,9 +42,12 @@ export function StatusBar() {
           : "Idle"}
       </div>
       <div>Jobs queued: {queueCount}</div>
-      <div className="flex items-center gap-2">
-        <span className={`inline-flex h-2.5 w-2.5 rounded-full ${resolveHealthColor(health?.status)}`} />
-        API
+      <div className="flex items-center gap-3">
+        <span className="flex items-center gap-2">
+          <span className={`inline-flex h-2.5 w-2.5 rounded-full ${resolveHealthColor(health?.status)}`} />
+          API
+        </span>
+        <IndexHealthBadge />
       </div>
     </footer>
   );

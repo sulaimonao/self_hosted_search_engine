@@ -5,7 +5,7 @@
 .PHONY: desktop desktop-build dev-desktop
 .PHONY: api web
 .PHONY: lint-makefile diag
-.PHONY: ollama-pull-self-heal ollama-health
+.PHONY: ollama-pull-self-heal ollama-health index-health index-rebuild
 
 lint-makefile:
 	@echo "Ensure all recipe lines use tabs (not spaces)."
@@ -21,9 +21,29 @@ ollama-health:
 	API_ORIGIN="$${API_ORIGIN%/}"; \
 	RESPONSE=$$(curl -sS "$${API_ORIGIN}/api/admin/ollama/health"); \
 	if command -v jq >/dev/null 2>&1; then \
-	  printf '%s\n' "$$RESPONSE" | jq .; \
+	printf '%s\n' "$$RESPONSE" | jq .; \
 	else \
-	  printf '%s\n' "$$RESPONSE"; \
+	printf '%s\n' "$$RESPONSE"; \
+	fi
+
+index-health:
+	@API_ORIGIN="$${API_ORIGIN:-http://127.0.0.1:$(BACKEND_PORT)}"; \
+	API_ORIGIN="$${API_ORIGIN%/}"; \
+	RESPONSE=$$(curl -sS "$$API_ORIGIN/api/index/health"); \
+	if command -v jq >/dev/null 2>&1; then \
+	printf '%s\n' "$$RESPONSE" | jq .; \
+	else \
+	printf '%s\n' "$$RESPONSE"; \
+	fi
+
+index-rebuild:
+	@API_ORIGIN="$${API_ORIGIN:-http://127.0.0.1:$(BACKEND_PORT)}"; \
+	API_ORIGIN="$${API_ORIGIN%/}"; \
+	RESPONSE=$$(curl -sS -X POST "$$API_ORIGIN/api/index/rebuild" -H 'Content-Type: application/json' -d '{}'); \
+	if command -v jq >/dev/null 2>&1; then \
+	printf '%s\n' "$$RESPONSE" | jq .; \
+	else \
+	printf '%s\n' "$$RESPONSE"; \
 	fi
 
 FRONTEND_PORT ?= 3100

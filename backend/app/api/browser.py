@@ -8,7 +8,13 @@ from typing import Any
 
 from flask import Blueprint, abort, current_app, jsonify, request
 
+import time
+
 from backend.app.db import AppStateDB
+
+from ..routes.utils import coerce_chat_identifier
+from ..services.agent_tracing import publish_agent_step
+from ..services.fallbacks import smart_fetch
 
 _ALLOWED_SHADOW_MODES = {"off", "visited_only", "visited_outbound"}
 
@@ -51,9 +57,22 @@ def get_history():
 def post_history():
     state_db = _state_db()
     payload = request.get_json(force=True, silent=True) or {}
+    started_at = time.time()
+    chat_id = coerce_chat_identifier(request.headers.get("X-Chat-Id"))
+    message_id = coerce_chat_identifier(request.headers.get("X-Message-Id"))
     tab_id = str(payload.get("tab_id") or "").strip() or None
     url = str(payload.get("url") or "").strip()
     if not url:
+        publish_agent_step(
+            tool="browser.history",
+            chat_id=chat_id,
+            message_id=message_id,
+            args={"tab_id": tab_id},
+            status="error",
+            started_at=started_at,
+            ended_at=time.time(),
+            excerpt="url is required",
+        )
         abort(400, "url is required")
     title = payload.get("title")
     referrer = payload.get("referrer")
@@ -81,7 +100,27 @@ def post_history():
         "shadow_job_id": job_id,
         "mode": mode,
     }
+    publish_agent_step(
+        tool="browser.history",
+        chat_id=chat_id,
+        message_id=message_id,
+        args={"url": url, "tab_id": tab_id, "shadow": bool(mode != "off")},
+        status="ok",
+        started_at=started_at,
+        ended_at=time.time(),
+        excerpt=title or url,
+    )
     return jsonify(response), 201
+
+
+@bp.get("/fallback")
+def get_fallback():
+    url = request.args.get("url")
+    if not url:
+        abort(400, "url query parameter is required")
+    query = request.args.get("query") or request.args.get("q")
+    result = smart_fetch(url, query=query)
+    return jsonify(result)
 
 
 @bp.delete("/history/<int:history_id>")

@@ -1141,7 +1141,7 @@ export async function storeChatMessage(
 
 export async function runAutopilotTool(
   endpoint: string,
-  options: { method?: string; payload?: Record<string, unknown> } = {},
+  options: { method?: string; payload?: Record<string, unknown>; chatId?: string | null; messageId?: string | null } = {},
 ): Promise<Record<string, unknown>> {
   const trimmed = endpoint.trim();
   if (!trimmed) {
@@ -1149,6 +1149,12 @@ export async function runAutopilotTool(
   }
   const method = (options.method ?? "POST").toUpperCase();
   const headers: Record<string, string> = {};
+  if (options.chatId) {
+    headers["X-Chat-Id"] = options.chatId;
+  }
+  if (options.messageId) {
+    headers["X-Message-Id"] = options.messageId;
+  }
   let body: string | undefined;
   if (method !== "GET" && method !== "HEAD") {
     Object.assign(headers, JSON_HEADERS);

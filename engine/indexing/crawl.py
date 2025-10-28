@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Callable
 
 import requests
 import trafilatura
@@ -60,6 +60,7 @@ class CrawlClient:
         browser_headless: bool = True,
         browser_navigation_timeout: int = 30_000,
         browser_wait_after_load: float = 0.5,
+        clearance_callback: Optional[Callable[[requests.Response, str | None], None]] = None,
     ) -> None:
         self.user_agent = user_agent
         self.request_timeout = request_timeout
@@ -81,6 +82,7 @@ class CrawlClient:
         self._browser_lock = threading.Lock()
         self._playwright = None
         self._browser = None
+        self._clearance_callback = clearance_callback
         if self._browser_enabled:
             atexit.register(self.close)
 
@@ -114,6 +116,7 @@ class CrawlClient:
             request_exc = exc
         if response is not None:
             result = self._build_result_from_response(response)
+            self._record_clearance(response, getattr(response, "text", ""))
             if self._should_skip_browser(response, result):
                 return result
         if not self._browser_enabled:
@@ -126,12 +129,24 @@ class CrawlClient:
         if browser_result is not None:
             # Prefer browser result when we fetched via browser or when it extracts more text.
             if result is None or len(browser_result.text) > len(result.text):
+                self._record_clearance(response, getattr(response, "text", "") if response else browser_result.html)
                 return browser_result
         if result is not None:
+            if response is not None:
+                self._record_clearance(response, getattr(response, "text", ""))
             return result
         if request_exc is not None:
             raise CrawlError(str(request_exc)) from request_exc
         return None
+
+    def _record_clearance(self, response: requests.Response | None, html: str | None) -> None:
+        callback = self._clearance_callback
+        if callback is None or response is None:
+            return
+        try:
+            callback(response, html)
+        except Exception:  # pragma: no cover - detection is best effort
+            LOGGER.debug("clearance callback failed", exc_info=True)
 
     @staticmethod
     def _extract_text(html: str) -> str:

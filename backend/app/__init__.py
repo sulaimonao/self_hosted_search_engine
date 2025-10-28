@@ -46,6 +46,7 @@ def create_app() -> Flask:
     from engine.config import EngineConfig
 
     from .api import agent_tools as agent_tools_api
+    from .api import agent_logs as agent_logs_api
     from .api import agent_browser as agent_browser_api
     from .api import chat as chat_api
     from .api import discovery as discovery_api
@@ -55,6 +56,7 @@ def create_app() -> Flask:
     from .api import visits as visits_api
     from .api import docs as docs_api
     from .api import domains as domains_api
+    from .api import domain_profiles as domain_profiles_api
     from .api import chat_history as chat_history_api
     from .api import memory as memory_api
     from .api import llm as llm_api
@@ -62,6 +64,7 @@ def create_app() -> Flask:
     from .api import self_heal as self_heal_api
     from .api import shipit_diag as shipit_diag_api
     from .api import index as index_api
+    from .api import index_health as index_health_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import admin as admin_api
@@ -85,7 +88,9 @@ def create_app() -> Flask:
     from .shadow import ShadowCaptureService, ShadowIndexer, ShadowPolicyStore
     from .search.service import SearchService
     from .db import AppStateDB
+    from .db import domain_profiles as domain_profiles_db
     from .services.progress_bus import ProgressBus
+    from .services.log_bus import AgentLogBus
     from .services.labeler import LabelWorker, MemoryAgingWorker
     from server.refresh_worker import RefreshWorker
     from server.learned_web_db import get_db
@@ -164,7 +169,9 @@ def create_app() -> Flask:
     config.log_summary()
 
     state_db = AppStateDB(config.app_state_db_path)
+    domain_profiles_db.configure(config.agent_data_dir / "domain_profiles.sqlite3")
     progress_bus = ProgressBus()
+    agent_log_bus = AgentLogBus()
 
     engine_config = EngineConfig.from_yaml(CONFIG_PATH)
     app.config.setdefault("RAG_ENGINE_CONFIG", engine_config)
@@ -182,6 +189,7 @@ def create_app() -> Flask:
         db,
         state_db=state_db,
         progress_bus=progress_bus,
+        agent_log_bus=agent_log_bus,
     )
     search_service = SearchService(config, manager)
     refresh_worker = RefreshWorker(
@@ -200,11 +208,20 @@ def create_app() -> Flask:
         app_config=config,
         state_db=state_db,
     )
+    def _record_domain_clearance(response, html):
+        try:
+            from backend.app.services.auth_clearance import detect_clearance
+
+            detect_clearance(response, html, url=getattr(response, "url", None))
+        except Exception:  # pragma: no cover - detection best effort
+            LOGGER.debug("auth clearance detection failed", exc_info=True)
+
     crawler_client = CrawlClient(
         user_agent=os.getenv("AGENT_USER_AGENT", "SelfHostedSearchAgent/0.1"),
         request_timeout=float(os.getenv("AGENT_REQUEST_TIMEOUT", "15")),
         read_timeout=float(os.getenv("AGENT_READ_TIMEOUT", "30")),
         min_delay=float(os.getenv("AGENT_MIN_DELAY", "1.0")),
+        clearance_callback=_record_domain_clearance,
     )
     fetcher = CrawlFetcher(crawler_client)
 
@@ -345,6 +362,7 @@ def create_app() -> Flask:
         LEARNED_WEB_DB=db,
         APP_STATE_DB=state_db,
         PROGRESS_BUS=progress_bus,
+        AGENT_LOG_BUS=agent_log_bus,
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
         VECTOR_PENDING_WORKER=vector_pending_worker,
@@ -393,9 +411,11 @@ def create_app() -> Flask:
     app.register_blueprint(search_api.bp)
     app.register_blueprint(jobs_api.bp)
     app.register_blueprint(progress_api.bp)
+    app.register_blueprint(agent_logs_api.bp)
     app.register_blueprint(visits_api.bp)
     app.register_blueprint(docs_api.bp)
     app.register_blueprint(domains_api.bp)
+    app.register_blueprint(domain_profiles_api.bp)
     app.register_blueprint(memory_api.bp)
     app.register_blueprint(chat_history_api.bp)
     app.register_blueprint(chat_api.bp)
@@ -416,6 +436,7 @@ def create_app() -> Flask:
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)
     app.register_blueprint(index_api.bp)
+    app.register_blueprint(index_health_api.bp)
     app.register_blueprint(discovery_api.bp)
     app.register_blueprint(shadow_api.bp)
     app.register_blueprint(shipit_crawl_api.bp)

@@ -21,8 +21,12 @@ from . import (  # noqa: F401
 from .rules import env_keys_example  # noqa: F401
 from .rules import pyproject_vs_requirements  # noqa: F401
 from .probes import (  # noqa: F401
+    agent_trace_toggle,
+    auth_clearance_profiles,
+    browsing_fallbacks,
     electron_webprefs,
     headers_pass,
+    index_health_widget,
     sse_stream_integrity,
 )
 
