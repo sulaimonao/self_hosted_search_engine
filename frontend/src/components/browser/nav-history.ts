@@ -1,82 +1,45 @@
-export type NavEntry = {
-  url: string;
-};
 
-export class NavHistory {
-  private stack: NavEntry[] = [];
-  private index = -1;
+export type IframeLike = HTMLIFrameElement | null | undefined;
 
-  current(): string {
-    return this.stack[this.index]?.url ?? "";
+function canAccess(iframe: IframeLike): boolean {
+  try {
+    void iframe?.contentWindow?.location?.href;
+    void iframe?.contentWindow?.history;
+    return true;
+  } catch {
+    return false;
   }
+}
 
-  size(): number {
-    return this.stack.length;
-  }
+export function back(iframe: IframeLike): void {
+  if (!iframe) return;
+  if (!canAccess(iframe)) return;
+  try { iframe.contentWindow?.history.back(); } catch {}
+}
 
-  canBack(): boolean {
-    return this.index > 0;
-  }
+export function forward(iframe: IframeLike): void {
+  if (!iframe) return;
+  if (!canAccess(iframe)) return;
+  try { iframe.contentWindow?.history.forward(); } catch {}
+}
 
-  canForward(): boolean {
-    return this.index >= 0 && this.index < this.stack.length - 1;
+export function reload(iframe: IframeLike): void {
+  if (!iframe) return;
+  try {
+    iframe.contentWindow?.location.reload();
+  } catch {
+    try {
+      const src = iframe.getAttribute('src');
+      if (src) iframe.setAttribute('src', src);
+    } catch {}
   }
+}
 
-  push(url: string): string {
-    const normalized = url.trim();
-    if (!normalized) {
-      return this.current();
-    }
-    if (this.current() === normalized) {
-      return normalized;
-    }
-    this.stack = this.stack.slice(0, this.index + 1);
-    this.stack.push({ url: normalized });
-    this.index = this.stack.length - 1;
-    return normalized;
-  }
+export function setSrc(iframe: IframeLike, url: string): void {
+  if (!iframe) return;
+  try { iframe.setAttribute('src', url); } catch {}
+}
 
-  replace(url: string): string {
-    const normalized = url.trim();
-    if (!normalized) {
-      this.reset();
-      return "";
-    }
-    if (this.index === -1) {
-      this.stack = [{ url: normalized }];
-      this.index = 0;
-      return normalized;
-    }
-    this.stack[this.index] = { url: normalized };
-    return normalized;
-  }
-
-  back(): string | null {
-    if (!this.canBack()) {
-      return null;
-    }
-    this.index -= 1;
-    return this.current();
-  }
-
-  forward(): string | null {
-    if (!this.canForward()) {
-      return null;
-    }
-    this.index += 1;
-    return this.current();
-  }
-
-  reset(url?: string): string {
-    this.stack = [];
-    this.index = -1;
-    if (url && url.trim()) {
-      return this.push(url);
-    }
-    return "";
-  }
-
-  entries(): NavEntry[] {
-    return [...this.stack];
-  }
+export function canNavigate(iframe: IframeLike): boolean {
+  return canAccess(iframe);
 }
