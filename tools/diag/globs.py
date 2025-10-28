@@ -65,6 +65,11 @@ FILE_GLOBS: Dict[str, Sequence[str]] = {
         "**/*.seg",
         "**/*.toc",
         "**/*.bin",
+        "*.log",
+        "*.jsonl",
+        "*.sqlite3",
+        "*.sqlite3-shm",
+        "*.sqlite3-wal",
     ),
     "lockfiles": (
         "**/package-lock.json",

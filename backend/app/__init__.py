@@ -123,7 +123,11 @@ def create_app() -> Flask:
 
     CORS(
         app,
-        resources={r"/*": {"origins": ["http://localhost:3100", "http://127.0.0.1:3100"]}},
+        resources={
+            r"/api/*": {
+                "origins": ["http://localhost:3100", "http://127.0.0.1:3100", "app://renderer"],
+            }
+        },
         supports_credentials=True,
     )
 

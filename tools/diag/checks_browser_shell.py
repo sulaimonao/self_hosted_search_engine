@@ -8,7 +8,10 @@ from .engine import Finding, RuleContext, Severity, register
 
 IFRAME_RE = re.compile(r"<iframe[^>]*>", re.IGNORECASE)
 SRC_RE = re.compile(r"src\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
-CONTENT_HISTORY_RE = re.compile(r"contentWindow\.history\.(back|forward|go|pushState|replaceState)")
+CONTENT_HISTORY_RE = re.compile(
+    r"contentWindow\??\.history\.(back|forward|go|pushState|replaceState)"
+)
+WINDOW_HISTORY_RE = re.compile(r"window\.history\.(back|forward)\s*\(", re.IGNORECASE)
 WEBVIEW_RE = re.compile(r"<webview", re.IGNORECASE)
 
 THIRD_PARTY_HOSTS = ("http://", "https://", "//")
@@ -70,6 +73,38 @@ def rule_content_window_history(context: RuleContext) -> Iterable[Finding]:
                     severity=Severity.HIGH,
                     summary="contentWindow.history access bypasses the trusted Electron navigation stack.",
                     suggestion="Use the main-process BrowserView history (webContents.goBack/goForward) instead of contentWindow.",
+                    file=relative,
+                    line_hint=line_no,
+                    evidence=match.group(0),
+                )
+            )
+    return findings
+
+
+@register(
+    "R23_cross_origin_iframe_history",
+    description="Browser shell must avoid window.history navigation inside embeds",
+    severity=Severity.HIGH,
+)
+def rule_window_history(context: RuleContext) -> Iterable[Finding]:
+    findings: List[Finding] = []
+    patterns = (
+        "frontend/**/*.ts",
+        "frontend/**/*.tsx",
+        "frontend/**/*.js",
+        "frontend/**/*.jsx",
+    )
+    for relative in context.iter_patterns(*patterns):
+        text = context.read_text(relative)
+        for match in WINDOW_HISTORY_RE.finditer(text):
+            line_no = text.count("\n", 0, match.start()) + 1
+            findings.append(
+                Finding(
+                    id=f"{relative}:windowHistory:{line_no}",
+                    rule_id="R23_cross_origin_iframe_history",
+                    severity=Severity.HIGH,
+                    summary="window.history navigation triggers cross-origin iframe errors in the embedded browser.",
+                    suggestion="Use the NavHistory helper with postMessage updates instead of window.history.back/forward.",
                     file=relative,
                     line_hint=line_no,
                     evidence=match.group(0),

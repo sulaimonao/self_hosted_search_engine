@@ -32,18 +32,22 @@ def test_browser_shell_iframe_and_history(tmp_path: Path) -> None:
               function goBack() {
                 const view = iframeRef.current;
                 if (view?.contentWindow) {
-                  view.contentWindow.history.back();
+                  view?.contentWindow?.history.back();
                 }
+              }
+              function goForward() {
+                window.history.forward();
               }
               return <iframe ref={iframeRef} src="https://example.com/app" />;
             }
             """,
         )
     ]
-    findings = _run_rules(tmp_path, files, only={"R1", "R2"})
+    findings = _run_rules(tmp_path, files, only={"R1", "R2", "R23_cross_origin_iframe_history"})
     rule_ids = {finding.rule_id for finding in findings}
     assert "R1" in rule_ids
     assert "R2" in rule_ids
+    assert "R23_cross_origin_iframe_history" in rule_ids
 
 
 def test_browser_shell_webview_prevents_r3(tmp_path: Path) -> None:
@@ -105,6 +109,23 @@ def test_headers_missing_accept_language(tmp_path: Path) -> None:
     assert "R9" in rule_ids
 
 
+def test_robot_captcha_risk(tmp_path: Path) -> None:
+    files = [
+        (
+            "desktop/main.ts",
+            """
+            const DESKTOP_USER_AGENT = 'HeadlessChrome/120.0';
+            export function bootstrap() {
+              console.log('boot');
+            }
+            """,
+        )
+    ]
+    findings = _run_rules(tmp_path, files, only={"R26_robot_captcha_risk"})
+    assert findings
+    assert any(f.rule_id == "R26_robot_captcha_risk" for f in findings)
+
+
 def test_proxy_absolute_fetch(tmp_path: Path) -> None:
     files = [
         (
@@ -119,6 +140,36 @@ def test_proxy_absolute_fetch(tmp_path: Path) -> None:
     findings = _run_rules(tmp_path, files, only={"R10"})
     rule_ids = {finding.rule_id for finding in findings}
     assert "R10" in rule_ids
+
+
+def test_proxy_cors_mismatch(tmp_path: Path) -> None:
+    files = [
+        (
+            "frontend/next.config.mjs",
+            """
+            const DEFAULT_API_BASE_URL = 'http://127.0.0.1:4000';
+            export default {
+              async rewrites() {
+                return [{ source: '/api/:path*', destination: 'http://127.0.0.1:4000/api/:path*' }];
+              }
+            };
+            """,
+        ),
+        (
+            "backend/app/__init__.py",
+            """
+            from flask import Flask
+            from flask_cors import CORS
+
+            app = Flask(__name__)
+            CORS(app, resources={r'/*': {'origins': ['http://localhost:3100']}})
+            """,
+        ),
+        (".env.example", "BACKEND_PORT=5050\n"),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R25_proxy_cors_mismatch"})
+    assert findings
+    assert any(f.rule_id == "R25_proxy_cors_mismatch" for f in findings)
 
 
 def test_missing_scripts(tmp_path: Path) -> None:
@@ -150,6 +201,27 @@ def test_llm_stream_integrity(tmp_path: Path) -> None:
     findings = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
     rule_ids = {finding.rule_id for finding in findings}
     assert "R20_stream_integrity" in rule_ids
+
+
+def test_stream_render_required(tmp_path: Path) -> None:
+    files = [
+        (
+            "frontend/src/hooks/useLlmStream.ts",
+            """
+            export function useLlmStream() {
+              return {
+                state: { requestId: null, frames: 0, text: '', done: false, metadata: null, final: null, error: null },
+                start: async () => {},
+                abort: () => {},
+                supported: true,
+              };
+            }
+            """,
+        )
+    ]
+    findings = _run_rules(tmp_path, files, only={"R24_stream_render_required"})
+    assert findings
+    assert findings[0].rule_id == "R24_stream_render_required"
 
 
 def test_llm_stream_accumulator_detection(tmp_path: Path) -> None:
