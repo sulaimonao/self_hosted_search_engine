@@ -40,14 +40,32 @@ class HeadlessExecutionError(RuntimeError):
     """Raised when setup for the headless executor fails."""
 
 
+_PREFIX_TYPES = {"navigate", "waitForStable", "reload"}
+
+
 def _coerce_steps(raw: Any) -> List[Mapping[str, Any]]:
     if not isinstance(raw, Iterable):
         return []
-    steps: List[Mapping[str, Any]] = []
+
+    candidates: List[Mapping[str, Any]] = []
     for item in raw:
-        if isinstance(item, Mapping) and bool(item.get("headless")):
-            steps.append(item)
-    return steps
+        if isinstance(item, Mapping):
+            candidates.append(item)
+
+    selected_indices: set[int] = set()
+    for idx, item in enumerate(candidates):
+        if bool(item.get("headless")):
+            selected_indices.add(idx)
+            prefix_idx = idx - 1
+            while prefix_idx >= 0:
+                prev = candidates[prefix_idx]
+                step_type = str(prev.get("type") or prev.get("verb") or prev.get("action") or "").strip()
+                if step_type not in _PREFIX_TYPES:
+                    break
+                selected_indices.add(prefix_idx)
+                prefix_idx -= 1
+
+    return [candidates[i] for i in sorted(selected_indices)]
 
 
 def _post(session: requests.Session, url: str, payload: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
