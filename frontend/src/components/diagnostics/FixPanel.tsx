@@ -33,10 +33,10 @@ export function FixPanel() {
   async function runHeadless(directive: any) {
     setLog((l) => [...l, "Running headless steps..."]);
     try {
-      const res = await fetch("/api/self_heal/execute_headless", {
+      const res = await fetch("/api/self_heal/headless_apply", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ directive, consent: true }),
+        body: JSON.stringify({ directive, context: {} }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -78,16 +78,26 @@ export function FixPanel() {
       }
 
       if (directive) {
-        try {
-          await window.autopilotExecutor.run({ steps: directiveSteps });
-          setLog((l) => [...l, "Executed directive in-tab."]);
-        } catch (err) {
-          setLog((l) => [...l, `In-tab execution error: ${String(err)}`]);
+        const inTabSteps = directiveSteps.filter((step) => step && !step.headless);
+        if (inTabSteps.length > 0) {
+          try {
+            await window.autopilotExecutor.run({ steps: inTabSteps });
+            setLog((l) => [...l, "Executed directive in-tab."]);
+          } catch (err) {
+            setLog((l) => [...l, `In-tab execution error: ${String(err)}`]);
+          }
         }
 
         if (directiveHasHeadless) {
           if (allowHeadless) {
-            await runHeadless(directive);
+            const proceed = window.confirm(
+              "This fix requires headless actions. Do you want to continue?",
+            );
+            if (proceed) {
+              await runHeadless(directive);
+            } else {
+              setLog((l) => [...l, "Headless execution cancelled by user."]);
+            }
           } else {
             setLog((l) => [
               ...l,
@@ -120,16 +130,15 @@ export function FixPanel() {
               Fix now
             </button>
           </div>
-          {hasHeadless ? (
-            <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={allowHeadless}
-                onChange={(event) => setAllowHeadless(event.target.checked)}
-              />
-              <span>Run headless fix (requires approval)</span>
-            </label>
-          ) : null}
+          <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={allowHeadless}
+              disabled={!hasHeadless}
+              onChange={(event) => setAllowHeadless(event.target.checked)}
+            />
+            <span>Run headless fix when needed</span>
+          </label>
           <pre style={{ maxHeight: 260, overflow: "auto" }}>{log.join("\n")}</pre>
         </div>
       ) : null}
