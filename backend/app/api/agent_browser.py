@@ -66,15 +66,19 @@ def click() -> tuple[str, int]:
     payload = request.get_json(silent=True) or {}
     sid = (payload.get("sid") or "").strip()
     selector = (payload.get("selector") or "").strip()
+    text = (payload.get("text") or "").strip()
 
     def _action():
         if not sid:
             raise ValueError("sid is required")
-        if not selector:
-            raise ValueError("selector is required")
-        result = manager.click(sid, selector)
+        if not selector and not text:
+            raise ValueError("selector or text is required")
+        result = manager.click(sid, selector or None, text or None)
         result["sid"] = sid
-        result["selector"] = selector
+        if selector:
+            result["selector"] = selector
+        if text:
+            result["text"] = text
         return result
 
     return _handle_action(_action)
@@ -99,6 +103,37 @@ def type_into() -> tuple[str, int]:
         result["sid"] = sid
         result["selector"] = selector
         return result
+
+    return _handle_action(_action)
+
+
+@bp.post("/reload")
+def reload() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        result = manager.reload(sid)
+        result["sid"] = sid
+        return result
+
+    return _handle_action(_action)
+
+
+@bp.post("/session/close")
+def close_session() -> tuple[str, int]:
+    manager = _manager()
+    payload = request.get_json(silent=True) or {}
+    sid = (payload.get("sid") or "").strip()
+
+    def _action():
+        if not sid:
+            raise ValueError("sid is required")
+        manager.close_session(sid)
+        return {"sid": sid, "closed": True}
 
     return _handle_action(_action)
 

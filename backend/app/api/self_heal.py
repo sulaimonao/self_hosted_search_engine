@@ -124,9 +124,7 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
         if step_type not in ALLOWED_VERBS:
             notes.append(f"Step {idx} skipped: unsupported verb '{step_type}'.")
             continue
-        if bool(raw_step.get("headless")):
-            notes.append(f"Step {idx} skipped: headless steps deferred to agent browser.")
-            continue
+        is_headless = bool(raw_step.get("headless"))
         args_raw = raw_step.get("args")
         args = dict(args_raw) if isinstance(args_raw, Mapping) else {}
         for alias in ("selector", "text", "url", "ms"):
@@ -138,10 +136,16 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
             if not url:
                 notes.append(f"Step {idx} skipped: navigate requires a URL.")
                 continue
-            steps_payload.append({"type": "navigate", "url": url})
+            payload: Dict[str, Any] = {"type": "navigate", "url": url}
+            if is_headless:
+                payload["headless"] = True
+            steps_payload.append(payload)
             continue
         if step_type == "reload":
-            steps_payload.append({"type": "reload"})
+            payload = {"type": "reload"}
+            if is_headless:
+                payload["headless"] = True
+            steps_payload.append(payload)
             continue
         if step_type == "click":
             selector = _coerce_str(args.get("selector"))
@@ -154,6 +158,8 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
                 payload["selector"] = selector
             if text:
                 payload["text"] = text
+            if is_headless:
+                payload["headless"] = True
             steps_payload.append(payload)
             continue
         if step_type == "type":
@@ -163,7 +169,10 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
             if not selector or not text:
                 notes.append(f"Step {idx} skipped: type requires selector and text.")
                 continue
-            steps_payload.append({"type": "type", "selector": selector, "text": text})
+            payload = {"type": "type", "selector": selector, "text": text}
+            if is_headless:
+                payload["headless"] = True
+            steps_payload.append(payload)
             continue
         if step_type == "waitForStable":
             ms_value = args.get("ms") or args.get("timeout") or args.get("delay")
@@ -176,6 +185,8 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
             payload = {"type": "waitForStable"}
             if delay_ms:
                 payload["ms"] = delay_ms
+            if is_headless:
+                payload["headless"] = True
             steps_payload.append(payload)
             continue
 
