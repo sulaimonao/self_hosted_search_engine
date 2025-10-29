@@ -9,6 +9,8 @@ from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.agent.executor import run_headless
 from backend.app.exec.headless_executor import HeadlessExecutionError, HeadlessResult
+from backend.app.self_heal.episodes import append_episode
+from backend.app.self_heal.metrics import record_event
 from backend.app.services.progress_bus import ProgressBus
 
 bp = Blueprint("self_heal_headless_api", __name__, url_prefix="/api/self_heal")
@@ -20,6 +22,14 @@ def _publish(event: Dict[str, Any]) -> None:
     bus: ProgressBus | None = current_app.config.get("PROGRESS_BUS")
     if isinstance(bus, ProgressBus):
         bus.publish(_DIAGNOSTIC_JOB_ID, event)
+
+
+def _progress_bus() -> ProgressBus | None:
+    try:
+        bus = current_app.config.get("PROGRESS_BUS")
+    except RuntimeError:  # pragma: no cover - defensive guard for teardown
+        return None
+    return bus if isinstance(bus, ProgressBus) else None
 
 
 def _coerce_directive(payload: Any) -> Dict[str, Any]:
@@ -122,10 +132,18 @@ def execute_headless():
     except HeadlessExecutionError as exc:
         message = str(exc)
         _publish({"stage": "headless", "status": "error", "message": message})
+        try:
+            record_event("headless_runs_count", bus=_progress_bus())
+        except Exception:  # pragma: no cover - best effort
+            pass
         return jsonify({"ok": False, "error": message}), 500
     except Exception as exc:  # pragma: no cover - defensive guard
         message = str(exc)
         _publish({"stage": "headless", "status": "error", "message": message})
+        try:
+            record_event("headless_runs_count", bus=_progress_bus())
+        except Exception:  # pragma: no cover - best effort
+            pass
         return jsonify({"ok": False, "error": message}), 500
 
     steps_payload = _result_to_events(result)
@@ -136,6 +154,27 @@ def execute_headless():
         response["session_id"] = result.session_id
 
     status_code = 200 if result.ok else 500
+    meta = {
+        "session_id": result.session_id,
+        "failed_step": result.failed_step,
+        "ok": result.ok,
+    }
+    try:
+        record_event("headless_runs_count", bus=_progress_bus())
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        append_episode(
+            url="",
+            symptoms={},
+            directive=filtered_directive,
+            mode="headless",
+            outcome="success" if result.ok else "fail",
+            details={"failed_step": result.failed_step} if result.failed_step is not None else {},
+            meta=meta,
+        )
+    except Exception:  # pragma: no cover
+        pass
     return jsonify(response), status_code
 
 
