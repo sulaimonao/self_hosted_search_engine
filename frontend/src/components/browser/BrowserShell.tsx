@@ -38,7 +38,6 @@ import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
-import { FixPanel } from "@/components/diagnostics/FixPanel";
 
 const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
@@ -487,7 +486,6 @@ export function BrowserShell() {
             <AddressBar />
           </div>
           <ModeToggle />
-          <FixPanel />
           <Button
             variant="outline"
             size="icon"
