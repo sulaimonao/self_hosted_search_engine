@@ -12,6 +12,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import type { BrowserAPI, BrowserDiagnosticsReport } from "@/lib/browser-ipc";
 import type { Verb } from "@/autopilot/executor";
 import { IncidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
@@ -34,6 +36,61 @@ type Directive = {
   [key: string]: unknown;
 };
 
+type RuleSignature = {
+  banner_regex?: string;
+  network_any?: { url_regex?: string; status?: number }[];
+  console_any?: string[];
+  dom_regex?: string;
+  [key: string]: unknown;
+};
+
+type SelfHealRule = {
+  id: string;
+  enabled?: boolean;
+  signature?: RuleSignature;
+  directive?: { reason?: string; steps?: DirectiveStep[] };
+};
+
+type EpisodeSymptoms = {
+  bannerText?: string;
+  networkErrors?: { url?: string; status?: number }[];
+  [key: string]: unknown;
+};
+
+type SelfHealEpisode = {
+  id: string;
+  ts?: number;
+  url?: string;
+  symptoms?: EpisodeSymptoms;
+  outcome?: string;
+  mode: string;
+};
+
+type SelfHealMetrics = {
+  planner_calls_total: number;
+  planner_fallback_count: number;
+  rule_hits_count: number;
+  headless_runs_count: number;
+};
+
+type RulepackResponse = {
+  rules?: SelfHealRule[];
+  yaml?: string;
+  metrics?: SelfHealMetrics | null;
+};
+
+type EpisodesResponse = {
+  episodes?: SelfHealEpisode[];
+};
+
+type PromoteResponse = {
+  rule_id: string;
+  yaml_diff?: string;
+  yaml?: string;
+  rules?: SelfHealRule[];
+  metrics?: SelfHealMetrics | null;
+};
+
 function isDirective(candidate: unknown): candidate is Directive {
   if (!candidate || typeof candidate !== "object") {
     return false;
@@ -43,6 +100,40 @@ function isDirective(candidate: unknown): candidate is Directive {
     return false;
   }
   return true;
+}
+
+function describeRule(rule: SelfHealRule): string {
+  const parts: string[] = [];
+  if (rule.signature?.banner_regex) {
+    parts.push(`banner~/${rule.signature.banner_regex}/`);
+  }
+  if (rule.signature?.network_any && rule.signature.network_any.length > 0) {
+    const first = rule.signature.network_any[0];
+    const status = typeof first.status !== "undefined" ? ` ${first.status}` : "";
+    parts.push(`network~/${first.url_regex ?? "*"}/${status}`.trim());
+  }
+  if (rule.signature?.dom_regex) {
+    parts.push(`dom~/${rule.signature.dom_regex}/`);
+  }
+  if (parts.length === 0) {
+    parts.push("(match all incidents)");
+  }
+  if (rule.directive?.reason) {
+    parts.push(`→ ${rule.directive.reason}`);
+  }
+  return parts.join(" · ");
+}
+
+function normalizeMetrics(metrics?: Record<string, number> | null): SelfHealMetrics | null {
+  if (!metrics) {
+    return null;
+  }
+  return {
+    planner_calls_total: metrics.planner_calls_total ?? 0,
+    planner_fallback_count: metrics.planner_fallback_count ?? 0,
+    rule_hits_count: metrics.rule_hits_count ?? 0,
+    headless_runs_count: metrics.headless_runs_count ?? 0,
+  };
 }
 
 function resolveStatusBadge(status: CheckStatus) {
@@ -81,6 +172,16 @@ export function DiagnosticsDrawer({
   const [headlessBusy, setHeadlessBusy] = useState(false);
   const [incidentSnapshot, setIncidentSnapshot] = useState<BrowserIncident | null>(null);
   const [lastDirective, setLastDirective] = useState<Directive | null>(null);
+  const [selfHealSubTab, setSelfHealSubTab] = useState("actions");
+  const [rulepackRules, setRulepackRules] = useState<SelfHealRule[]>([]);
+  const [rulepackYaml, setRulepackYaml] = useState("");
+  const [rulepackMetrics, setRulepackMetrics] = useState<SelfHealMetrics | null>(null);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [episodes, setEpisodes] = useState<SelfHealEpisode[]>([]);
+  const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [promoteDiff, setPromoteDiff] = useState<string | null>(null);
+  const [lastRuleHit, setLastRuleHit] = useState<string | null>(null);
 
   const incidentBusRef = useRef<IncidentBus | null>(null);
   if (!incidentBusRef.current) {
@@ -107,7 +208,27 @@ export function DiagnosticsDrawer({
     }
     const source = new EventSource("/api/progress/__diagnostics__/stream");
     source.onmessage = (event) => {
-      appendLog(`[sse] ${event.data}`);
+      let formatted = event.data;
+      try {
+        const data = JSON.parse(event.data) as { stage?: string; message?: string; metrics?: Record<string, number> };
+        if (data.stage || data.message) {
+          formatted = `${data.stage ?? "event"}: ${data.message ?? ""}`.trim();
+        }
+        if (data.stage === "planner.rulepack" && typeof data.message === "string") {
+          const match = data.message.split("rule_hit:")[1];
+          if (match) {
+            setLastRuleHit(match);
+          }
+        }
+        if (data.stage === "self_heal.metrics" && data.metrics) {
+          setRulepackMetrics((prev) =>
+            normalizeMetrics({ ...(prev ?? ({} as Record<string, number>)), ...data.metrics }),
+          );
+        }
+      } catch {
+        // fall back to raw text
+      }
+      appendLog(`[sse] ${formatted}`);
     };
     source.onerror = () => {
       appendLog("[sse] stream disconnected.");
@@ -168,6 +289,13 @@ export function DiagnosticsDrawer({
           const candidate = (payload as { directive?: unknown }).directive;
           if (isDirective(candidate)) {
             directive = candidate;
+          }
+        }
+        if (payload && typeof payload === "object" && "meta" in payload) {
+          const meta = (payload as { meta?: { rule_id?: string; episode_id?: string; source?: string } }).meta;
+          if (meta?.rule_id) {
+            setLastRuleHit(meta.rule_id);
+            appendLog(`[self-heal] ${label}: deterministic directive from rule ${meta.rule_id}.`);
           }
         }
         if (!directive) {
@@ -337,6 +465,166 @@ export function DiagnosticsDrawer({
     });
   }, [appendLog, fetchDirective, report]);
 
+  useEffect(() => {
+    if (activeTab !== "self-heal") {
+      setSelfHealSubTab("actions");
+    }
+  }, [activeTab]);
+
+  const loadRulepack = useCallback(
+    async (options?: { withEpisodes?: boolean }) => {
+      setRulesLoading(true);
+      setRulesError(null);
+      try {
+        const response = await fetch("/api/diagnostics/rules");
+        if (!response.ok) {
+          throw new Error(`failed to load rules (${response.status})`);
+        }
+        const data = (await response.json()) as RulepackResponse;
+        setRulepackRules(Array.isArray(data.rules) ? data.rules : []);
+        setRulepackYaml(typeof data.yaml === "string" ? data.yaml : "");
+        setRulepackMetrics(normalizeMetrics(data.metrics ?? null));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRulesError(message);
+      } finally {
+        setRulesLoading(false);
+      }
+      if (options?.withEpisodes) {
+        await loadEpisodes();
+      }
+    },
+    [loadEpisodes],
+  );
+
+  const loadEpisodes = useCallback(async () => {
+    setEpisodesLoading(true);
+    try {
+      const response = await fetch("/api/diagnostics/rules/episodes?limit=120");
+      if (!response.ok) {
+        throw new Error(`failed to load episodes (${response.status})`);
+      }
+      const data = (await response.json()) as EpisodesResponse;
+      setEpisodes(Array.isArray(data.episodes) ? data.episodes : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setRulesError(message);
+    } finally {
+      setEpisodesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "self-heal" || selfHealSubTab !== "rules") {
+      return;
+    }
+    void loadRulepack({ withEpisodes: episodes.length === 0 });
+  }, [activeTab, episodes.length, loadRulepack, selfHealSubTab]);
+
+  const toggleRule = useCallback(
+    async (ruleId: string, enabled: boolean) => {
+      if (!ruleId) {
+        return;
+      }
+      setRulesError(null);
+      try {
+        const response = await fetch("/api/diagnostics/rules/update", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ rule_id: ruleId, enabled }),
+        });
+        if (!response.ok) {
+          throw new Error(`failed to update rule (${response.status})`);
+        }
+        const payload = (await response.json()) as RulepackResponse;
+        setRulepackRules(Array.isArray(payload.rules) ? payload.rules : []);
+        setRulepackYaml(typeof payload.yaml === "string" ? payload.yaml : "");
+        setRulepackMetrics(normalizeMetrics(payload.metrics ?? null));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRulesError(message);
+      }
+    },
+    [],
+  );
+
+  const reorderRule = useCallback(
+    async (ruleId: string, direction: "up" | "down") => {
+      const currentIndex = rulepackRules.findIndex((rule) => rule.id === ruleId);
+      if (currentIndex === -1) {
+        return;
+      }
+      if (!ruleId) {
+        return;
+      }
+      const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+      if (nextIndex < 0 || nextIndex >= rulepackRules.length) {
+        return;
+      }
+      const order = [...rulepackRules];
+      const [moved] = order.splice(currentIndex, 1);
+      order.splice(nextIndex, 0, moved);
+      setRulesError(null);
+      try {
+        const response = await fetch("/api/diagnostics/rules/update", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ order: order.map((rule) => rule.id) }),
+        });
+        if (!response.ok) {
+          throw new Error(`failed to reorder rules (${response.status})`);
+        }
+        const payload = (await response.json()) as RulepackResponse;
+        setRulepackRules(Array.isArray(payload.rules) ? payload.rules : []);
+        setRulepackYaml(typeof payload.yaml === "string" ? payload.yaml : "");
+        setRulepackMetrics(normalizeMetrics(payload.metrics ?? null));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRulesError(message);
+      }
+    },
+    [rulepackRules],
+  );
+
+  const promoteEpisode = useCallback(
+    async (episodeId: string) => {
+      setRulesError(null);
+      setPromoteDiff(null);
+      try {
+        const response = await fetch("/api/diagnostics/rules/promote", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ episode_id: episodeId }),
+        });
+        const text = await response.text();
+        let payload: PromoteResponse | { error?: string } = {};
+        if (text) {
+          try {
+            payload = JSON.parse(text) as PromoteResponse | { error?: string };
+          } catch (err) {
+            throw new Error(`invalid promote response: ${String(err)}`);
+          }
+        }
+        if (!response.ok) {
+          throw new Error((payload as { error?: string }).error ?? `failed to promote (${response.status})`);
+        }
+        const promote = payload as PromoteResponse;
+        setRulepackRules(Array.isArray(promote.rules) ? promote.rules : []);
+        setRulepackYaml(typeof promote.yaml === "string" ? promote.yaml : "");
+        setRulepackMetrics(normalizeMetrics(promote.metrics ?? null));
+        if (typeof promote.yaml_diff === "string" && promote.yaml_diff.trim()) {
+          setPromoteDiff(promote.yaml_diff);
+        } else {
+          setPromoteDiff(`Rule ${promote.rule_id} added (no diff).`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setRulesError(message);
+      }
+    },
+    [],
+  );
+
   const checks: DiagnosticsCheck[] = useMemo(() => {
     if (!report) {
       return [];
@@ -436,9 +724,9 @@ export function DiagnosticsDrawer({
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4 flex flex-1 flex-col gap-4">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="snapshot">Snapshot</TabsTrigger>
-            <TabsTrigger value="self-heal">Self-Heal</TabsTrigger>
-          </TabsList>
-          <TabsContent value="snapshot" className="flex flex-1 flex-col gap-4">
+          <TabsTrigger value="self-heal">Self-Heal</TabsTrigger>
+        </TabsList>
+        <TabsContent value="snapshot" className="flex flex-1 flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={runChecks} disabled={running} size="sm">
                 {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -503,69 +791,219 @@ export function DiagnosticsDrawer({
               </div>
             )}
           </TabsContent>
-          <TabsContent value="self-heal" className="flex flex-1 flex-col gap-4">
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">
-                Capture the current incident snapshot and stream planner updates through the diagnostics log.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={handlePlan} disabled={planDisabled}>
-                  {plannerBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Plan
-                </Button>
-                <Button size="sm" variant="secondary" onClick={handleFixInTab} disabled={planDisabled}>
-                  {plannerBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Fix in-tab
-                </Button>
-                <Button size="sm" variant="destructive" onClick={handleFixHeadless} disabled={headlessDisabled}>
-                  {headlessBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Fix headless
-                </Button>
+        <TabsContent value="self-heal" className="flex flex-1 flex-col gap-4">
+          <Tabs value={selfHealSubTab} onValueChange={setSelfHealSubTab} className="flex flex-1 flex-col gap-4">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="actions">Actions</TabsTrigger>
+              <TabsTrigger value="rules">Rules</TabsTrigger>
+            </TabsList>
+            <TabsContent value="actions" className="flex flex-1 flex-col gap-4">
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Capture the current incident snapshot and stream planner updates through the diagnostics log.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={handlePlan} disabled={planDisabled}>
+                    {plannerBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Plan
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={handleFixInTab} disabled={planDisabled}>
+                    {plannerBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Fix in-tab
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={handleFixHeadless} disabled={headlessDisabled}>
+                    {headlessBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Fix headless
+                  </Button>
+                </div>
               </div>
-            </div>
-            {incidentSnapshot ? (
-              <div className="space-y-2 rounded-md border p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Incident snapshot</h3>
-                  <span className="text-xs text-muted-foreground">{new Date(incidentSnapshot.ts).toLocaleTimeString()}</span>
+              {incidentSnapshot ? (
+                <div className="space-y-2 rounded-md border p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Incident snapshot</h3>
+                    <span className="text-xs text-muted-foreground">{new Date(incidentSnapshot.ts).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="grid gap-1 text-xs text-muted-foreground">
+                    <div>
+                      <span className="font-medium text-foreground">URL:</span> {incidentSnapshot.url}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Banner:</span> {incidentSnapshot.symptoms.bannerText || "None"}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Console errors:</span> {incidentSnapshot.symptoms.consoleErrors.length}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Network errors:</span> {incidentSnapshot.symptoms.networkErrors.length}
+                    </div>
+                  </div>
+                  {incidentSnapshot.domSnippet ? (
+                    <div>
+                      <p className="mt-2 text-xs font-medium">DOM snippet</p>
+                      <pre className="max-h-32 overflow-auto rounded-md bg-muted p-2 text-[11px]">
+                        {incidentSnapshot.domSnippet}
+                      </pre>
+                    </div>
+                  ) : null}
                 </div>
-                <div className="grid gap-1 text-xs text-muted-foreground">
-                  <div>
-                    <span className="font-medium text-foreground">URL:</span> {incidentSnapshot.url}
+              ) : (
+                <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  The next plan request will capture banner, console, and network signals from this tab.
+                </p>
+              )}
+              <div className="flex flex-1 flex-col gap-2">
+                <h3 className="text-sm font-semibold">Self-Heal log</h3>
+                <ScrollArea className="h-48 w-full rounded-md border">
+                  <pre className="whitespace-pre-wrap break-words p-3 text-xs">
+                    {logEntries.length > 0 ? logEntries.join("\n") : "Waiting for planner output…"}
+                  </pre>
+                </ScrollArea>
+              </div>
+            </TabsContent>
+            <TabsContent value="rules" className="flex flex-1 flex-col gap-4">
+              <div className="flex flex-col gap-4 md:flex-row">
+                <div className="flex-1 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold">Rulepack</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Rules run before the planner. Enable with care; order determines precedence.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button size="xs" variant="outline" onClick={() => loadRulepack()} disabled={rulesLoading}>
+                        {rulesLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                        Refresh
+                      </Button>
+                    </div>
                   </div>
-                  <div>
-                    <span className="font-medium text-foreground">Banner:</span> {incidentSnapshot.symptoms.bannerText || "None"}
-                  </div>
-                  <div>
-                    <span className="font-medium text-foreground">Console errors:</span> {incidentSnapshot.symptoms.consoleErrors.length}
-                  </div>
-                  <div>
-                    <span className="font-medium text-foreground">Network errors:</span> {incidentSnapshot.symptoms.networkErrors.length}
+                  {lastRuleHit ? (
+                    <p className="text-xs text-muted-foreground">Last rule hit: {lastRuleHit}</p>
+                  ) : null}
+                  {rulepackMetrics ? (
+                    <div className="grid grid-cols-2 gap-2 rounded-md border p-3 text-xs text-muted-foreground">
+                      <div>
+                        <span className="font-medium text-foreground">Planner calls:</span> {rulepackMetrics.planner_calls_total}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Fallbacks:</span> {rulepackMetrics.planner_fallback_count}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Rule hits:</span> {rulepackMetrics.rule_hits_count}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Headless runs:</span> {rulepackMetrics.headless_runs_count}
+                      </div>
+                    </div>
+                  ) : null}
+                  {rulesError ? (
+                    <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+                      {rulesError}
+                    </p>
+                  ) : null}
+                  <div className="space-y-2">
+                    {rulepackRules.length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                        No rules defined. Promote an episode to create the first rule.
+                      </p>
+                    ) : (
+                      rulepackRules.map((rule, index) => {
+                        const summary = describeRule(rule);
+                        const isFirst = index === 0;
+                        const isLast = index === rulepackRules.length - 1;
+                        return (
+                          <div key={rule.id ?? index} className="rounded-md border p-3 text-xs text-muted-foreground">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-foreground">{rule.id || `rule_${index + 1}`}</p>
+                                <p className="mt-1 break-words">{summary}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Switch
+                                  checked={Boolean(rule.enabled)}
+                                  onCheckedChange={(checked) => toggleRule(rule.id, checked)}
+                                  id={`switch-${rule.id}`}
+                                />
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  disabled={isFirst}
+                                  onClick={() => reorderRule(rule.id, "up")}
+                                >
+                                  Up
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  disabled={isLast}
+                                  onClick={() => reorderRule(rule.id, "down")}
+                                >
+                                  Down
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
-                {incidentSnapshot.domSnippet ? (
+                <div className="flex-1 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Episodes</h3>
+                    <Button size="xs" variant="outline" onClick={loadEpisodes} disabled={episodesLoading}>
+                      {episodesLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                      Refresh
+                    </Button>
+                  </div>
+                  <ScrollArea className="h-64 w-full rounded-md border">
+                    <div className="divide-y">
+                      {episodes.length === 0 ? (
+                        <p className="p-3 text-xs text-muted-foreground">No recent episodes recorded.</p>
+                      ) : (
+                        episodes.map((episode) => (
+                          <div key={episode.id} className="space-y-1 p-3 text-xs text-muted-foreground">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium text-foreground">{episode.url || "(unknown url)"}</p>
+                              <span>{new Date((episode.ts ?? 0) * 1000).toLocaleTimeString()}</span>
+                            </div>
+                            <p className="break-words">Outcome: {episode.outcome ?? "unknown"}</p>
+                            <p className="break-words">Mode: {episode.mode}</p>
+                            {episode.symptoms?.bannerText ? (
+                              <p className="break-words">Banner: {episode.symptoms.bannerText}</p>
+                            ) : null}
+                            {episode.symptoms?.networkErrors?.length ? (
+                              <p className="break-words">
+                                Network: {episode.symptoms.networkErrors[0].url} ({episode.symptoms.networkErrors[0].status})
+                              </p>
+                            ) : null}
+                            <div className="flex justify-end">
+                              <Button size="xs" onClick={() => promoteEpisode(episode.id)}>
+                                Promote to rule
+                              </Button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">rulepack.yml</h3>
+                <Textarea readOnly value={rulepackYaml} className="min-h-[180px] text-xs" />
+                {promoteDiff ? (
                   <div>
-                    <p className="mt-2 text-xs font-medium">DOM snippet</p>
-                    <pre className="max-h-32 overflow-auto rounded-md bg-muted p-2 text-[11px]">
-                      {incidentSnapshot.domSnippet}
+                    <p className="text-xs font-medium">Last promote diff</p>
+                    <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-[11px] whitespace-pre-wrap">
+                      {promoteDiff}
                     </pre>
                   </div>
                 ) : null}
               </div>
-            ) : (
-              <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                The next plan request will capture banner, console, and network signals from this tab.
-              </p>
-            )}
-            <div className="flex flex-1 flex-col gap-2">
-              <h3 className="text-sm font-semibold">Self-Heal log</h3>
-              <ScrollArea className="h-48 w-full rounded-md border">
-                <pre className="whitespace-pre-wrap break-words p-3 text-xs">
-                  {logEntries.length > 0 ? logEntries.join("\n") : "Waiting for planner output…"}
-                </pre>
-              </ScrollArea>
-            </div>
-          </TabsContent>
+            </TabsContent>
+          </Tabs>
+        </TabsContent>
         </Tabs>
         <SheetFooter className="pt-0">
           <p className="text-xs text-muted-foreground">

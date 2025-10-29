@@ -14,6 +14,9 @@ from backend.app.llm.ollama_client import (
     DEFAULT_MODEL as DEFAULT_SELF_HEAL_MODEL,
     OllamaClient,
 )
+from backend.app.self_heal.episodes import append_episode
+from backend.app.self_heal.metrics import record_event
+from backend.app.self_heal.rules import try_rules_first
 from backend.app.services.progress_bus import ProgressBus
 
 bp = Blueprint("self_heal_api", __name__, url_prefix="/api")
@@ -249,6 +252,47 @@ def self_heal():
         incident_id=incident.get("id"),
     )
 
+    bus: ProgressBus | None
+    try:
+        bus = current_app.config.get("PROGRESS_BUS")
+    except RuntimeError:
+        bus = None
+
+    maybe_rule = try_rules_first(incident)
+    if maybe_rule:
+        rule_id, directive_payload = maybe_rule
+        _publish_diagnostic(
+            "planner.rulepack",
+            f"rule_hit:{rule_id}",
+            rule_id=rule_id,
+        )
+        if isinstance(bus, ProgressBus):
+            record_event("rule_hits_count", bus=bus)
+        directive = SelfHealDirective(
+            reason=directive_payload.get("reason", "Rule applied"),
+            steps=list(directive_payload.get("steps") or []),
+        )
+        meta = {
+            "variant": variant,
+            "rule_id": rule_id,
+            "source": "rulepack",
+            "domSnippet": incident.get("domSnippet"),
+        }
+        episode_id, _ = append_episode(
+            url=incident.get("url", ""),
+            symptoms=incident.get("symptoms", {}),
+            directive=directive.model_dump(),
+            mode="apply" if apply else "plan",
+            outcome="unknown",
+            meta=meta,
+        )
+        response = {
+            "mode": "apply" if apply else "plan",
+            "directive": directive.model_dump(),
+            "meta": {**meta, "episode_id": episode_id},
+        }
+        return jsonify(response), 200
+
     system_prompt, user_prompt = build_prompts(incident, variant)
     _publish_diagnostic(
         "planner.prompt",
@@ -263,6 +307,8 @@ def self_heal():
             user=user_prompt,
             model=DEFAULT_SELF_HEAL_MODEL,
         )
+        if isinstance(bus, ProgressBus):
+            record_event("planner_calls_total", bus=bus)
         plan_payload = _parse_plan(plan_payload_raw)
         serialized = json.dumps(plan_payload, ensure_ascii=False)
         preview = serialized[:500]
@@ -277,12 +323,38 @@ def self_heal():
             _publish_diagnostic("planner.validation", note)
         if used_fallback:
             _publish_diagnostic("planner.fallback", "Planner fallback triggered; reload() selected.")
+            if isinstance(bus, ProgressBus):
+                record_event("planner_fallback_count", bus=bus)
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
         LOGGER.exception("Self-heal planner failed: %s", exc)
         reason = f"Fallback reload (planner error: {exc})"
         _publish_diagnostic("planner.error", reason)
         directive = _fallback_directive(reason)
+        if isinstance(bus, ProgressBus):
+            record_event("planner_fallback_count", bus=bus)
 
     mode = "apply" if apply else "plan"
     _publish_diagnostic("planner.complete", f"Planner returning directive (mode={mode}).")
-    return jsonify({"mode": mode, "directive": directive.model_dump()}), 200
+
+    meta = {
+        "variant": variant,
+        "source": "planner",
+        "domSnippet": incident.get("domSnippet"),
+    }
+    try:
+        episode_id, _ = append_episode(
+            url=incident.get("url", ""),
+            symptoms=incident.get("symptoms", {}),
+            directive=directive.model_dump(),
+            mode=mode,
+            outcome="unknown",
+            meta=meta,
+        )
+    except Exception:  # pragma: no cover - diagnostics best-effort
+        episode_id = None
+    response = {
+        "mode": mode,
+        "directive": directive.model_dump(),
+        "meta": {**meta, "episode_id": episode_id},
+    }
+    return jsonify(response), 200

@@ -58,6 +58,10 @@ diagnostics/*
 !backend/app/api/self_heal_execute.py
 !backend/app/api/diagnostics_self_heal.py
 !backend/app/api/utils.py
+!backend/app/self_heal/__init__.py
+!backend/app/self_heal/episodes.py
+!backend/app/self_heal/metrics.py
+!backend/app/self_heal/rules.py
 !backend/app/agent/__init__.py
 !backend/app/agent/executor.py
 !backend/app/exec/__init__.py
