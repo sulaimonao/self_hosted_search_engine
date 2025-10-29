@@ -8,7 +8,7 @@ from typing import Any, Dict, Mapping, Optional
 from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.agent.executor import run_headless
-from backend.app.exec.headless_executor import HeadlessResult
+from backend.app.exec.headless_executor import HeadlessExecutionError, HeadlessResult
 from backend.app.services.progress_bus import ProgressBus
 
 bp = Blueprint("self_heal_headless_api", __name__, url_prefix="/api/self_heal")
@@ -64,37 +64,77 @@ def _result_to_events(result: HeadlessResult) -> list[Dict[str, Any]]:
     return events
 
 
+def _filter_directive_steps(directive: Dict[str, Any]) -> Dict[str, Any]:
+    steps = directive.get("steps")
+    if not isinstance(steps, list):
+        return {"steps": []}
+    selected: set[int] = set()
+    prefix_types = {"navigate", "waitForStable", "reload"}
+    last_headless_idx: Optional[int] = None
+    for idx, raw in enumerate(steps):
+        if not isinstance(raw, Mapping):
+            continue
+        step_type = str(raw.get("type") or raw.get("verb") or "").strip()
+        if bool(raw.get("headless")):
+            selected.add(idx)
+            last_headless_idx = idx
+            prefix_idx = idx - 1
+            while prefix_idx >= 0:
+                prev = steps[prefix_idx]
+                if not isinstance(prev, Mapping):
+                    break
+                prev_type = str(prev.get("type") or prev.get("verb") or "").strip()
+                if prev_type not in prefix_types:
+                    break
+                selected.add(prefix_idx)
+                prefix_idx -= 1
+        elif step_type == "waitForStable" and last_headless_idx is not None and idx >= last_headless_idx:
+            selected.add(idx)
+
+    filtered = [dict(steps[i]) for i in sorted(selected)]
+    return {"steps": filtered}
+
+
 @bp.post("/execute_headless")
 def execute_headless():
     payload = request.get_json(silent=True) or {}
-    consent = bool(payload.get("consent"))
     directive = _coerce_directive(payload.get("directive"))
+    consent = bool(payload.get("consent"))
 
     if not consent:
-        return jsonify({"status": "denied", "error": "consent_required"}), 400
+        return jsonify({"ok": False, "error": "consent_required"}), 400
 
     base_url = request.host_url.rstrip("/")
+    filtered_directive = _filter_directive_steps(directive)
 
     def _sse_publish(event: Dict[str, Any]) -> None:
-        _publish(event)
-
-    steps = directive.get("steps") if isinstance(directive.get("steps"), list) else []
+        try:
+            _publish(event)
+        except Exception:  # pragma: no cover - diagnostics best-effort
+            pass
 
     try:
         result = run_headless(
-            steps,
+            filtered_directive,
             base_url=base_url,
             sse_publish=_sse_publish,
         )
+    except HeadlessExecutionError as exc:
+        message = str(exc)
+        _publish({"stage": "headless", "status": "error", "message": message})
+        return jsonify({"ok": False, "error": message}), 500
     except Exception as exc:  # pragma: no cover - defensive guard
-        error_payload = {
-            "status": "error",
-            "error": str(exc),
-        }
-        _publish({"stage": "headless", "status": "error", "message": str(exc)})
-        return jsonify(error_payload), 500
+        message = str(exc)
+        _publish({"stage": "headless", "status": "error", "message": message})
+        return jsonify({"ok": False, "error": message}), 500
 
-    response = _result_to_payload(result)
+    steps_payload = _result_to_events(result)
+    response: Dict[str, Any] = {"ok": result.ok, "steps": steps_payload}
+    if result.failed_step is not None:
+        response["failed_step"] = result.failed_step
+    if result.session_id:
+        response["session_id"] = result.session_id
+
     status_code = 200 if result.ok else 500
     return jsonify(response), status_code
 
@@ -122,7 +162,7 @@ def headless_apply():
 
     try:
         result = run_headless(
-            steps,
+            _filter_directive_steps(directive),
             base_url=base_url,
             session_id=raw_session,
             sse_publish=_sse_publish,
