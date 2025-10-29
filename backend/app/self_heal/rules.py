@@ -214,7 +214,7 @@ def propose_rule_from_episode(ep: Dict[str, Any], *, default_enabled: bool = Fal
         if entries:
             signature["network_any"] = entries
     if "role=\"alert\"" in dom_snippet:
-        signature["dom_regex"] = "role=\\"alert\\""
+        signature["dom_regex"] = r'role="alert"'
 
     steps = _sanitize_steps(directive.get("steps"))
     reason = str(directive.get("reason") or "Deterministic replay of a successful fix").strip()
