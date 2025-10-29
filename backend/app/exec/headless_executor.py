@@ -218,22 +218,81 @@ def run(
                     text = str(effective_args.get("text") or "").strip()
                     if not selector and not text:
                         raise ValueError("click requires selector or text")
-                    payload: Dict[str, Any] = {"sid": sid}
+
+                    def _click_payload(*, selector_value: Optional[str], text_value: Optional[str]) -> Dict[str, Any]:
+                        payload: Dict[str, Any] = {"sid": sid}
+                        if selector_value:
+                            payload["selector"] = selector_value
+                        if text_value and selector_value:
+                            payload["text"] = text_value
+                        elif text_value and not selector_value:
+                            payload["text"] = text_value
+                        return payload
+
+                    used_selector: Optional[str] = selector or None
+                    response_payload = None
+                    click_error: Optional[BaseException] = None
+
                     if selector:
-                        payload["selector"] = selector
-                    if text:
-                        payload["text"] = text
-                    response_payload = _post(
-                        http,
-                        f"{base}/api/agent/click",
-                        payload,
-                        timeout=request_timeout,
-                    )
+                        payload = _click_payload(selector_value=selector, text_value=text or None)
+                        response_payload = _post(
+                            http,
+                            f"{base}/api/agent/click",
+                            payload,
+                            timeout=request_timeout,
+                        )
+                    else:
+                        # Text-only clicks attempt robust selectors before falling back
+                        fallback_selectors = []
+                        if text:
+                            safe_text = text.replace("\"", "\\\"")
+                            fallback_selectors = [
+                                f'button[aria-label*="{safe_text}"]',
+                                f'[role="button"]:has-text("{safe_text}")',
+                            ]
+                        for candidate in fallback_selectors:
+                            try:
+                                payload = _click_payload(selector_value=candidate, text_value=text or None)
+                                response_payload = _post(
+                                    http,
+                                    f"{base}/api/agent/click",
+                                    payload,
+                                    timeout=request_timeout,
+                                )
+                            except Exception as exc:  # pragma: no cover - fallback progression
+                                click_error = exc
+                                _emit(
+                                    {
+                                        "status": "info",
+                                        "message": f"Fallback selector failed: {candidate}",
+                                        "step": idx,
+                                    }
+                                )
+                                continue
+                            else:
+                                used_selector = candidate
+                                click_error = None
+                                break
+
+                        if response_payload is None:
+                            payload = _click_payload(selector_value=None, text_value=text or None)
+                            response_payload = _post(
+                                http,
+                                f"{base}/api/agent/click",
+                                payload,
+                                timeout=request_timeout,
+                            )
+                            used_selector = None
+                            click_error = None
+
+                        if click_error is not None:
+                            raise click_error
+
                     last_url = str(response_payload.get("url") or last_url or "") or None
                     result.last_state = {
                         "url": last_url,
                         "action": "click",
-                        "selector": selector or None,
+                        "selector": used_selector,
                         "text": text or None,
                     }
                 elif step_type == "type":

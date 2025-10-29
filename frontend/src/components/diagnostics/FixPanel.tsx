@@ -3,13 +3,33 @@ import React from "react";
 import "@/autopilot/executor";
 import { IncidentBus } from "@/diagnostics/incident-bus";
 
+type DirectiveStep = {
+  headless?: boolean;
+  [key: string]: unknown;
+};
+
+type Directive = {
+  steps?: DirectiveStep[];
+  [key: string]: unknown;
+};
+
+function isDirective(candidate: unknown): candidate is Directive {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const payload = candidate as { steps?: unknown };
+  if ("steps" in payload && payload.steps !== undefined && !Array.isArray(payload.steps)) {
+    return false;
+  }
+  return true;
+}
+
 export function FixPanel() {
   const busRef = React.useRef<IncidentBus>(new IncidentBus());
   const [open, setOpen] = React.useState(false);
   const [log, setLog] = React.useState<string[]>([]);
   const [planning, setPlanning] = React.useState(false);
   const [allowHeadless, setAllowHeadless] = React.useState(false);
-  const [lastDirective, setLastDirective] = React.useState<any | null>(null);
 
   React.useEffect(() => {
     busRef.current.start();
@@ -25,18 +45,13 @@ export function FixPanel() {
     return () => es.close();
   }, [open]);
 
-  const hasHeadless = React.useMemo(() => {
-    const steps = Array.isArray(lastDirective?.steps) ? lastDirective?.steps : [];
-    return steps.some((step) => step && step.headless);
-  }, [lastDirective]);
-
-  async function runHeadless(directive: any) {
+  async function runHeadless(directive: Directive) {
     setLog((l) => [...l, "Running headless steps..."]);
     try {
-      const res = await fetch("/api/self_heal/headless_apply", {
+      const res = await fetch("/api/self_heal/execute_headless", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ directive, context: {} }),
+        body: JSON.stringify({ directive, consent: true }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -59,9 +74,8 @@ export function FixPanel() {
         body: JSON.stringify(incident),
       });
       const payload = await res.json().catch(() => ({}));
-      const directive = payload?.directive ?? null;
-      setLastDirective(directive);
-      const directiveSteps: any[] = Array.isArray(directive?.steps) ? directive.steps : [];
+      const directive = isDirective(payload?.directive) ? payload.directive : null;
+      const directiveSteps: DirectiveStep[] = directive?.steps ?? [];
       const directiveHasHeadless = directiveSteps.some((step) => step && step.headless);
       if (!directiveHasHeadless) {
         setAllowHeadless(false);
@@ -91,7 +105,7 @@ export function FixPanel() {
         if (directiveHasHeadless) {
           if (allowHeadless) {
             const proceed = window.confirm(
-              "This fix requires headless actions. Do you want to continue?",
+              "Headless fix will run server-side scripted steps. Proceed?",
             );
             if (proceed) {
               await runHeadless(directive);
@@ -134,7 +148,6 @@ export function FixPanel() {
             <input
               type="checkbox"
               checked={allowHeadless}
-              disabled={!hasHeadless}
               onChange={(event) => setAllowHeadless(event.target.checked)}
             />
             <span>Run headless fix when needed</span>
