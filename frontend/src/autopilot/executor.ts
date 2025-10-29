@@ -1,13 +1,18 @@
+type BaseVerb = { headless?: boolean };
+
 export type Verb =
-  | { type: "navigate"; url: string }
-  | { type: "reload" }
-  | { type: "click"; selector?: string; text?: string }
-  | { type: "type"; selector: string; text: string }
-  | { type: "waitForStable"; ms?: number };
+  | ({ type: "navigate"; url: string } & BaseVerb)
+  | ({ type: "reload" } & BaseVerb)
+  | ({ type: "click"; selector?: string; text?: string } & BaseVerb)
+  | ({ type: "type"; selector: string; text: string } & BaseVerb)
+  | ({ type: "waitForStable"; ms?: number } & BaseVerb);
 
 export class AutopilotExecutor {
   async run(directive: { steps: Verb[] }) {
     for (const step of directive.steps) {
+      if (step.headless) {
+        continue;
+      }
       if (step.type === "reload") {
         location.reload();
       } else if (step.type === "navigate" && step.url) {

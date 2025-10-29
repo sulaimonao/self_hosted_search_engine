@@ -55,6 +55,9 @@ diagnostics/*
 !backend/app/api/schemas.py
 !backend/app/api/reasoning.py
 !backend/app/api/web_search.py
+!backend/app/api/self_heal_execute.py
+!backend/app/exec/__init__.py
+!backend/app/exec/headless_executor.py
 !backend/app/llm/__init__.py
 !backend/app/llm/ollama_client.py
 !backend/app/ai/__init__.py

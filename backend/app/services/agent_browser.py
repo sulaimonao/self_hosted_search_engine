@@ -89,14 +89,20 @@ class _BrowserSession:
 
         return self._run(_go)
 
-    def click(self, selector: str) -> Dict[str, Any]:
+    def click(self, selector: str | None = None, text: str | None = None) -> Dict[str, Any]:
         clean_selector = (selector or "").strip()
-        if not clean_selector:
-            raise ValueError("selector is required")
+        clean_text = (text or "").strip()
+        if not clean_selector and not clean_text:
+            raise ValueError("selector or text is required")
 
         def _click() -> Dict[str, Any]:
-            self.page.wait_for_selector(clean_selector, timeout=self.action_timeout_ms)
-            self.page.click(clean_selector, timeout=self.action_timeout_ms)
+            if clean_selector:
+                self.page.wait_for_selector(clean_selector, timeout=self.action_timeout_ms)
+                target = self.page.locator(clean_selector)
+            else:
+                locator = self.page.get_by_text(clean_text, exact=False)
+                target = locator.first
+            target.click(timeout=self.action_timeout_ms)
             return {"url": self.page.url}
 
         return self._run(_click)
@@ -124,6 +130,13 @@ class _BrowserSession:
             return {"url": self.page.url, "html": html, "text": text}
 
         return self._run(_extract)
+
+    def reload(self) -> Dict[str, Any]:
+        def _reload() -> Dict[str, Any]:
+            self.page.reload(wait_until="load")
+            return {"url": self.page.url}
+
+        return self._run(_reload)
 
 
 class AgentBrowserManager:
@@ -219,9 +232,14 @@ class AgentBrowserManager:
         session = self._get_session(session_id)
         return session.navigate(url)
 
-    def click(self, session_id: str, selector: str) -> Dict[str, Any]:
+    def click(
+        self,
+        session_id: str,
+        selector: str | None = None,
+        text: str | None = None,
+    ) -> Dict[str, Any]:
         session = self._get_session(session_id)
-        return session.click(selector)
+        return session.click(selector, text)
 
     def type(self, session_id: str, selector: str, text: str) -> Dict[str, Any]:
         session = self._get_session(session_id)
@@ -230,6 +248,20 @@ class AgentBrowserManager:
     def extract(self, session_id: str) -> Dict[str, Any]:
         session = self._get_session(session_id)
         return session.extract()
+
+    def reload(self, session_id: str) -> Dict[str, Any]:
+        session = self._get_session(session_id)
+        return session.reload()
+
+    def close_session(self, session_id: str) -> None:
+        sid = (session_id or "").strip()
+        if not sid:
+            raise ValueError("sid is required")
+        with self._lock:
+            session = self._sessions.pop(sid, None)
+        if session is None:
+            raise SessionNotFoundError(f"unknown session: {sid}")
+        session.close()
 
     def _cleanup_locked(self) -> None:
         if not self._sessions:
