@@ -102,7 +102,7 @@ export function ChatPanel({
               const reasoningText = (message.reasoning ?? "").trim();
               const answerText = (message.answer ?? "").trim();
               const fallbackContent = (message.content ?? "").trim();
-              const recordMessage = message as Record<string, unknown>;
+              const recordMessage = message as unknown as Record<string, unknown>;
               const fallbackExtra =
                 ["message", "output", "text"]
                   .map((field) => {

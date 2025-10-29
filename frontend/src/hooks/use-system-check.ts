@@ -137,13 +137,14 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
   }, []);
 
   useEffect(() => {
-    if (!desktop?.onSystemCheckEvent) {
+    const bridge = desktop;
+    if (!bridge?.onSystemCheckEvent) {
       return;
     }
     const unsubscribes: Array<() => void> = [];
 
     const add = (channel: DesktopSystemCheckChannel, handler: (payload: unknown) => void) => {
-      const unsubscribe = desktop.onSystemCheckEvent?.(channel, handler);
+      const unsubscribe = bridge.onSystemCheckEvent?.(channel, handler);
       if (typeof unsubscribe === 'function') {
         unsubscribes.push(unsubscribe);
       }

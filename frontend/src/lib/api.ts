@@ -699,7 +699,7 @@ export function subscribeDiscoveryEvents(
 
   return {
     close: () => {
-      source.close();
+      source?.close();
     },
   };
 }
@@ -859,7 +859,7 @@ export async function searchIndex(
         continue;
       }
       const payload = (await response.json()) as Record<string, unknown>;
-      return normalizeSearchPayload(payload, endpoint !== "/api/index/hybrid_search");
+      return normalizeSearchPayload(payload, true);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw error;

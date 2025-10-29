@@ -1,4 +1,5 @@
-import type { AgentLogEntry, CrawlScope, ShadowQueueOptions, ShadowStatus } from "@/lib/types";
+import type { AgentLogEntry, CrawlScope, ShadowStatus } from "@/lib/types";
+import type { ShadowQueueOptions } from "@/lib/api";
 import type { ToastMessage } from "@/components/toast-container";
 
 export type CitationIndexStatus = "idle" | "loading" | "success" | "error";

@@ -185,9 +185,13 @@ export const useAppStore = create<AppState>()(
               }
               let changed = false;
               const nextTab = { ...tab };
-              for (const [key, value] of Object.entries(patch) as [keyof Tab, Tab[keyof Tab]][]) {
+              const typedTab = nextTab as Record<keyof Tab, Tab[keyof Tab]>;
+              for (const [key, value] of Object.entries(patch) as [keyof Tab, Tab[keyof Tab] | undefined][]) {
+                if (typeof value === "undefined") {
+                  continue;
+                }
                 if (!Object.is(nextTab[key], value)) {
-                  nextTab[key] = value;
+                  typedTab[key] = value;
                   changed = true;
                 }
               }

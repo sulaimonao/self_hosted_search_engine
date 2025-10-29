@@ -35,25 +35,25 @@ export function ModelSelect({
   placeholder = "Select model",
   id,
 }: ModelSelectProps) {
-  const normalizedOptions: ModelSelectOption[] = options
-    .map((option) => {
-      if (typeof option === "string") {
-        return { value: option, label: option, available: true } satisfies ModelSelectOption;
-      }
-      const value = option.value?.trim();
-      if (!value) {
-        return null;
-      }
-      return {
-        value,
-        label: option.label ?? option.value,
-        description:
-          option.description ??
-          (option.available === false ? "Not installed locally" : undefined),
-        available: option.available !== false,
-      } satisfies ModelSelectOption;
-    })
-    .filter((option): option is ModelSelectOption => option !== null);
+  const normalizedOptions = options.reduce<ModelSelectOption[]>((acc, option) => {
+    if (typeof option === "string") {
+      acc.push({ value: option, label: option, available: true });
+      return acc;
+    }
+    const normalizedValue = option.value?.trim();
+    if (!normalizedValue) {
+      return acc;
+    }
+    acc.push({
+      value: normalizedValue,
+      label: option.label ?? option.value,
+      description:
+        option.description ??
+        (option.available === false ? "Not installed locally" : undefined),
+      available: option.available !== false,
+    });
+    return acc;
+  }, []);
 
   const hasOptions = normalizedOptions.length > 0;
 

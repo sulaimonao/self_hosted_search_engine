@@ -976,7 +976,7 @@ export function ChatPanel() {
           <div className="space-y-4 p-3 pr-1">
             {messages.map((message) => {
               const isAssistant = message.role === "assistant";
-              const recordMessage = message as Record<string, unknown>;
+              const recordMessage = message as unknown as Record<string, unknown>;
               const fallbackFields = [
                 typeof message.message === "string" ? message.message : "",
                 typeof message.answer === "string" ? message.answer : "",

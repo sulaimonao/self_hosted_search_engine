@@ -346,14 +346,15 @@ export function useLlmStream(): LlmStreamHook {
         credentials: "include",
       });
 
-      if (!response.ok || !response.body) {
+      const { body } = response;
+      if (!response.ok || !body) {
         const message = `stream_http_${response.status}`;
         update((current) => ({ ...current, done: true, error: message }));
         throw new Error(message);
       }
 
       let buffer = "";
-      for await (const chunk of readTextStream(response)) {
+      for await (const chunk of readTextStream(body)) {
         buffer += chunk;
         let index = buffer.indexOf("\n\n");
         while (index !== -1) {

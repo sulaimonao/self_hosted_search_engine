@@ -29,24 +29,22 @@ declare global {
       onShadowToggle?: (handler: () => void) => (() => void) | void;
     };
   }
-}
 
-type ElectronWebviewElement = HTMLElement & {
-  reload?: () => void;
-  loadURL?: (url: string) => void | Promise<void>;
-  stop?: () => void;
-  goBack?: () => void;
-  goForward?: () => void;
-  canGoBack?: () => boolean;
-  canGoForward?: () => boolean;
-  getURL?: () => string;
-  getTitle?: () => string;
-  executeJavaScript?: <T = unknown>(code: string, userGesture?: boolean) => Promise<T>;
-  addEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
-  removeEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
-};
+  type ElectronWebviewElement = HTMLElement & {
+    reload?: () => void;
+    loadURL?: (url: string) => void | Promise<void>;
+    stop?: () => void;
+    goBack?: () => void;
+    goForward?: () => void;
+    canGoBack?: () => boolean;
+    canGoForward?: () => boolean;
+    getURL?: () => string;
+    getTitle?: () => string;
+    executeJavaScript?: <T = unknown>(code: string, userGesture?: boolean) => Promise<T>;
+    addEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
+    removeEventListener?: (type: string, listener: (...args: unknown[]) => void) => void;
+  };
 
-declare global {
   namespace JSX {
     interface IntrinsicElements {
       webview: React.DetailedHTMLProps<React.HTMLAttributes<ElectronWebviewElement>, ElectronWebviewElement> & {
@@ -56,8 +54,4 @@ declare global {
       };
     }
   }
-}
-
-declare module "@shared/browser-diagnostics-script" {
-  export const BROWSER_DIAGNOSTICS_SCRIPT: string;
 }

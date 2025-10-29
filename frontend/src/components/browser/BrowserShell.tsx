@@ -257,9 +257,12 @@ export function BrowserShell() {
       const currentUrl = typeof webview.getURL === "function" ? webview.getURL() : webview.getAttribute("src") || "";
       if (currentUrl !== activeTab.url) {
         if (typeof webview.loadURL === "function") {
-          void webview.loadURL(activeTab.url).catch((error) => {
-            console.warn("[browser] failed to load fallback webview URL", error);
-          });
+          const loadResult = webview.loadURL(activeTab.url);
+          if (loadResult instanceof Promise) {
+            void loadResult.catch((error) => {
+              console.warn("[browser] failed to load fallback webview URL", error);
+            });
+          }
         } else {
           webview.setAttribute("src", activeTab.url);
         }

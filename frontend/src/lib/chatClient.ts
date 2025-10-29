@@ -177,10 +177,11 @@ async function consumeChatStream(
   }
 
   const metadataModel = metadata && metadata.type === "metadata" ? metadata.model : null;
+  const metadataTraceId = metadata?.type === "metadata" ? metadata.trace_id ?? null : options.fallbackTraceId;
 
   return {
     payload: finalPayload,
-    traceId: finalPayload.trace_id ?? metadata?.type === "metadata" ? metadata.trace_id ?? null : options.fallbackTraceId,
+    traceId: finalPayload.trace_id ?? metadataTraceId,
     model: finalPayload.model ?? metadataModel ?? options.fallbackModel,
   };
 }

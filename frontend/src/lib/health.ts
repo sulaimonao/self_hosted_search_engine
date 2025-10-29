@@ -81,7 +81,7 @@ export function useHealth(intervalMs = 5_000): HealthSnapshot | null {
       return;
     }
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: number | undefined;
 
     const scheduleNext = () => {
       const delay = Math.max(intervalMs, MIN_POLL_INTERVAL_MS);

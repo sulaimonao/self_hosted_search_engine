@@ -53,7 +53,11 @@ export function PermissionPrompt() {
         <CardContent className="space-y-4">
           <p className="text-sm">This site wants to {describePermission(prompt.permission)}.</p>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox id="remember-permission" checked={remember} onCheckedChange={(next) => setRemember(Boolean(next))} />
+            <Checkbox
+              id="remember-permission"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+            />
             <label htmlFor="remember-permission" className="cursor-pointer select-none">
               Remember this decision
             </label>

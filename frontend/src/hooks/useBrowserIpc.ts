@@ -97,7 +97,9 @@ export function useBrowserIpc() {
       store.updateTab(state.tabId, patch);
       if (state.isActive) {
         guardedAppSetState({ activeTabId: state.tabId });
-        store.setBrowserDesiredUrl(state.url);
+        if (typeof state.url === "string" && state.url.trim().length > 0) {
+          store.setBrowserDesiredUrl(state.url);
+        }
       }
     });
 

@@ -38,7 +38,11 @@ export function setIfChanged<TState extends object>(
     }
 
     if (changed) {
-      set(nextPartial, replace);
+      if (replace) {
+        set(nextPartial as TState, true);
+      } else {
+        set(nextPartial);
+      }
     }
   };
 }
