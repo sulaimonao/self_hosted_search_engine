@@ -673,7 +673,7 @@ The same API is available for automation:
 ```bash
 curl -X POST http://127.0.0.1:5050/api/refresh \
   -H 'Content-Type: application/json' \
-  -d '{"query": "postgres vacuum best practices", "use_llm": true, "model": "llama3.1:8b-instruct"}'
+  -d '{"query": "postgres vacuum best practices", "use_llm": true, "model": "gpt-oss"}'
 
 curl "http://127.0.0.1:5050/api/refresh/status?job_id=<hex>&query=postgres%20vacuum%20best%20practices"
 ```
@@ -706,7 +706,7 @@ back to the most recent run for the supplied query or lists active jobs.
 Invoke the same functionality from the CLI:
 
 ```bash
-make focused Q="postgres vacuum best practices" USE_LLM=1 MODEL="llama3.1:8b-instruct"
+make focused Q="postgres vacuum best practices" USE_LLM=1 MODEL="gpt-oss"
 make tail JOB=focused
 ```
 

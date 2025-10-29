@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 import requests
 
 DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_MODEL = os.getenv("SELF_HEAL_MODEL", "llama3.1:8b-instruct")
+DEFAULT_MODEL = os.getenv("SELF_HEAL_MODEL", "gpt-oss")
 DEFAULT_TIMEOUT = float(os.getenv("SELF_HEAL_TIMEOUT_S", "20"))
 DEFAULT_TRIES = int(os.getenv("SELF_HEAL_TRIES", "2"))
 
@@ -148,4 +148,3 @@ __all__ = [
     "OllamaClient",
     "OllamaClientError",
 ]
-

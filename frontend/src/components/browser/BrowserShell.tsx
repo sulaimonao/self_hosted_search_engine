@@ -175,7 +175,7 @@ export function BrowserShell() {
     if (initialUrl) {
       updateTabFromHistory(initialUrl, { loading: false });
     }
-  }, [activeTab?.id, browserAPI, supportsWebview, updateTabFromHistory]);
+  }, [activeTab?.id, activeTab?.url, browserAPI, supportsWebview, updateTabFromHistory]);
 
   useEffect(() => {
     if (browserAPI || supportsWebview) {

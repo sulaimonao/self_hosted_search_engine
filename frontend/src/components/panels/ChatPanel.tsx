@@ -146,7 +146,6 @@ export function ChatPanel() {
   const [input, setInput] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
-  const [statusBanner, setStatusBanner] = useState<Banner | null>(null);
   const [inventory, setInventory] = useState<ModelInventory | null>(null);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
@@ -332,32 +331,29 @@ export function ChatPanel() {
     }
   }, [selectedModel]);
 
-  useEffect(() => {
-    const nextStatus: Banner | null = (() => {
-      if (inventoryLoading) {
-        return { intent: "info", text: "Checking available chat models…" } satisfies Banner;
-      }
-      if (inventoryError) {
-        return { intent: "error", text: `Model inventory failed: ${inventoryError}` } satisfies Banner;
-      }
-      if (inventory && !inventory.reachable) {
-        return {
-          intent: "error",
-          text: "Ollama host unreachable. Start Ollama and refresh the inventory.",
-        } satisfies Banner;
-      }
-      if (inventory && inventory.chatModels.length === 0) {
-        return {
-          intent: "error",
-          text: "No chat-capable models detected. Install a model to enable Copilot chat.",
-        } satisfies Banner;
-      }
-      if (serverTimeError) {
-        return { intent: "info", text: `Time sync unavailable: ${serverTimeError}` } satisfies Banner;
-      }
-      return null;
-    })();
-    setStatusBanner(nextStatus);
+  const statusBanner = useMemo((): Banner | null => {
+    if (inventoryLoading) {
+      return { intent: "info", text: "Checking available chat models…" };
+    }
+    if (inventoryError) {
+      return { intent: "error", text: `Model inventory failed: ${inventoryError}` };
+    }
+    if (inventory && !inventory.reachable) {
+      return {
+        intent: "error",
+        text: "Ollama host unreachable. Start Ollama and refresh the inventory.",
+      };
+    }
+    if (inventory && inventory.chatModels.length === 0) {
+      return {
+        intent: "error",
+        text: "No chat-capable models detected. Install a model to enable Copilot chat.",
+      };
+    }
+    if (serverTimeError) {
+      return { intent: "info", text: `Time sync unavailable: ${serverTimeError}` };
+    }
+    return null;
   }, [inventory, inventoryError, inventoryLoading, serverTimeError]);
 
   const headerStatusLabel = useMemo(() => {

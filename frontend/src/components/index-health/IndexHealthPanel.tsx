@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -30,7 +30,7 @@ export function IndexHealthPanel({ onRefreshStatus }: IndexHealthPanelProps) {
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -49,11 +49,11 @@ export function IndexHealthPanel({ onRefreshStatus }: IndexHealthPanelProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [onRefreshStatus]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const lastReindex = useMemo(() => {
     if (!data?.last_reindex) {

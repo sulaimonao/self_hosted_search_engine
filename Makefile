@@ -12,8 +12,8 @@ lint-makefile:
 
 .PHONY: ollama-pull-self-heal
 ollama-pull-self-heal:
-	@echo "Pulling self-heal model: $${SELF_HEAL_MODEL:-llama3.1:8b-instruct}"
-	ollama pull $${SELF_HEAL_MODEL:-llama3.1:8b-instruct}
+	@echo "Pulling self-heal model: $${SELF_HEAL_MODEL:-gpt-oss}"
+	ollama pull $${SELF_HEAL_MODEL:-gpt-oss}
 
 .PHONY: ollama-health
 ollama-health:
