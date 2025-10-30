@@ -1,4 +1,5 @@
 import { ChatResponsePayload, type ChatStreamEvent } from "@/lib/types";
+import { fromChatResponse, toChatRequest } from "@/lib/io/chat";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
 
@@ -121,19 +122,23 @@ async function consumeChatStream(
       buffer = buffer.slice(newlineIndex + 1);
       if (chunk) {
         try {
-          const event = JSON.parse(chunk) as ChatStreamEvent;
-          options.onEvent?.(event);
-          if (event.type === "metadata") {
-            metadata = event;
-          } else if (event.type === "complete") {
-            finalPayload = event.payload;
-          } else if (isChatErrorEvent(event)) {
-            const trace = event.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
-            throw new ChatRequestError(event.error || "chat stream error", {
+          const parsed = JSON.parse(chunk) as ChatStreamEvent;
+          if (parsed.type === "metadata") {
+            metadata = parsed;
+            options.onEvent?.(parsed);
+          } else if (parsed.type === "complete") {
+            const sanitized = fromChatResponse(parsed.payload);
+            finalPayload = sanitized;
+            options.onEvent?.({ ...parsed, payload: sanitized });
+          } else if (isChatErrorEvent(parsed)) {
+            const trace = parsed.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
+            throw new ChatRequestError(parsed.error || "chat stream error", {
               status: response.status ?? 500,
               traceId: trace,
-              hint: event.hint ?? undefined,
+              hint: parsed.hint ?? undefined,
             });
+          } else {
+            options.onEvent?.(parsed);
           }
         } catch (error) {
           console.warn("Skipping malformed stream chunk", error);
@@ -150,19 +155,23 @@ async function consumeChatStream(
   const trimmed = buffer.trim();
   if (trimmed) {
     try {
-      const event = JSON.parse(trimmed) as ChatStreamEvent;
-      options.onEvent?.(event);
-      if (event.type === "metadata") {
-        metadata = event;
-      } else if (event.type === "complete") {
-        finalPayload = event.payload;
-      } else if (isChatErrorEvent(event)) {
-        const trace = event.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
-        throw new ChatRequestError(event.error || "chat stream error", {
+      const parsed = JSON.parse(trimmed) as ChatStreamEvent;
+      if (parsed.type === "metadata") {
+        metadata = parsed;
+        options.onEvent?.(parsed);
+      } else if (parsed.type === "complete") {
+        const sanitized = fromChatResponse(parsed.payload);
+        finalPayload = sanitized;
+        options.onEvent?.({ ...parsed, payload: sanitized });
+      } else if (isChatErrorEvent(parsed)) {
+        const trace = parsed.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
+        throw new ChatRequestError(parsed.error || "chat stream error", {
           status: response.status ?? 500,
           traceId: trace,
-          hint: event.hint ?? undefined,
+          hint: parsed.hint ?? undefined,
         });
+      } else {
+        options.onEvent?.(parsed);
       }
     } catch (error) {
       console.warn("Ignoring trailing stream chunk", error);
@@ -220,18 +229,18 @@ export class ChatClient {
       Accept: stream ? "application/x-ndjson" : "application/json",
     };
 
-    const payload: Record<string, unknown> = {
-      model: request.model ?? undefined,
-      messages: request.messages,
+    const payload = toChatRequest({
+      model: request.model ?? null,
       stream,
-      url: request.url ?? undefined,
-      text_context: request.textContext ?? undefined,
-      image_context: request.imageContext ?? undefined,
-      client_timezone: request.clientTimezone ?? undefined,
-      server_time: request.serverTime ?? undefined,
-      server_timezone: request.serverTimezone ?? undefined,
-      server_time_utc: request.serverUtc ?? undefined,
-    };
+      url: request.url ?? null,
+      textContext: request.textContext ?? null,
+      imageContext: request.imageContext ?? null,
+      clientTimezone: request.clientTimezone ?? null,
+      serverTime: request.serverTime ?? null,
+      serverTimezone: request.serverTimezone ?? null,
+      serverUtc: request.serverUtc ?? null,
+      messages: request.messages,
+    });
 
     const response = await fetch(resolveApi("/api/chat"), {
       method: "POST",
@@ -306,7 +315,8 @@ export class ChatClient {
     }
 
     if (contentType.includes("application/json")) {
-      const data = (await response.json()) as ChatResponsePayload;
+      const rawPayload = await response.json();
+      const data = fromChatResponse(rawPayload);
       return {
         payload: data,
         traceId: data.trace_id ?? traceIdHeader,

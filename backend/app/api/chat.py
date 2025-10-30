@@ -15,6 +15,9 @@ from pydantic import ValidationError
 
 from server.json_logger import log_event
 
+from backend.app.io import chat_schema as io_chat_schema, normalize_model
+from backend.app.services.progress_bus import ProgressBus
+
 from ..config import AppConfig
 from ..services import ollama_client
 from observability import start_span
@@ -32,6 +35,7 @@ bp = Blueprint("chat_api", __name__, url_prefix="/api")
 LOGGER = logging.getLogger(__name__)
 _MAX_ERROR_PREVIEW = 500
 _MAX_CONTEXT_CHARS = 8_000
+_DIAGNOSTIC_JOB_ID = "__diagnostics__"
 _SCHEMA_PROMPT = (
     "You are a helpful assistant embedded in a self-hosted search engine. "
     "Always reply with strict JSON containing the keys reasoning, answer, and citations (an array of strings). "
@@ -43,13 +47,16 @@ _SCHEMA_PROMPT = (
     "Only request autopilot when real-time browsing is required or the user has asked you to take over."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
-_MODEL_ALIASES: dict[str, str] = {
-    # legacy names mapped to current defaults
-    "gemma:2b": "gemma3",
-}
 _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
 _TEXTUAL_CONTENT_PATTERN = re.compile(r"[A-Za-z]")
 _MISSING_TEXT_FALLBACK = "I’m here, but I didn’t receive usable text from the model."
+
+
+@bp.get("/chat/schema")
+def chat_schema_echo() -> Response:
+    """Expose the normalized chat schemas for diagnostics and tooling."""
+
+    return jsonify(io_chat_schema())
 
 
 def _looks_like_json(text: str) -> bool:
@@ -69,6 +76,55 @@ def _guard_contentful_text(candidate: str, *, fallback: str | None = None) -> st
     if len(fallback_text) >= 4 and _TEXTUAL_CONTENT_PATTERN.search(fallback_text):
         return fallback_text
     return _MISSING_TEXT_FALLBACK
+
+
+def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _shrink_payload(item, max_string=max_string, max_items=max_items)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _shrink_payload(item, max_string=max_string, max_items=max_items)
+            for item in list(value)[:max_items]
+        ]
+    if isinstance(value, str):
+        text = value
+        if len(text) > max_string:
+            return text[: max_string - 3] + "..."
+        return text
+    return value
+
+
+def _payload_preview(payload: Any, *, limit: int = 900) -> str:
+    try:
+        rendered = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        rendered = str(payload)
+    if len(rendered) > limit:
+        return rendered[: limit - 3] + "..."
+    return rendered
+
+
+def _publish_payload(stage: str, payload: Any) -> None:
+    try:
+        bus = current_app.config.get("PROGRESS_BUS")
+    except RuntimeError:
+        bus = None
+    if not isinstance(bus, ProgressBus):
+        return
+    event = {
+        "stage": stage,
+        "kind": "payload",
+        "message": _payload_preview(payload),
+        "payload": _shrink_payload(payload),
+        "ts": time.time(),
+    }
+    try:
+        bus.publish(_DIAGNOSTIC_JOB_ID, event)
+    except Exception:  # pragma: no cover - diagnostics best effort
+        LOGGER.debug("diagnostics payload publish failed", exc_info=True)
 
 
 def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[str, Any]:
@@ -107,18 +163,21 @@ def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[st
 
 
 def _coerce_model(name: str | None) -> str | None:
-    if not isinstance(name, str):
-        return None
-    normalized = name.strip()
-    if not normalized:
-        return None
-    alias_key = normalized.lower()
-    candidate = _MODEL_ALIASES.get(alias_key, normalized)
-
     engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
-    base_url = engine_config.ollama.base_url if engine_config is not None else None
-    resolved = ollama_client.resolve_model_name(candidate, base_url=base_url, chat_only=True)
-    return resolved or candidate
+    configured: list[str] = []
+    base_url = None
+    if engine_config is not None:
+        base_url = getattr(engine_config.ollama, "base_url", None)
+        primary = getattr(engine_config.models, "llm_primary", None)
+        fallback = getattr(engine_config.models, "llm_fallback", None)
+        for candidate in (primary, fallback):
+            if isinstance(candidate, str) and candidate.strip():
+                configured.append(candidate.strip())
+
+    def _resolver(candidate: str) -> str | None:
+        return ollama_client.resolve_model_name(candidate, base_url=base_url, chat_only=True)
+
+    return normalize_model(name, resolver=_resolver, configured=configured)
 
 
 def _truncate(value: str, max_length: int) -> str:
@@ -734,6 +793,8 @@ def _stream_chat_response(
                 json_mode=json_mode,
             )
             end_reason = "complete"
+            payload_dict = _coerce_schema(payload_model.model_dump(exclude_none=True))
+            _publish_payload("io.chat.response", payload_dict)
             yield ChatStreamComplete(payload=payload_model)
         except Exception as exc:  # pragma: no cover - defensive streaming guard
             g.chat_error_class = exc.__class__.__name__
@@ -750,6 +811,14 @@ def _stream_chat_response(
             if chat_span is not None:
                 chat_span.set_attribute("chat.success", False)
             end_reason = "error"
+            _publish_payload(
+                "io.chat.response",
+                {
+                    "error": "stream_error",
+                    "hint": "upstream response terminated unexpectedly",
+                    "trace_id": trace_id,
+                },
+            )
             yield ChatStreamError(
                 error="stream_error",
                 hint="upstream response terminated unexpectedly",
@@ -1128,6 +1197,7 @@ def _execute_chat_request(
             )
 
             payload_dict = _coerce_schema(response_payload.model_dump(exclude_none=True))
+            _publish_payload("io.chat.response", payload_dict)
             flask_response = jsonify(payload_dict)
             flask_response.headers["X-LLM-Model"] = candidate
             flask_response.headers["X-Request-Id"] = request_id
@@ -1158,6 +1228,15 @@ def _execute_chat_request(
         )
         error_response.status_code = 503
         error_response.headers["X-Request-Id"] = request_id
+        _publish_payload(
+            "io.chat.response",
+            {
+                "error": "model_not_found",
+                "tried": tried,
+                "hint": hint,
+                "trace_id": trace_id,
+            },
+        )
         _log_stream_summary(
             request_id=request_id,
             model=primary_model,
@@ -1174,12 +1253,14 @@ def _execute_chat_request(
 @bp.post("/chat")
 def chat_invoke() -> Response:
     start = time.perf_counter()
+    raw_payload = request.get_json(silent=True) or {}
     try:
-        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+        chat_request = ChatRequest.model_validate(raw_payload)
     except ValidationError as exc:
         g.chat_error_class = "ValidationError"
         g.chat_error_message = "invalid_request"
         request_id = _resolve_request_id(None)
+        _publish_payload("io.chat.request", _shrink_payload(raw_payload))
         error_response = jsonify(
             {
                 "error": "validation_error",
@@ -1189,6 +1270,14 @@ def chat_invoke() -> Response:
         )
         error_response.status_code = 400
         error_response.headers["X-Request-Id"] = request_id
+        _publish_payload(
+            "io.chat.response",
+            {
+                "error": "validation_error",
+                "detail": exc.errors(),
+                "trace_id": getattr(g, "trace_id", None),
+            },
+        )
         _log_stream_summary(
             request_id=request_id,
             model="unknown",
@@ -1201,6 +1290,7 @@ def chat_invoke() -> Response:
         )
         return error_response
 
+    _publish_payload("io.chat.request", chat_request.model_dump(exclude_none=True))
     return _execute_chat_request(
         chat_request,
         start_time=start,
@@ -1212,12 +1302,14 @@ def chat_invoke() -> Response:
 @bp.post("/chat/stream")
 def chat_stream() -> Response:
     start = time.perf_counter()
+    raw_payload = request.get_json(silent=True) or {}
     try:
-        chat_request = ChatRequest.model_validate(request.get_json(silent=True) or {})
+        chat_request = ChatRequest.model_validate(raw_payload)
     except ValidationError as exc:
         g.chat_error_class = "ValidationError"
         g.chat_error_message = "invalid_request"
         request_id = _resolve_request_id(None)
+        _publish_payload("io.chat.request", _shrink_payload(raw_payload))
         error_response = jsonify(
             {
                 "error": "validation_error",
@@ -1227,6 +1319,14 @@ def chat_stream() -> Response:
         )
         error_response.status_code = 400
         error_response.headers["X-Request-Id"] = request_id
+        _publish_payload(
+            "io.chat.response",
+            {
+                "error": "validation_error",
+                "detail": exc.errors(),
+                "trace_id": getattr(g, "trace_id", None),
+            },
+        )
         _log_stream_summary(
             request_id=request_id,
             model="unknown",
@@ -1239,6 +1339,7 @@ def chat_stream() -> Response:
         )
         return error_response
 
+    _publish_payload("io.chat.request", chat_request.model_dump(exclude_none=True))
     return _execute_chat_request(
         chat_request,
         start_time=start,

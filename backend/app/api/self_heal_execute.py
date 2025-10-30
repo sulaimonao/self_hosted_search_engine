@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Mapping, Optional
 
+import json
 from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.agent.executor import run_headless
 from backend.app.exec.headless_executor import HeadlessExecutionError, HeadlessResult
+from backend.app.io import coerce_directive
+from backend.app.io.models import Directive, VERB_MAP
 from backend.app.self_heal.episodes import append_episode
 from backend.app.self_heal.metrics import record_event
 from backend.app.services.progress_bus import ProgressBus
@@ -32,10 +35,44 @@ def _progress_bus() -> ProgressBus | None:
     return bus if isinstance(bus, ProgressBus) else None
 
 
-def _coerce_directive(payload: Any) -> Dict[str, Any]:
-    if isinstance(payload, Mapping):
-        return dict(payload)
-    return {}
+def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): _shrink_payload(v, max_string=max_string, max_items=max_items) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [
+            _shrink_payload(item, max_string=max_string, max_items=max_items)
+            for item in list(value)[:max_items]
+        ]
+    if isinstance(value, str):
+        if len(value) > max_string:
+            return value[: max_string - 3] + "..."
+        return value
+    return value
+
+
+def _payload_preview(payload: Any, *, limit: int = 900) -> str:
+    try:
+        rendered = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        rendered = str(payload)
+    if len(rendered) > limit:
+        return rendered[: limit - 3] + "..."
+    return rendered
+
+
+def _publish_payload(stage: str, payload: Any) -> None:
+    _publish(
+        {
+            "stage": stage,
+            "kind": "payload",
+            "payload": _shrink_payload(payload),
+            "preview": _payload_preview(payload),
+        }
+    )
+
+
+def _coerce_directive(payload: Any) -> Directive:
+    return coerce_directive(payload)
 
 
 def _result_to_payload(result: HeadlessResult) -> Dict[str, Any]:
@@ -74,26 +111,25 @@ def _result_to_events(result: HeadlessResult) -> list[Dict[str, Any]]:
     return events
 
 
-def _filter_directive_steps(directive: Dict[str, Any]) -> Dict[str, Any]:
-    steps = directive.get("steps")
-    if not isinstance(steps, list):
+def _filter_directive_steps(directive: Directive) -> Dict[str, Any]:
+    steps = directive.steps or []
+    if not steps:
         return {"steps": []}
     selected: set[int] = set()
     prefix_types = {"navigate", "waitForStable", "reload"}
     last_headless_idx: Optional[int] = None
-    for idx, raw in enumerate(steps):
-        if not isinstance(raw, Mapping):
+    for idx, step in enumerate(steps):
+        payload = step.as_payload()
+        step_type = str(payload.get("type") or "").strip()
+        if step_type not in VERB_MAP.values():
             continue
-        step_type = str(raw.get("type") or raw.get("verb") or "").strip()
-        if bool(raw.get("headless")):
+        if bool(payload.get("headless")):
             selected.add(idx)
             last_headless_idx = idx
             prefix_idx = idx - 1
             while prefix_idx >= 0:
-                prev = steps[prefix_idx]
-                if not isinstance(prev, Mapping):
-                    break
-                prev_type = str(prev.get("type") or prev.get("verb") or "").strip()
+                prev_payload = steps[prefix_idx].as_payload()
+                prev_type = str(prev_payload.get("type") or "").strip()
                 if prev_type not in prefix_types:
                     break
                 selected.add(prefix_idx)
@@ -101,7 +137,7 @@ def _filter_directive_steps(directive: Dict[str, Any]) -> Dict[str, Any]:
         elif step_type == "waitForStable" and last_headless_idx is not None and idx >= last_headless_idx:
             selected.add(idx)
 
-    filtered = [dict(steps[i]) for i in sorted(selected)]
+    filtered = [steps[i].as_payload() for i in sorted(selected)]
     return {"steps": filtered}
 
 
@@ -116,6 +152,8 @@ def execute_headless():
 
     base_url = request.host_url.rstrip("/")
     filtered_directive = _filter_directive_steps(directive)
+    _publish_payload("headless.request", filtered_directive)
+    _publish_payload("headless.request", filtered_directive)
 
     def _sse_publish(event: Dict[str, Any]) -> None:
         try:
@@ -175,6 +213,7 @@ def execute_headless():
         )
     except Exception:  # pragma: no cover
         pass
+    _publish_payload("headless.response", response)
     return jsonify(response), status_code
 
 
@@ -184,7 +223,8 @@ def headless_apply():
     directive = _coerce_directive(body.get("directive"))
     context = body.get("context") if isinstance(body.get("context"), Mapping) else {}
 
-    steps = directive.get("steps") if isinstance(directive.get("steps"), list) else []
+    filtered_directive = _filter_directive_steps(directive)
+    steps = filtered_directive.get("steps") if isinstance(filtered_directive.get("steps"), list) else []
     if not steps:
         return jsonify({"ok": False, "events": [], "error": "no_headless_steps"}), 400
 
@@ -201,7 +241,7 @@ def headless_apply():
 
     try:
         result = run_headless(
-            _filter_directive_steps(directive),
+            filtered_directive,
             base_url=base_url,
             session_id=raw_session,
             sse_publish=_sse_publish,
@@ -223,6 +263,7 @@ def headless_apply():
         response_payload["error"] = "headless_execution_failed"
 
     status_code = 200 if result.ok else 500
+    _publish_payload("headless.response", response_payload)
     return jsonify(response_payload), status_code
 
 

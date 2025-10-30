@@ -1,0 +1,14 @@
+{
+  "reason": "Planned fix",
+  "steps": [
+    { "type": "reload" },
+    { "type": "click", "text": "Retry" }
+  ],
+  "plan_confidence": "medium",
+  "needs_user_permission": false,
+  "ask_user": ["Is the banner still visible?"],
+  "fallback": {
+    "enabled": true,
+    "headless_hint": ["Run headless verification"]
+  }
+}

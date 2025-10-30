@@ -1,0 +1,17 @@
+{
+  "id": "incident-001",
+  "url": "https://example.com/app",
+  "symptoms": {
+    "bannerText": "Something went wrong",
+    "consoleErrors": [
+      "TypeError: cannot read properties of undefined"
+    ],
+    "networkErrors": [
+      {
+        "url": "https://example.com/api/data",
+        "status": 500
+      }
+    ]
+  },
+  "domSnippet": "<div class='error'>Something went wrong</div>"
+}
