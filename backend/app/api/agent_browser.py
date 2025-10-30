@@ -4,22 +4,46 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, request
 
-from ..services.agent_browser import (
-    AgentBrowserManager,
-    BrowserActionError,
-    SessionNotFoundError,
-)
+from ..services.agent_browser import AgentBrowserManager, BrowserActionError, SessionNotFoundError
 
 bp = Blueprint("agent_browser", __name__, url_prefix="/api/agent")
 
 
 def _manager() -> AgentBrowserManager:
-    manager: AgentBrowserManager | None = current_app.config.get(
-        "AGENT_BROWSER_MANAGER"
-    )
-    if manager is None:
+    if not current_app.config.get("AGENT_BROWSER_ENABLED", False):
         raise RuntimeError("Agent browser manager unavailable")
+
+    manager: AgentBrowserManager | None = current_app.config.get("AGENT_BROWSER_MANAGER")
+    if manager is None:
+        timeout_value = current_app.config.get("AGENT_BROWSER_DEFAULT_TIMEOUT_S", 15)
+        try:
+            timeout_s = int(timeout_value)
+        except (TypeError, ValueError):
+            timeout_s = 15
+
+        headless_value = current_app.config.get("AGENT_BROWSER_HEADLESS", True)
+        if isinstance(headless_value, str):
+            headless_flag = headless_value.lower() in {"1", "true", "yes", "on"}
+        else:
+            headless_flag = bool(headless_value)
+
+        manager = AgentBrowserManager(
+            default_timeout_s=timeout_s,
+            headless=headless_flag,
+        )
+        current_app.config["AGENT_BROWSER_MANAGER"] = manager
     return manager
+
+
+@bp.get("/health")
+def health() -> tuple[str, int]:
+    try:
+        manager = _manager()
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+
+    healthy = manager.health()
+    return jsonify({"ok": healthy}), (200 if healthy else 500)
 
 
 def _handle_action(func):
