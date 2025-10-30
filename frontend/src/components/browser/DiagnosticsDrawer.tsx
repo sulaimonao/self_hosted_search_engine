@@ -93,6 +93,18 @@ type PromoteResponse = {
   metrics?: SelfHealMetrics | null;
 };
 
+const PLANNER_REQUEST_TIMEOUT_MS = 25_000;
+
+const isAbortError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("name" in error && typeof (error as { name?: unknown }).name === "string") {
+    return (error as { name: string }).name === "AbortError";
+  }
+  return false;
+};
+
 function describeRule(rule: SelfHealRule): string {
   const parts: string[] = [];
   if (rule.signature?.banner_regex) {
@@ -281,11 +293,16 @@ export function DiagnosticsDrawer({
       }
       appendLog(`[self-heal] ${label}: requesting directive (apply=${apply}).`);
       const incidentPayload = toIncident(incident);
+      const controller = new AbortController();
+      const timeoutHandle: ReturnType<typeof setTimeout> = setTimeout(() => {
+        controller.abort();
+      }, PLANNER_REQUEST_TIMEOUT_MS);
       try {
         const response = await fetch(`/api/diagnostics/self_heal?apply=${apply ? "true" : "false"}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(incidentPayload),
+          signal: controller.signal,
         });
         const text = await response.text();
         let payload: unknown = {};
@@ -330,9 +347,16 @@ export function DiagnosticsDrawer({
         }
         return directive;
       } catch (err) {
-        appendLog(`[self-heal] ${label}: request failed: ${String(err)}`);
+        if (isAbortError(err)) {
+          appendLog(
+            `[self-heal] ${label}: planner request timed out after ${PLANNER_REQUEST_TIMEOUT_MS / 1000}s.`,
+          );
+        } else {
+          appendLog(`[self-heal] ${label}: request failed: ${String(err)}`);
+        }
         return null;
       } finally {
+        clearTimeout(timeoutHandle);
         if (!options?.suppressBusy) {
           setPlannerBusy(false);
         }
@@ -394,11 +418,16 @@ export function DiagnosticsDrawer({
       }
     }
     setHeadlessBusy(true);
+    const controller = new AbortController();
+    const timeoutHandle: ReturnType<typeof setTimeout> = setTimeout(() => {
+      controller.abort();
+    }, PLANNER_REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch("/api/diagnostics/self_heal/execute_headless", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ consent: true, directive }),
+        signal: controller.signal,
       });
       const text = await response.text();
       let payload: unknown = {};
@@ -417,8 +446,15 @@ export function DiagnosticsDrawer({
       }
       appendLog(`[self-heal] headless fix: result ->\n${JSON.stringify(payload, null, 2)}`);
     } catch (err) {
-      appendLog(`[self-heal] headless fix: request failed: ${String(err)}`);
+      if (isAbortError(err)) {
+        appendLog(
+          `[self-heal] headless fix: request timed out after ${PLANNER_REQUEST_TIMEOUT_MS / 1000}s.`,
+        );
+      } else {
+        appendLog(`[self-heal] headless fix: request failed: ${String(err)}`);
+      }
     } finally {
+      clearTimeout(timeoutHandle);
       setHeadlessBusy(false);
     }
   }, [appendLog, fetchDirective, lastDirective]);
@@ -1057,4 +1093,3 @@ export function DiagnosticsDrawer({
     </Sheet>
   );
 }
-

@@ -31,7 +31,8 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
 _VALID_VARIANTS = {"lite", "deep", "headless", "repair"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
-_PLAN_TIMEOUT_S = 8.0
+_PLAN_TIMEOUT_S = float(os.getenv("SELF_HEAL_PLAN_TIMEOUT_S", "12"))
+_FALLBACK_REASON = "fallback: reload"
 _TRUE_FLAGS = {"1", "true", "yes", "on"}
 
 _OLLAMA_CLIENT = OllamaClient()
@@ -111,8 +112,9 @@ def _flag(value: str | None) -> bool:
     return value.strip().lower() in _TRUE_FLAGS
 
 
-def _fallback_directive(reason: str = "timeout_or_invalid") -> DirectiveClampResult:
-    directive = Directive(reason=reason, steps=[Step(type="reload")])
+def _fallback_directive(reason: str | None = None) -> DirectiveClampResult:
+    final_reason = reason or _FALLBACK_REASON
+    directive = Directive(reason=final_reason, steps=[Step(type="reload")])
     return DirectiveClampResult(directive=directive, dropped_steps=[], fallback_applied=True)
 
 
@@ -129,6 +131,7 @@ def _plan_with_llm(
         "model": None,
         "error": None,
         "called_llm": False,
+        "timeout_s": float(timeout_s),
     }
 
     if variant == "lite":
@@ -167,7 +170,7 @@ def _plan_with_llm(
         meta["took_ms"] = int((perf_counter() - start) * 1000)
         return _fallback_directive(), meta
 
-    result = clamp_directive(plan_payload_raw, fallback_reason="timeout_or_invalid")
+    result = clamp_directive(plan_payload_raw, fallback_reason=_FALLBACK_REASON)
     meta["status"] = "ok" if not result.fallback_applied else "invalid_plan"
     if result.fallback_applied:
         meta["error"] = "invalid_plan"
@@ -303,6 +306,8 @@ def self_heal():
         "domSnippet": incident_payload.get("domSnippet"),
         "planner_status": planner_meta.get("status"),
     }
+    if planner_meta.get("timeout_s") is not None:
+        response_meta["planner_timeout_s"] = planner_meta.get("timeout_s")
     if planner_meta.get("model"):
         response_meta["planner_model"] = planner_meta["model"]
     if planner_meta.get("took_ms") is not None:

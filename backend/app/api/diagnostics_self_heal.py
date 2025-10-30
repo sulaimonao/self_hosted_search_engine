@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import difflib
+import logging
 from typing import Any, Dict
 
 from flask import Blueprint, jsonify, request
+from werkzeug.exceptions import HTTPException
 
-from backend.app.api.self_heal import self_heal as _planner
+from backend.app.api import self_heal as self_heal_module
 from backend.app.api.self_heal_execute import execute_headless as _headless
 from backend.app.self_heal.episodes import get_episode_by_id, iter_episodes
 from backend.app.self_heal.metrics import metrics_snapshot
@@ -21,12 +23,44 @@ from backend.app.self_heal.rules import (
 
 bp = Blueprint("diagnostics_self_heal_api", __name__, url_prefix="/api/diagnostics")
 
+LOGGER = logging.getLogger(__name__)
+_FALLBACK_DIRECTIVE = {"reason": "fallback: reload", "steps": [{"type": "reload"}]}
+
 
 @bp.post("/self_heal")
 def diagnostics_self_heal():
     """Proxy planner requests through the diagnostics namespace."""
 
-    return _planner()
+    try:
+        return self_heal_module.self_heal()
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        LOGGER.exception("diagnostics self-heal proxy failed; returning fallback reload directive")
+        emit = getattr(self_heal_module, "_emit", None)
+        if callable(emit):
+            try:
+                emit(
+                    "planner.fallback",
+                    "Diagnostics proxy returned fallback reload directive.",
+                    error=str(exc),
+                )
+            except Exception:  # pragma: no cover - telemetry best effort
+                LOGGER.debug("diagnostics fallback emit failed", exc_info=True)
+        timeout_value = getattr(self_heal_module, "_PLAN_TIMEOUT_S", None)
+        payload: Dict[str, Any] = {
+            "mode": "plan",
+            "directive": _FALLBACK_DIRECTIVE,
+            "meta": {
+                "source": "diagnostics_proxy",
+                "planner_status": "proxy_error",
+                "error": str(exc),
+            },
+            "took_ms": 0,
+        }
+        if timeout_value is not None:
+            payload["meta"]["planner_timeout_s"] = float(timeout_value)
+        return jsonify(payload), 200
 
 
 @bp.post("/self_heal/execute_headless")
