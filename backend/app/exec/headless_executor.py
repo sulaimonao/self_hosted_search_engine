@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 import requests
+from flask import current_app
 
 _STAGE = "headless"
 
@@ -41,6 +43,47 @@ class HeadlessExecutionError(RuntimeError):
 
 
 _PREFIX_TYPES = {"navigate", "waitForStable", "reload"}
+_DEFAULT_BASE_URL = "http://127.0.0.1:5050"
+_DEFAULT_TIMEOUT_S = 12.0
+
+
+def _resolve_base_url(candidate: str | None) -> str:
+    fallback = _DEFAULT_BASE_URL
+    env_override = os.getenv("SELF_HEAL_BASE_URL", "").strip()
+    preferred = str(candidate).strip() if isinstance(candidate, str) else ""
+
+    base = preferred or env_override or fallback
+    base = base.strip()
+    if not base:
+        return fallback
+    trimmed = base.rstrip("/")
+    return trimmed or fallback
+
+
+def _resolve_timeout(value: float | None) -> float:
+    candidates = [
+        value,
+        os.getenv("SELF_HEAL_HTTP_TIMEOUT_S"),
+    ]
+    for raw in candidates:
+        if raw is None:
+            continue
+        try:
+            timeout = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if timeout > 0:
+            return timeout
+    return _DEFAULT_TIMEOUT_S
+
+
+def _agent_manager() -> Any | None:
+    try:
+        app = current_app._get_current_object()  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    manager = app.config.get("AGENT_BROWSER_MANAGER")
+    return manager
 
 
 def _coerce_steps(raw: Any) -> List[Mapping[str, Any]]:
@@ -68,7 +111,7 @@ def _coerce_steps(raw: Any) -> List[Mapping[str, Any]]:
     return [candidates[i] for i in sorted(selected_indices)]
 
 
-def _post(session: requests.Session, url: str, payload: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
+def _http_post(session: requests.Session, url: str, payload: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
     response = session.post(url, json=payload, timeout=timeout)
     response.raise_for_status()
     try:
@@ -77,16 +120,48 @@ def _post(session: requests.Session, url: str, payload: Dict[str, Any], *, timeo
         raise HeadlessExecutionError(f"{url} returned non-JSON response") from exc
 
 
+def _manager_call(manager: Any, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    sid = str(payload.get("sid") or "").strip()
+    path = path.strip()
+    if path == "/session/start":
+        session_id = manager.start_session()
+        return {"sid": session_id}
+    if path != "/session/start" and not sid:
+        raise HeadlessExecutionError(f"{path} requires a session id")
+    if path == "/session/close":
+        if sid:
+            manager.close_session(sid)
+        return {"ok": True}
+    if path == "/navigate":
+        url = str(payload.get("url") or "").strip()
+        return manager.navigate(sid, url)
+    if path == "/reload":
+        return manager.reload(sid)
+    if path == "/click":
+        selector = payload.get("selector")
+        text = payload.get("text")
+        return manager.click(sid, selector=selector, text=text)
+    if path == "/type":
+        selector = payload.get("selector")
+        text = payload.get("text", "")
+        if not selector:
+            raise ValueError("type requires selector")
+        return manager.type(sid, selector, text)
+    if path == "/extract":
+        return manager.extract(sid)
+    raise HeadlessExecutionError(f"Unsupported agent path: {path}")
+
+
 def run(
     directive: Mapping[str, Any],
     *,
-    base_url: str,
+    base_url: str | None,
     sse_publish: Optional[Callable[[Dict[str, Any]], None]] = None,
     session_id: Optional[str] = None,
     max_steps: int = 12,
     max_runtime_s: float = 90.0,
     wait_ms_default: int = 600,
-    request_timeout: float = 20.0,
+    request_timeout: float | None = None,
 ) -> HeadlessResult:
     """Execute headless-only directive steps via the Agent-Browser HTTP API."""
 
@@ -95,13 +170,24 @@ def run(
     if not steps:
         return result
 
-    base = (base_url or "").rstrip("/")
-    if not base:
-        raise HeadlessExecutionError("base_url is required")
+    base = _resolve_base_url(base_url)
+    timeout = _resolve_timeout(request_timeout)
 
-    http = requests.Session()
+    manager = _agent_manager()
+    http: Optional[requests.Session] = None
+    if manager is None:
+        http = requests.Session()
+
     own_session = False
     sid = (session_id or "").strip()
+
+    def _call(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if manager is not None:
+            return _manager_call(manager, path, payload)
+        if http is None:
+            raise HeadlessExecutionError("Agent browser HTTP session unavailable")
+        url = f"{base}/api/agent{path}"
+        return _http_post(http, url, payload, timeout=timeout)
 
     def _emit(event: Dict[str, Any]) -> None:
         payload = {"stage": _STAGE}
@@ -138,7 +224,7 @@ def run(
     try:
         if not sid:
             _emit({"status": "start", "message": "Starting agent browser session."})
-            payload = _post(http, f"{base}/api/agent/session/start", {}, timeout=request_timeout)
+            payload = _call("/session/start", {})
             sid = str(payload.get("sid") or payload.get("session_id") or "").strip()
             if not sid:
                 raise HeadlessExecutionError("agent browser did not return a session identifier")
@@ -186,22 +272,18 @@ def run(
                     url = str(effective_args.get("url") or "").strip()
                     if not url:
                         raise ValueError("navigate requires url")
-                    response_payload = _post(
-                        http,
-                        f"{base}/api/agent/navigate",
+                    response_payload = _call(
+                        "/navigate",
                         {"sid": sid, "url": url},
-                        timeout=request_timeout,
                     )
                     last_url = str(response_payload.get("url") or url)
                     result.last_state = {"url": last_url, "action": "navigate"}
                 elif step_type == "reload":
                     response_payload = None
                     try:
-                        response_payload = _post(
-                            http,
-                            f"{base}/api/agent/reload",
+                        response_payload = _call(
+                            "/reload",
                             {"sid": sid},
-                            timeout=request_timeout,
                         )
                     except Exception:
                         # Reload failures should not block the planner; treat as best-effort.
@@ -231,11 +313,9 @@ def run(
 
                     if selector:
                         payload = _click_payload(selector_value=selector, text_value=text or None)
-                        response_payload = _post(
-                            http,
-                            f"{base}/api/agent/click",
+                        response_payload = _call(
+                            "/click",
                             payload,
-                            timeout=request_timeout,
                         )
                     else:
                         # Text-only clicks attempt robust selectors before falling back
@@ -249,11 +329,9 @@ def run(
                         for candidate in fallback_selectors:
                             try:
                                 payload = _click_payload(selector_value=candidate, text_value=text or None)
-                                response_payload = _post(
-                                    http,
-                                    f"{base}/api/agent/click",
+                                response_payload = _call(
+                                    "/click",
                                     payload,
-                                    timeout=request_timeout,
                                 )
                             except Exception as exc:  # pragma: no cover - fallback progression
                                 click_error = exc
@@ -272,11 +350,9 @@ def run(
 
                         if response_payload is None:
                             payload = _click_payload(selector_value=None, text_value=text or None)
-                            response_payload = _post(
-                                http,
-                                f"{base}/api/agent/click",
+                            response_payload = _call(
+                                "/click",
                                 payload,
-                                timeout=request_timeout,
                             )
                             used_selector = None
                             click_error = None
@@ -298,11 +374,9 @@ def run(
                     if not selector:
                         raise ValueError("type requires selector")
                     payload = {"sid": sid, "selector": selector, "text": body}
-                    response_payload = _post(
-                        http,
-                        f"{base}/api/agent/type",
+                    response_payload = _call(
+                        "/type",
                         payload,
-                        timeout=request_timeout,
                     )
                     last_url = str(response_payload.get("url") or last_url or "") or None
                     result.last_state = {
@@ -376,11 +450,9 @@ def run(
 
         if result.ok:
             try:
-                response_payload = _post(
-                    http,
-                    f"{base}/api/agent/extract",
+                response_payload = _call(
+                    "/extract",
                     {"sid": sid},
-                    timeout=request_timeout,
                 )
                 result.last_state = response_payload
                 _emit(
@@ -401,10 +473,11 @@ def run(
         if own_session and sid:
             try:
                 _emit({"status": "info", "message": "Closing session.", "sid": sid})
-                _post(http, f"{base}/api/agent/session/close", {"sid": sid}, timeout=request_timeout)
+                _call("/session/close", {"sid": sid})
             except Exception:  # pragma: no cover - defensive cleanup
                 pass
-        http.close()
+        if http is not None:
+            http.close()
 
 
 __all__ = ["HeadlessExecutionError", "HeadlessResult", "StepRecord", "run"]

@@ -29,13 +29,24 @@ bp = Blueprint("self_heal_api", __name__, url_prefix="/api")
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
-_VALID_VARIANTS = {"lite", "deep", "headless", "repair"}
+_VALID_VARIANTS = {"lite", "deep", "headless", "repair", "fallback"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
 _PLAN_TIMEOUT_S = float(os.getenv("SELF_HEAL_PLAN_TIMEOUT_S", "12"))
 _FALLBACK_REASON = "fallback: reload"
 _TRUE_FLAGS = {"1", "true", "yes", "on"}
 
 _OLLAMA_CLIENT = OllamaClient()
+
+
+def _planner_timeout() -> float:
+    raw = os.getenv("SELF_HEAL_PLAN_TIMEOUT_S")
+    if raw is None or str(raw).strip() == "":
+        return _PLAN_TIMEOUT_S
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _PLAN_TIMEOUT_S
+    return value if value > 0 else _PLAN_TIMEOUT_S
 
 
 @bp.get("/self_heal/schema")
@@ -230,20 +241,35 @@ def self_heal():
         except Exception:  # pragma: no cover - defensive metrics guard
             pass
     else:
-        system_prompt, user_prompt = build_prompts(incident_payload, variant)
-        _emit(
-            "planner.prompt",
-            "Planner prompts prepared.",
-            system_chars=len(system_prompt),
-            user_chars=len(user_prompt),
-            preview=_payload_preview({"system": system_prompt, "user": user_prompt}),
-        )
-        directive_result, planner_meta = _plan_with_llm(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            variant=variant,
-            timeout_s=_PLAN_TIMEOUT_S,
-        )
+        plan_started = perf_counter()
+        planner_timeout = _planner_timeout()
+        force_fallback = variant in {"lite", "fallback"} or _flag(os.getenv("SELF_HEAL_FORCE_FALLBACK"))
+
+        if force_fallback:
+            directive_result = _fallback_directive()
+            planner_meta = {
+                "status": "variant_skip",
+                "model": None,
+                "error": None,
+                "called_llm": False,
+                "timeout_s": planner_timeout,
+                "took_ms": int((perf_counter() - plan_started) * 1000),
+            }
+        else:
+            system_prompt, user_prompt = build_prompts(incident_payload, variant)
+            _emit(
+                "planner.prompt",
+                "Planner prompts prepared.",
+                system_chars=len(system_prompt),
+                user_chars=len(user_prompt),
+                preview=_payload_preview({"system": system_prompt, "user": user_prompt}),
+            )
+            directive_result, planner_meta = _plan_with_llm(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                variant=variant,
+                timeout_s=planner_timeout,
+            )
         status = planner_meta.get("status")
         if status == "ok":
             _emit(

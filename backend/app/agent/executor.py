@@ -35,16 +35,25 @@ def _max_steps() -> int:
 def run_headless(
     directive: Mapping[str, Any] | Iterable[Mapping[str, Any]],
     *,
-    base_url: str,
+    base_url: str | None,
     session_id: Optional[str] = None,
     sse_publish=None,
 ) -> HeadlessResult:
     """Execute planner directives via the headless executor."""
 
     directive_payload = _coerce_directive(directive)
+    env_base = os.getenv("SELF_HEAL_BASE_URL", "").strip()
+    effective_base: str | None
+    if env_base:
+        effective_base = env_base
+    elif isinstance(base_url, str):
+        effective_base = base_url.strip() or None
+    else:
+        effective_base = None
+
     return _run_directive(
         directive_payload,
-        base_url=base_url,
+        base_url=effective_base,
         sse_publish=sse_publish,
         session_id=session_id,
         max_steps=_max_steps(),

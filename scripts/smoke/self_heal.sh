@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${SELF_HEAL_BASE_URL:-http://127.0.0.1:5000}"
+BASE_URL="${SELF_HEAL_BASE_URL:-http://127.0.0.1:5050}"
 
 schema_url="${BASE_URL%/}/api/self_heal/schema"
 plan_url="${BASE_URL%/}/api/self_heal?variant=lite"
