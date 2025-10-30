@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { BrowserAPI, BrowserDiagnosticsReport } from "@/lib/browser-ipc";
 import type { Verb } from "@/autopilot/executor";
 import { IncidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
+import { fromDirective, toIncident, type DirectivePayload } from "@/lib/io/self_heal";
 
 import { BROWSER_DIAGNOSTICS_SCRIPT } from "@shared/browser-diagnostics-script";
 
@@ -29,11 +30,12 @@ type DiagnosticsCheck = {
   status: CheckStatus;
 };
 
-type DirectiveStep = Verb & { [key: string]: unknown };
-
-type Directive = {
-  steps?: DirectiveStep[];
-  [key: string]: unknown;
+type PayloadSnapshot = {
+  id: string;
+  stage: string;
+  preview: string;
+  ts: number;
+  payload: unknown;
 };
 
 type RuleSignature = {
@@ -91,17 +93,6 @@ type PromoteResponse = {
   metrics?: SelfHealMetrics | null;
 };
 
-function isDirective(candidate: unknown): candidate is Directive {
-  if (!candidate || typeof candidate !== "object") {
-    return false;
-  }
-  const payload = candidate as { steps?: unknown };
-  if ("steps" in payload && payload.steps !== undefined && !Array.isArray(payload.steps)) {
-    return false;
-  }
-  return true;
-}
-
 function describeRule(rule: SelfHealRule): string {
   const parts: string[] = [];
   if (rule.signature?.banner_regex) {
@@ -136,6 +127,17 @@ function normalizeMetrics(metrics?: Record<string, number> | null): SelfHealMetr
   };
 }
 
+function formatPayload(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value ?? "null");
+  }
+}
+
 function resolveStatusBadge(status: CheckStatus) {
   switch (status) {
     case "pass":
@@ -168,10 +170,11 @@ export function DiagnosticsDrawer({
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState("snapshot");
   const [logEntries, setLogEntries] = useState<string[]>([]);
+  const [payloadEvents, setPayloadEvents] = useState<PayloadSnapshot[]>([]);
   const [plannerBusy, setPlannerBusy] = useState(false);
   const [headlessBusy, setHeadlessBusy] = useState(false);
   const [incidentSnapshot, setIncidentSnapshot] = useState<BrowserIncident | null>(null);
-  const [lastDirective, setLastDirective] = useState<Directive | null>(null);
+  const [lastDirective, setLastDirective] = useState<DirectivePayload | null>(null);
   const [selfHealSubTab, setSelfHealSubTab] = useState("actions");
   const [rulepackRules, setRulepackRules] = useState<SelfHealRule[]>([]);
   const [rulepackYaml, setRulepackYaml] = useState("");
@@ -210,7 +213,14 @@ export function DiagnosticsDrawer({
     source.onmessage = (event) => {
       let formatted = event.data;
       try {
-        const data = JSON.parse(event.data) as { stage?: string; message?: string; metrics?: Record<string, number> };
+        const data = JSON.parse(event.data) as {
+          stage?: string;
+          message?: string;
+          metrics?: Record<string, number>;
+          kind?: string;
+          preview?: string;
+          payload?: unknown;
+        };
         if (data.stage || data.message) {
           formatted = `${data.stage ?? "event"}: ${data.message ?? ""}`.trim();
         }
@@ -224,6 +234,16 @@ export function DiagnosticsDrawer({
           setRulepackMetrics((prev) =>
             normalizeMetrics({ ...(prev ?? ({} as Record<string, number>)), ...data.metrics }),
           );
+        }
+        if (data.kind === "payload") {
+          const snapshot: PayloadSnapshot = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            stage: data.stage ?? "event",
+            preview: typeof data.preview === "string" ? data.preview : formatted,
+            ts: Date.now(),
+            payload: data.payload,
+          };
+          setPayloadEvents((prev) => [snapshot, ...prev].slice(0, 20));
         }
       } catch {
         // fall back to raw text
@@ -248,7 +268,7 @@ export function DiagnosticsDrawer({
         incident?: BrowserIncident | null;
         logPlan?: boolean;
       },
-    ): Promise<Directive | null> => {
+    ): Promise<DirectivePayload | null> => {
       const label = options?.label ?? (apply ? "apply" : "plan");
       const incident = options?.incident ?? incidentBusRef.current?.snapshot();
       if (!incident) {
@@ -260,11 +280,12 @@ export function DiagnosticsDrawer({
         setPlannerBusy(true);
       }
       appendLog(`[self-heal] ${label}: requesting directive (apply=${apply}).`);
+      const incidentPayload = toIncident(incident);
       try {
         const response = await fetch(`/api/diagnostics/self_heal?apply=${apply ? "true" : "false"}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(incident),
+          body: JSON.stringify(incidentPayload),
         });
         const text = await response.text();
         let payload: unknown = {};
@@ -284,12 +305,10 @@ export function DiagnosticsDrawer({
         if (options?.logPlan !== false) {
           appendLog(`[self-heal] ${label}: response ->\n${JSON.stringify(payload, null, 2)}`);
         }
-        let directive: Directive | null = null;
+        let directive: DirectivePayload | null = null;
         if (payload && typeof payload === "object" && "directive" in payload) {
           const candidate = (payload as { directive?: unknown }).directive;
-          if (isDirective(candidate)) {
-            directive = candidate;
-          }
+          directive = fromDirective(candidate);
         }
         if (payload && typeof payload === "object" && "meta" in payload) {
           const meta = (payload as { meta?: { rule_id?: string; episode_id?: string; source?: string } }).meta;
@@ -857,6 +876,30 @@ export function DiagnosticsDrawer({
                   <pre className="whitespace-pre-wrap break-words p-3 text-xs">
                     {logEntries.length > 0 ? logEntries.join("\n") : "Waiting for planner output…"}
                   </pre>
+                </ScrollArea>
+              </div>
+              <div className="flex flex-1 flex-col gap-2">
+                <h3 className="text-sm font-semibold">Payload snapshots</h3>
+                <ScrollArea className="h-48 w-full rounded-md border">
+                  {payloadEvents.length > 0 ? (
+                    <div className="space-y-3 p-3 text-xs">
+                      {payloadEvents.map((event) => (
+                        <div key={event.id} className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span className="font-medium text-foreground">{event.stage}</span>
+                            <span>{new Date(event.ts).toLocaleTimeString()}</span>
+                          </div>
+                          <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px]">
+                            {formatPayload(event.payload)}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex h-full items-center justify-center p-3 text-xs text-muted-foreground">
+                      Payload snapshots will appear once planner activity occurs.
+                    </div>
+                  )}
                 </ScrollArea>
               </div>
             </TabsContent>

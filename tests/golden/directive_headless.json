@@ -1,0 +1,12 @@
+{
+  "reason": "Headless recovery",
+  "steps": [
+    { "type": "navigate", "url": "https://example.com/login", "headless": true },
+    { "type": "waitForStable", "ms": 800, "headless": true }
+  ],
+  "plan_confidence": "high",
+  "needs_user_permission": true,
+  "fallback": {
+    "enabled": false
+  }
+}

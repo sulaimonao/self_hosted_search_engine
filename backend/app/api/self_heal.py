@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.ai.self_heal_prompt import ALLOWED_VERBS, build_prompts
 from backend.app.api.reasoning import route_to_browser  # noqa: F401 - imported for future integration
+from backend.app.io import coerce_directive, coerce_incident, self_heal_schema
+from backend.app.io.models import Directive, Step, VERB_MAP
 from backend.app.llm.ollama_client import (
     DEFAULT_MODEL as DEFAULT_SELF_HEAL_MODEL,
     OllamaClient,
@@ -27,44 +28,47 @@ _VALID_VARIANTS = {"lite", "deep", "headless", "repair"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
 
 
-@dataclass(slots=True)
-class SelfHealDirective:
-    """Structured directive consumed by the in-tab executor."""
+@bp.get("/self_heal/schema")
+def self_heal_schema_echo():
+    """Expose JSON Schemas for self-heal payloads."""
 
-    reason: str
-    steps: List[Dict[str, Any]] = field(default_factory=list)
-    plan_confidence: Optional[str] = None
-    needs_user_permission: Optional[bool] = None
-    ask_user: Optional[List[str]] = None
-    fallback: Optional[Dict[str, Any]] = None
-
-    def model_dump(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"reason": self.reason, "steps": self.steps}
-        if self.plan_confidence:
-            payload["plan_confidence"] = self.plan_confidence
-        if self.needs_user_permission is not None:
-            payload["needs_user_permission"] = self.needs_user_permission
-        if self.ask_user:
-            payload["ask_user"] = self.ask_user
-        if self.fallback:
-            payload["fallback"] = self.fallback
-        return payload
+    return jsonify(self_heal_schema())
 
 
 _OLLAMA_CLIENT = OllamaClient()
 
 
-def _coerce_incident(payload: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "id": str(payload.get("id") or ""),
-        "url": str(payload.get("url") or ""),
-        "symptoms": dict(payload.get("symptoms") or {}),
-        "domSnippet": (payload.get("domSnippet") or "")[:4000],
-    }
+def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): _shrink_payload(v, max_string=max_string, max_items=max_items) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [
+            _shrink_payload(item, max_string=max_string, max_items=max_items)
+            for item in list(value)[:max_items]
+        ]
+    if isinstance(value, str):
+        if len(value) > max_string:
+            return value[: max_string - 3] + "..."
+        return value
+    return value
 
 
-def _publish_diagnostic(stage: str, message: str, **extra: Any) -> None:
+def _payload_preview(payload: Any, *, limit: int = 900) -> str:
+    try:
+        rendered = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        rendered = str(payload)
+    if len(rendered) > limit:
+        return rendered[: limit - 3] + "..."
+    return rendered
+
+
+def _publish_diagnostic(stage: str, message: str, *, payload: Any | None = None, **extra: Any) -> None:
     event: Dict[str, Any] = {"stage": stage, "message": message}
+    if payload is not None:
+        event["kind"] = "payload"
+        event["payload"] = _shrink_payload(payload)
+        event["preview"] = _payload_preview(payload)
     for key, value in extra.items():
         if value is None:
             continue
@@ -94,6 +98,20 @@ def _coerce_str(value: Any) -> str:
     return ""
 
 
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
 def _parse_plan(response: Any) -> Dict[str, Any]:
     if isinstance(response, Mapping):
         return dict(response)
@@ -105,11 +123,11 @@ def _parse_plan(response: Any) -> Dict[str, Any]:
     raise TypeError("planner response must be a string or mapping")
 
 
-def _fallback_directive(reason: str) -> SelfHealDirective:
-    return SelfHealDirective(reason=reason, steps=[{"type": "reload"}], plan_confidence="low")
+def _fallback_directive(reason: str) -> Directive:
+    return Directive(reason=reason, steps=[Step(type="reload")], plan_confidence="low")
 
 
-def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, List[str], bool]:
+def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Directive, List[str], bool]:
     notes: List[str] = []
     steps_payload: List[Dict[str, Any]] = []
     steps_in = plan.get("steps")
@@ -124,6 +142,7 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
             continue
         type_raw = raw_step.get("type") or raw_step.get("verb") or raw_step.get("action")
         step_type = _coerce_str(type_raw).replace(" ", "")
+        step_type = VERB_MAP.get(step_type.lower(), step_type)
         if step_type not in ALLOWED_VERBS:
             notes.append(f"Step {idx} skipped: unsupported verb '{step_type}'.")
             continue
@@ -200,8 +219,8 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
     if confidence in {"low", "medium", "high"}:
         directive_payload["plan_confidence"] = confidence
 
-    needs_permission = plan.get("needs_user_permission")
-    if isinstance(needs_permission, bool):
+    needs_permission = _coerce_bool(plan.get("needs_user_permission"))
+    if needs_permission is not None:
         directive_payload["needs_user_permission"] = needs_permission
 
     ask_user = plan.get("ask_user")
@@ -216,9 +235,9 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
         hints: List[str] = []
         if isinstance(headless_hint_raw, (list, tuple)):
             hints = [hint for hint in (_coerce_str(item) for item in headless_hint_raw) if hint]
-        enabled_flag = fallback_info.get("enabled")
+        enabled_flag = _coerce_bool(fallback_info.get("enabled"))
         directive_payload["fallback"] = {
-            "enabled": bool(enabled_flag) if enabled_flag is not None else True,
+            "enabled": True if enabled_flag is None else enabled_flag,
             "headless_hint": hints,
         }
 
@@ -226,14 +245,7 @@ def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[SelfHealDirective, Li
         notes.append("Planner produced no executable steps; fallback reload() will be used.")
         return _fallback_directive(reason), notes, True
 
-    directive = SelfHealDirective(
-        reason=directive_payload["reason"],
-        steps=directive_payload["steps"],
-        plan_confidence=directive_payload.get("plan_confidence"),
-        needs_user_permission=directive_payload.get("needs_user_permission"),
-        ask_user=directive_payload.get("ask_user"),
-        fallback=directive_payload.get("fallback"),
-    )
+    directive = coerce_directive(directive_payload)
     return directive, notes, False
 
 
@@ -243,7 +255,10 @@ def self_heal():
 
     apply = request.args.get("apply", "false").lower() in {"1", "true", "yes", "on"}
     variant = _coerce_variant(request.args.get("variant"))
-    incident = _coerce_incident(request.get_json(silent=True) or {})
+    incident_model = coerce_incident(request.get_json(silent=True) or {})
+    incident = incident_model.as_payload()
+
+    _publish_diagnostic("io.self_heal.request", "incident captured", payload=incident)
 
     _publish_diagnostic(
         "planner.start",
@@ -268,10 +283,13 @@ def self_heal():
         )
         if isinstance(bus, ProgressBus):
             record_event("rule_hits_count", bus=bus)
-        directive = SelfHealDirective(
-            reason=directive_payload.get("reason", "Rule applied"),
-            steps=list(directive_payload.get("steps") or []),
+        directive = coerce_directive(
+            {
+                "reason": directive_payload.get("reason", "Rule applied"),
+                "steps": list(directive_payload.get("steps") or []),
+            }
         )
+        directive_payload_out = directive.as_payload()
         meta = {
             "variant": variant,
             "rule_id": rule_id,
@@ -281,16 +299,17 @@ def self_heal():
         episode_id, _ = append_episode(
             url=incident.get("url", ""),
             symptoms=incident.get("symptoms", {}),
-            directive=directive.model_dump(),
+            directive=directive_payload_out,
             mode="apply" if apply else "plan",
             outcome="unknown",
             meta=meta,
         )
         response = {
             "mode": "apply" if apply else "plan",
-            "directive": directive.model_dump(),
+            "directive": directive_payload_out,
             "meta": {**meta, "episode_id": episode_id},
         }
+        _publish_diagnostic("io.self_heal.response", "rule directive", payload=response)
         return jsonify(response), 200
 
     system_prompt, user_prompt = build_prompts(incident, variant)
@@ -341,11 +360,12 @@ def self_heal():
         "source": "planner",
         "domSnippet": incident.get("domSnippet"),
     }
+    directive_payload_out = directive.as_payload()
     try:
         episode_id, _ = append_episode(
             url=incident.get("url", ""),
             symptoms=incident.get("symptoms", {}),
-            directive=directive.model_dump(),
+            directive=directive_payload_out,
             mode=mode,
             outcome="unknown",
             meta=meta,
@@ -354,7 +374,8 @@ def self_heal():
         episode_id = None
     response = {
         "mode": mode,
-        "directive": directive.model_dump(),
+        "directive": directive_payload_out,
         "meta": {**meta, "episode_id": episode_id},
     }
+    _publish_diagnostic("io.self_heal.response", f"directive ready ({mode})", payload=response)
     return jsonify(response), 200
