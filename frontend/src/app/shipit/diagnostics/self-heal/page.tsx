@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { api } from "@/lib/api";
 import { fromDirective, type DirectivePayload } from "@/lib/io/self_heal";
 
 type PlannerResponse = {
@@ -106,7 +107,7 @@ export default function SelfHealDiagnosticsPage(): JSX.Element {
     setNotification(null);
     setError(null);
     try {
-      const response = await fetch("/api/self_heal/execute_headless", {
+      const response = await fetch(api("/api/self_heal/execute_headless"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ consent: true, directive: { steps: plan.steps } }),

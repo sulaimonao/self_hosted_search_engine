@@ -18,6 +18,7 @@ import type { BrowserAPI, BrowserDiagnosticsReport } from "@/lib/browser-ipc";
 import type { Verb } from "@/autopilot/executor";
 import { IncidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
 import { fromDirective, toIncident, type DirectivePayload } from "@/lib/io/self_heal";
+import { api } from "@/lib/api";
 
 import { BROWSER_DIAGNOSTICS_SCRIPT } from "@shared/browser-diagnostics-script";
 
@@ -423,7 +424,7 @@ export function DiagnosticsDrawer({
       controller.abort();
     }, PLANNER_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch("/api/diagnostics/self_heal/execute_headless", {
+      const response = await fetch(api("/api/diagnostics/self_heal/execute_headless"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ consent: true, directive }),
