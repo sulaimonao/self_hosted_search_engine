@@ -6,6 +6,7 @@
 .PHONY: api web
 .PHONY: lint-makefile diag
 .PHONY: ollama-pull-self-heal ollama-health index-health index-rebuild
+.PHONY: smoke:selfheal
 
 lint-makefile:
 	@echo "Ensure all recipe lines use tabs (not spaces)."
@@ -45,6 +46,9 @@ index-rebuild:
 	else \
 	printf '%s\n' "$$RESPONSE"; \
 	fi
+
+smoke:selfheal:
+	@bash scripts/smoke/self_heal.sh
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050

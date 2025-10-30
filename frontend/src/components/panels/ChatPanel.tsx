@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, StopCircle } from "lucide-react";
-import { AutopilotExecutor, type Verb } from "@/autopilot/executor";
+import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -30,9 +30,10 @@ import {
 } from "@/lib/api";
 import { resolveChatModelSelection } from "@/lib/chat-model";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
-import type { AutopilotToolDirective, ChatMessage } from "@/lib/types";
+import type { AutopilotDirective, AutopilotToolDirective, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state/useAppStore";
+import { useUIStore } from "@/state/ui";
 
 const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
@@ -44,6 +45,19 @@ type ToolExecutionState = {
   status: "idle" | "running" | "success" | "error";
   detail?: string;
 };
+
+function extractAutopilotSteps(value: AutopilotDirective | null | undefined): Verb[] | null {
+  if (!value) {
+    return null;
+  }
+  const directiveSteps = Array.isArray(value.directive?.steps) ? (value.directive?.steps as Verb[]) : [];
+  const topLevelSteps = Array.isArray(value.steps) ? (value.steps as Verb[]) : [];
+  const candidates = directiveSteps.length > 0 ? directiveSteps : topLevelSteps;
+  if (!candidates || candidates.length === 0) {
+    return null;
+  }
+  return candidates.filter((step): step is Verb => Boolean(step && step.type));
+}
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -163,6 +177,7 @@ export function ChatPanel() {
   const [planExecutions, setPlanExecutions] = useState<
     Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }>
   >({});
+  const [pendingDirectives, setPendingDirectives] = useState<Record<string, Verb[]>>({});
   const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
   const {
     state: llmStream,
@@ -186,6 +201,7 @@ export function ChatPanel() {
       activeTab: state.activeTab?.(),
     })),
   );
+  const showReasoning = useUIStore((state) => state.showReasoning);
 
   const clientTimezone = useMemo(() => {
     try {
@@ -295,6 +311,25 @@ export function ChatPanel() {
         }
       }
 
+      if (!changed) {
+        return prev;
+      }
+      return next;
+    });
+  }, [messages]);
+
+  useEffect(() => {
+    setPendingDirectives((prev) => {
+      const validIds = new Set(messages.map((message) => message.id));
+      let changed = false;
+      const next: Record<string, Verb[]> = {};
+      for (const id of Object.keys(prev)) {
+        if (validIds.has(id)) {
+          next[id] = prev[id];
+        } else {
+          changed = true;
+        }
+      }
       if (!changed) {
         return prev;
       }
@@ -460,7 +495,30 @@ export function ChatPanel() {
   }, []);
 
   const updateMessage = useCallback((id: string, updater: (message: ChatMessage) => ChatMessage) => {
-    setMessages((prev) => prev.map((message) => (message.id === id ? updater(message) : message)));
+    let autopilotSteps: Verb[] | null | undefined;
+    let matched = false;
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== id) {
+          return message;
+        }
+        matched = true;
+        const next = updater(message);
+        autopilotSteps = extractAutopilotSteps(next.autopilot);
+        return next;
+      }),
+    );
+    if (matched) {
+      setPendingDirectives((prev) => {
+        const next = { ...prev };
+        if (autopilotSteps && autopilotSteps.length > 0) {
+          next[id] = autopilotSteps;
+        } else {
+          delete next[id];
+        }
+        return next;
+      });
+    }
   }, []);
 
   const handleRunAutopilotTool = useCallback(
@@ -495,7 +553,8 @@ export function ChatPanel() {
   const handleRunAutopilotPlan = useCallback(
     async (messageId: string, steps: Verb[]) => {
       const key = `${messageId}:directive`;
-      if (!steps || steps.length === 0) {
+      const directiveSteps = pendingDirectives[messageId] ?? steps;
+      if (!directiveSteps || directiveSteps.length === 0) {
         setPlanExecutions((prev) => ({
           ...prev,
           [key]: { status: "error", detail: "Directive has no executable steps." },
@@ -504,9 +563,29 @@ export function ChatPanel() {
       }
       setPlanExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
       try {
-        await autopilotExecutor.run({ steps });
-        setPlanExecutions((prev) => ({ ...prev, [key]: { status: "success" } }));
-        setBanner({ intent: "info", text: "Autopilot plan executed." });
+        const result: AutopilotRunResult = await autopilotExecutor.run(
+          { steps: directiveSteps },
+          {
+            onHeadlessError: (error) => {
+              const message = error instanceof Error ? error.message : String(error ?? "headless_failed");
+              setBanner({ intent: "error", text: message });
+            },
+          },
+        );
+        if (result.headlessErrors.length > 0) {
+          const detail = result.headlessErrors.map((error) => error.message).join("; ") || "Headless execution failed.";
+          setPlanExecutions((prev) => ({
+            ...prev,
+            [key]: { status: "error", detail },
+          }));
+        } else {
+          setPlanExecutions((prev) => ({ ...prev, [key]: { status: "success" } }));
+          const batchSummary =
+            result.headlessBatches > 0
+              ? ` (${result.headlessBatches} headless batch${result.headlessBatches === 1 ? "" : "es"})`
+              : "";
+          setBanner({ intent: "info", text: `Autopilot plan executed${batchSummary}.` });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error ?? "Autopilot run failed");
         setPlanExecutions((prev) => ({
@@ -516,7 +595,7 @@ export function ChatPanel() {
         setBanner({ intent: "error", text: message });
       }
     },
-    [autopilotExecutor, setBanner],
+    [autopilotExecutor, pendingDirectives, setBanner],
   );
 
   const handleLinkNavigation = useCallback(
@@ -596,47 +675,70 @@ export function ChatPanel() {
     let contextMessage: ChatPayloadMessage | null = null;
     let contextData: ChatContextResponse | null = null;
     let selectionText: string | null = null;
+    const browserUrl = typeof window !== "undefined" ? window.location.href : null;
+    const browserTitle = typeof document !== "undefined" ? document.title : null;
 
-    if (usePageContext && activeTab?.url) {
+    if (usePageContext) {
+      const contextUrl = activeTab?.url ?? browserUrl ?? undefined;
+      const contextTitle = activeTab?.title ?? browserTitle ?? undefined;
       try {
         selectionText = captureWindowSelection();
-        contextData = await fetchChatContext(threadId, {
-          url: activeTab.url,
-          include: ["selection", "history", "metadata"],
-          selection: selectionText,
-          title: activeTab.title ?? undefined,
-          locale: clientLocale ?? undefined,
-          time: new Date().toISOString(),
-        });
-        const combinedSelection = contextData.selection?.text ?? selectionText ?? null;
-        const selectionCount = contextData.selection?.word_count ?? countWords(combinedSelection);
-        const contextPayload = {
-          url: contextData.url ?? activeTab.url,
-          title: activeTab.title ?? (contextData.metadata?.title as string | undefined) ?? null,
-          summary: contextData.summary ?? null,
-          selection: combinedSelection,
-          selection_word_count: selectionCount,
-          metadata: contextData.metadata ?? {},
-          history: contextData.history ?? [],
-          memories: contextData.memories ?? [],
-        };
-        contextMessage = {
-          role: "system",
-          content: JSON.stringify({ context: contextPayload }, null, 2),
-        };
-        setContextSummary({
-          url: contextPayload.url ?? activeTab.url,
-          selectionWordCount: selectionCount,
-        });
-        void storeChatMessage(threadId, {
-          role: "system",
-          content: JSON.stringify({ type: "context", data: contextPayload }),
-        }).catch((error) => console.warn("[chat] failed to persist context", error));
+        if (contextUrl) {
+          contextData = await fetchChatContext(threadId, {
+            url: contextUrl,
+            include: ["selection", "history", "metadata"],
+            selection: selectionText,
+            title: contextTitle,
+            locale: clientLocale ?? undefined,
+            time: new Date().toISOString(),
+          });
+        }
+        const combinedSelection = contextData?.selection?.text ?? selectionText ?? null;
+        const selectionCount = contextData?.selection?.word_count ?? countWords(combinedSelection);
+        const payloadUrl = contextData?.url ?? contextUrl ?? null;
+        const payloadTitle =
+          contextTitle ?? (contextData?.metadata?.title as string | undefined) ?? browserTitle ?? null;
+        if (payloadUrl || payloadTitle || combinedSelection) {
+          const contextPayload = {
+            url: payloadUrl,
+            title: payloadTitle,
+            summary: contextData?.summary ?? null,
+            selection: combinedSelection,
+            selection_word_count: selectionCount,
+            metadata: contextData?.metadata ?? {},
+            history: contextData?.history ?? [],
+            memories: contextData?.memories ?? [],
+          };
+          contextMessage = {
+            role: "system",
+            content: JSON.stringify({ context: contextPayload }, null, 2),
+          };
+          void storeChatMessage(threadId, {
+            role: "system",
+            content: JSON.stringify({ type: "context", data: contextPayload }),
+          }).catch((error) => console.warn("[chat] failed to persist context", error));
+          setContextSummary({ url: payloadUrl, selectionWordCount: selectionCount });
+        } else {
+          setContextSummary({ url: payloadUrl, selectionWordCount: selectionCount });
+        }
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "Failed to resolve page context";
         setBanner({ intent: "error", text: messageText });
       }
     }
+
+    const selectionContext = contextData?.selection?.text ?? selectionText ?? null;
+    const textContextParts: string[] = [];
+    if (usePageContext && browserTitle && browserTitle.trim()) {
+      textContextParts.push(browserTitle.trim());
+    }
+    if (selectionContext && selectionContext.trim()) {
+      textContextParts.push(selectionContext);
+    }
+    const requestUrl = usePageContext
+      ? browserUrl ?? activeTab?.url ?? undefined
+      : activeTab?.url ?? undefined;
+    const textContextPayload = textContextParts.length > 0 ? textContextParts.join("\n\n") : undefined;
 
     const modelMessages: ChatPayloadMessage[] = [];
     if (contextMessage) {
@@ -664,8 +766,8 @@ export function ChatPanel() {
         model: selectedModel ?? undefined,
         messages: modelMessages,
         stream: true,
-        url: activeTab?.url ?? undefined,
-        text_context: contextData?.selection?.text ?? selectionText ?? undefined,
+        url: requestUrl,
+        text_context: textContextPayload,
         client_timezone: clientTimezone ?? undefined,
         server_time: serverTime?.server_time ?? undefined,
         server_timezone: serverTime?.server_timezone ?? undefined,
@@ -697,8 +799,8 @@ export function ChatPanel() {
       const result = await chatClient.send({
         messages: modelMessages,
         model: selectedModel ?? undefined,
-        url: activeTab?.url ?? undefined,
-        textContext: contextData?.selection?.text ?? selectionText ?? undefined,
+        url: requestUrl ?? null,
+        textContext: textContextPayload ?? null,
         clientTimezone,
         serverTime: serverTime?.server_time ?? undefined,
         serverTimezone: serverTime?.server_timezone ?? undefined,
@@ -721,6 +823,7 @@ export function ChatPanel() {
               answer: event.answer ?? message.answer ?? "",
               reasoning: event.reasoning ?? message.reasoning ?? "",
               citations: event.citations ?? message.citations ?? [],
+              autopilot: event.autopilot ?? message.autopilot ?? null,
             }));
           }
         },
@@ -983,7 +1086,7 @@ export function ChatPanel() {
           <div className="flex flex-col gap-2">
             <UsePageContextToggle
               enabled={usePageContext}
-              disabled={isBusy || installing || !activeTab?.url}
+              disabled={isBusy || installing}
               onChange={handleContextToggle}
               summary={contextSummary}
             />
@@ -1069,6 +1172,16 @@ export function ChatPanel() {
                             onLinkClick={handleLinkNavigation}
                           />
                         ) : null}
+                        {showReasoning && message.reasoning ? (
+                          <details className="rounded-md border border-muted-foreground/40 bg-muted/20 p-2 text-xs">
+                            <summary className="cursor-pointer font-semibold uppercase tracking-wide text-muted-foreground">
+                              Reasoning
+                            </summary>
+                            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-tight text-foreground/90">
+                              {message.reasoning}
+                            </pre>
+                          </details>
+                        ) : null}
                         {message.citations && message.citations.length > 0 ? (
                           <div className="space-y-2 text-xs text-muted-foreground">
                             <p className="font-medium text-foreground">Citations</p>
@@ -1109,7 +1222,7 @@ export function ChatPanel() {
                             ) : null}
                             {(() => {
                               const directiveSteps =
-                                (message.autopilot.directive?.steps ?? message.autopilot.steps ?? []) as Verb[];
+                                pendingDirectives[message.id] ?? extractAutopilotSteps(message.autopilot) ?? [];
                               const planKey = `${message.id}:directive`;
                               const execution = planExecutions[planKey];
                               const running = execution?.status === "running";
@@ -1122,6 +1235,9 @@ export function ChatPanel() {
                                 <div className="mt-3 space-y-2">
                                   <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
                                     Directive steps
+                                  </p>
+                                  <p className="text-[11px] text-muted-foreground">
+                                    This may open pages headlessly via the backend. You can revoke consent in Settings.
                                   </p>
                                   <ol className="list-decimal space-y-1 rounded-md border border-primary/20 bg-background/80 p-2 text-[11px]">
                                     {directiveSteps.map((step, index) => (

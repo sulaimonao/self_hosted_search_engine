@@ -6,6 +6,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Mapping, Optional
 
 import json
+import logging
 from flask import Blueprint, current_app, jsonify, request
 
 from backend.app.agent.executor import run_headless
@@ -19,6 +20,8 @@ from backend.app.services.progress_bus import ProgressBus
 bp = Blueprint("self_heal_headless_api", __name__, url_prefix="/api/self_heal")
 
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _publish(event: Dict[str, Any]) -> None:
@@ -60,15 +63,16 @@ def _payload_preview(payload: Any, *, limit: int = 900) -> str:
     return rendered
 
 
-def _publish_payload(stage: str, payload: Any) -> None:
-    _publish(
-        {
-            "stage": stage,
-            "kind": "payload",
-            "payload": _shrink_payload(payload),
-            "preview": _payload_preview(payload),
-        }
-    )
+def _publish_payload(stage: str, payload: Any, *, trace_id: str | None = None) -> None:
+    event: Dict[str, Any] = {
+        "stage": stage,
+        "kind": "payload",
+        "payload": _shrink_payload(payload),
+        "preview": _payload_preview(payload),
+    }
+    if trace_id:
+        event["trace_id"] = trace_id
+    _publish(event)
 
 
 def _coerce_directive(payload: Any) -> Directive:
@@ -152,8 +156,25 @@ def execute_headless():
 
     base_url = request.host_url.rstrip("/")
     filtered_directive = _filter_directive_steps(directive)
-    _publish_payload("headless.request", filtered_directive)
-    _publish_payload("headless.request", filtered_directive)
+    trace_id = request.headers.get("X-Trace-Id") or request.headers.get("X-Request-Id")
+    _publish_payload("headless.request", filtered_directive, trace_id=trace_id)
+    _publish(
+        {
+            "stage": "headless",
+            "status": "start",
+            "message": "Headless execution requested.",
+            "steps": len(filtered_directive.get("steps", [])),
+            "trace_id": trace_id,
+        }
+    )
+    LOGGER.info(
+        "self_heal.headless.start",
+        extra={
+            "trace_id": trace_id,
+            "steps": len(filtered_directive.get("steps", [])),
+            "base_url": base_url,
+        },
+    )
 
     def _sse_publish(event: Dict[str, Any]) -> None:
         try:
@@ -174,7 +195,14 @@ def execute_headless():
             record_event("headless_runs_count", bus=_progress_bus())
         except Exception:  # pragma: no cover - best effort
             pass
-        return jsonify({"ok": False, "error": message}), 500
+        error_payload = {"ok": False, "error": message}
+        if trace_id:
+            error_payload["trace_id"] = trace_id
+        LOGGER.info(
+            "self_heal.headless.error",
+            extra={"trace_id": trace_id, "error": message},
+        )
+        return jsonify(error_payload), 500
     except Exception as exc:  # pragma: no cover - defensive guard
         message = str(exc)
         _publish({"stage": "headless", "status": "error", "message": message})
@@ -182,7 +210,14 @@ def execute_headless():
             record_event("headless_runs_count", bus=_progress_bus())
         except Exception:  # pragma: no cover - best effort
             pass
-        return jsonify({"ok": False, "error": message}), 500
+        error_payload = {"ok": False, "error": message}
+        if trace_id:
+            error_payload["trace_id"] = trace_id
+        LOGGER.info(
+            "self_heal.headless.error",
+            extra={"trace_id": trace_id, "error": message},
+        )
+        return jsonify(error_payload), 500
 
     steps_payload = _result_to_events(result)
     response: Dict[str, Any] = {"ok": result.ok, "steps": steps_payload}
@@ -190,6 +225,8 @@ def execute_headless():
         response["failed_step"] = result.failed_step
     if result.session_id:
         response["session_id"] = result.session_id
+    if trace_id:
+        response["trace_id"] = trace_id
 
     status_code = 200 if result.ok else 500
     meta = {
@@ -197,6 +234,8 @@ def execute_headless():
         "failed_step": result.failed_step,
         "ok": result.ok,
     }
+    if trace_id:
+        meta["trace_id"] = trace_id
     try:
         record_event("headless_runs_count", bus=_progress_bus())
     except Exception:  # pragma: no cover
@@ -213,7 +252,16 @@ def execute_headless():
         )
     except Exception:  # pragma: no cover
         pass
-    _publish_payload("headless.response", response)
+    _publish_payload("headless.response", response, trace_id=trace_id)
+    LOGGER.info(
+        "self_heal.headless.complete",
+        extra={
+            "trace_id": trace_id,
+            "ok": result.ok,
+            "failed_step": result.failed_step,
+            "steps": len(steps_payload),
+        },
+    )
     return jsonify(response), status_code
 
 

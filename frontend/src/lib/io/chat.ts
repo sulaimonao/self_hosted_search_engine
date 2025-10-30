@@ -176,7 +176,7 @@ function parseDirectiveSteps(value: unknown): Verb[] | null {
   return directive.steps.length > 0 ? (directive.steps as Verb[]) : null;
 }
 
-function parseAutopilot(value: unknown): AutopilotDirective | null {
+export function parseAutopilotDirective(value: unknown): AutopilotDirective | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const mode = normalizeString(record.mode) ?? "";
@@ -214,7 +214,7 @@ export function fromChatResponse(raw: unknown): ChatResponsePayload {
     : [];
   const model = normalizeString(data.model) ?? null;
   const traceId = normalizeString(data.trace_id ?? data.traceId) ?? null;
-  const autopilot = parseAutopilot(data.autopilot);
+  const autopilot = parseAutopilotDirective(data.autopilot);
   return {
     reasoning,
     answer,

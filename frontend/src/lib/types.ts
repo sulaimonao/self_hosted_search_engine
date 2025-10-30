@@ -194,6 +194,7 @@ export type ChatStreamEvent =
       reasoning?: string | null;
       citations?: string[] | null;
       delta?: string | null;
+      autopilot?: AutopilotDirective | null;
     }
   | {
       type: "complete";

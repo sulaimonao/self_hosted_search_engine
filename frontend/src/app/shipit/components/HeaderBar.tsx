@@ -68,6 +68,12 @@ export default function HeaderBar(): JSX.Element {
         <Link href="/shipit/diagnostics" className="px-3 py-1 rounded-2xl border text-sm">
           Diagnostics
         </Link>
+        <Link
+          href="/shipit/diagnostics/self-heal"
+          className="px-3 py-1 text-sm text-primary underline-offset-2 hover:underline"
+        >
+          Self-Heal
+        </Link>
       </div>
     </div>
   );

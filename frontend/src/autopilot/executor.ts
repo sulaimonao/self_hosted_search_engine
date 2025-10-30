@@ -7,55 +7,104 @@ export type Verb =
   | ({ type: "type"; selector: string; text: string } & BaseVerb)
   | ({ type: "waitForStable"; ms?: number } & BaseVerb);
 
+export type AutopilotRunOptions = {
+  onHeadlessError?: (error: Error) => void;
+};
+
+export type AutopilotRunResult = {
+  headlessErrors: Error[];
+  headlessBatches: number;
+};
+
+function normalizeXpathText(value: string): string {
+  return `//*[normalize-space(text())=${JSON.stringify(value.trim())}]`;
+}
+
+function safeClick(target: Element | null, context: string) {
+  if (!target) {
+    console.warn(`[autopilot] click target not found for ${context}`);
+    return;
+  }
+  try {
+    (target as HTMLElement).click();
+  } catch (error) {
+    console.warn(`[autopilot] click failed for ${context}`, error);
+  }
+}
+
 export class AutopilotExecutor {
+  private findBySelector(selector: string | undefined): Element | null {
+    if (!selector || typeof document === "undefined") {
+      return null;
+    }
+    try {
+      return document.querySelector(selector);
+    } catch (error) {
+      console.warn(`[autopilot] invalid selector ${selector}`, error);
+      return null;
+    }
+  }
+
+  private findByText(text: string | undefined): Element | null {
+    if (!text || typeof document === "undefined") {
+      return null;
+    }
+    try {
+      const xpath = normalizeXpathText(text);
+      const result = document.evaluate(
+        xpath,
+        document,
+        null,
+        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        null,
+      );
+      const node = result.singleNodeValue;
+      if (node instanceof HTMLElement) {
+        return node;
+      }
+      return null;
+    } catch (error) {
+      console.warn(`[autopilot] xpath lookup failed for ${text}`, error);
+      return null;
+    }
+  }
+
   private async runClient(step: Verb) {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      console.warn("[autopilot] client executor unavailable in this environment");
+      return;
+    }
     if (step.type === "reload") {
-      location.reload();
+      window.location.reload();
       return;
     }
     if (step.type === "navigate" && step.url) {
-      location.href = step.url;
+      window.location.assign(step.url);
       return;
     }
     if (step.type === "click") {
-      let el: Element | null = null;
-      if (step.selector) {
-        el = document.querySelector(step.selector);
+      const selectorTarget = this.findBySelector(step.selector);
+      if (selectorTarget) {
+        safeClick(selectorTarget, step.selector ?? step.text ?? "click");
+        return;
       }
-      if (!el && step.text) {
-        const interactive = Array.from(
-          document.querySelectorAll<HTMLElement>("button,a,[role='button']"),
-        );
-        el = interactive.find((node) => (node.textContent || "").includes(step.text ?? "")) || null;
-        if (!el) {
-          const xp = `//*[normalize-space(text())=${JSON.stringify(step.text)}]`;
-          el = document.evaluate(
-            xp,
-            document,
-            null,
-            XPathResult.FIRST_ORDERED_NODE_TYPE,
-            null,
-          ).singleNodeValue as Element | null;
-        }
-      }
-      if (!el) {
-        throw new Error(`click: target not found (${step.selector || step.text})`);
-      }
-      (el as HTMLElement).click();
+      const textTarget = this.findByText(step.text);
+      safeClick(textTarget, step.selector ?? step.text ?? "click");
       return;
     }
     if (step.type === "type") {
-      const el = document.querySelector(step.selector) as
+      const element = this.findBySelector(step.selector) as
         | HTMLInputElement
         | HTMLTextAreaElement
         | null;
-      if (!el) {
-        throw new Error(`type: target not found (${step.selector})`);
+      if (!element) {
+        console.warn(`[autopilot] type target not found (${step.selector})`);
+        return;
       }
-      el.focus();
-      el.value = step.text;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      element.focus();
+      element.value = step.text;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
     if (step.type === "waitForStable") {
@@ -77,15 +126,25 @@ export class AutopilotExecutor {
     return response.json().catch(() => null);
   }
 
-  async run(directive: { steps: Verb[] }) {
+  async run(directive: { steps: Verb[] }, options?: AutopilotRunOptions): Promise<AutopilotRunResult> {
     const headlessBuffer: Verb[] = [];
+    const headlessErrors: Error[] = [];
+    let headlessBatches = 0;
 
     const flushHeadless = async () => {
       if (headlessBuffer.length === 0) {
         return;
       }
       const batch = headlessBuffer.splice(0, headlessBuffer.length);
-      await this.runHeadless(batch);
+      try {
+        await this.runHeadless(batch);
+        headlessBatches += 1;
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error ?? "headless failed"));
+        console.warn("[autopilot] headless batch failed", normalized);
+        headlessErrors.push(normalized);
+        options?.onHeadlessError?.(normalized);
+      }
     };
 
     for (const step of directive.steps) {
@@ -98,6 +157,8 @@ export class AutopilotExecutor {
     }
 
     await flushHeadless();
+
+    return { headlessErrors, headlessBatches };
   }
 }
 

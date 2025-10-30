@@ -1,5 +1,5 @@
 import { ChatResponsePayload, type ChatStreamEvent } from "@/lib/types";
-import { fromChatResponse, toChatRequest } from "@/lib/io/chat";
+import { fromChatResponse, parseAutopilotDirective, toChatRequest } from "@/lib/io/chat";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
 
@@ -130,6 +130,9 @@ async function consumeChatStream(
             const sanitized = fromChatResponse(parsed.payload);
             finalPayload = sanitized;
             options.onEvent?.({ ...parsed, payload: sanitized });
+          } else if (parsed.type === "delta") {
+            const autopilot = parseAutopilotDirective((parsed as { autopilot?: unknown }).autopilot);
+            options.onEvent?.({ ...parsed, autopilot });
           } else if (isChatErrorEvent(parsed)) {
             const trace = parsed.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
             throw new ChatRequestError(parsed.error || "chat stream error", {
@@ -163,6 +166,9 @@ async function consumeChatStream(
         const sanitized = fromChatResponse(parsed.payload);
         finalPayload = sanitized;
         options.onEvent?.({ ...parsed, payload: sanitized });
+      } else if (parsed.type === "delta") {
+        const autopilot = parseAutopilotDirective((parsed as { autopilot?: unknown }).autopilot);
+        options.onEvent?.({ ...parsed, autopilot });
       } else if (isChatErrorEvent(parsed)) {
         const trace = parsed.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
         throw new ChatRequestError(parsed.error || "chat stream error", {
