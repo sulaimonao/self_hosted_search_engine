@@ -332,6 +332,7 @@ def self_heal():
         "domSnippet": incident_payload.get("domSnippet"),
         "planner_status": planner_meta.get("status"),
     }
+    response_meta["planner_variant"] = variant
     if planner_meta.get("timeout_s") is not None:
         response_meta["planner_timeout_s"] = planner_meta.get("timeout_s")
     if planner_meta.get("model"):
@@ -340,6 +341,31 @@ def self_heal():
         response_meta["planner_took_ms"] = planner_meta.get("took_ms")
     if planner_meta.get("rule_id"):
         response_meta["rule_id"] = planner_meta.get("rule_id")
+
+    step_count = len(directive_result.directive.steps)
+    response_meta["autopilot_steps_count"] = step_count
+    response_meta["autopilot_contains_headless"] = bool(needs_headless)
+    response_meta["planner_duration_ms"] = planner_meta.get("took_ms")
+
+    _emit(
+        "planner.metrics",
+        "Planner telemetry recorded.",
+        variant=variant,
+        steps=step_count,
+        headless=bool(needs_headless),
+        planner_ms=planner_meta.get("took_ms"),
+        total_ms=total_ms,
+    )
+    LOGGER.info(
+        "self_heal.plan",
+        extra={
+            "planner_variant": variant,
+            "autopilot_steps_count": step_count,
+            "autopilot_contains_headless": bool(needs_headless),
+            "planner_ms": planner_meta.get("took_ms"),
+            "total_ms": total_ms,
+        },
+    )
 
     response: Dict[str, Any] = {
         "mode": mode,

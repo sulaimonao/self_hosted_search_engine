@@ -35,6 +35,39 @@ Exit codes:
 - `1` – findings meet or exceed `--fail-on`.
 - `2` – runtime errors or a timeout halted execution.
 
+## Self-Heal planner (UI + API)
+
+- **Plan (lite)** – issue a fast directive without waiting on an LLM:
+
+  ```bash
+  curl -sS -m 12 -H 'content-type: application/json' \
+    -X POST 'http://127.0.0.1:5050/api/self_heal?variant=lite' \
+    -d '{"id":"t1","url":"https://example.com","symptoms":{"bannerText":"err"}}'
+  ```
+
+- **Execute headless steps** – batch automation through the backend (consent required):
+
+  ```bash
+  curl -sS -m 15 -H 'content-type: application/json' \
+    -X POST 'http://127.0.0.1:5050/api/self_heal/execute_headless' \
+    -d '{"consent":true,"directive":{"steps":[{"type":"reload","headless":true}]}}'
+  ```
+
+- **Desktop UI** – the chat panel exposes two toggles above the input:
+  - *Use current page*: sends the desktop window URL and document title with the prompt payload.
+  - *Reasoning*: surfaces the agent's reasoning stream inside collapsible sections for each answer.
+
+  Assistant replies show Autopilot plans with a **Run plan** button. Client-side verbs execute in the browser tab immediately; headless verbs are batched to `/api/self_heal/execute_headless` without blocking client automation.
+
+- **Diagnostics → Self-Heal** – `/shipit/diagnostics/self-heal` provides Schema, Plan (lite), and Run headless actions plus a directive preview.
+
+Knobs:
+
+- `SELF_HEAL_BASE_URL` – override the HTTP base URL for the agent browser fallback (default `http://127.0.0.1:5050`).
+- `SELF_HEAL_HTTP_TIMEOUT_S` – per-request timeout used by the headless executor HTTP client.
+- `SELF_HEAL_PLAN_TIMEOUT_S` – upper bound for planner LLM calls (lite/fallback bypass the LLM entirely).
+- `SELF_HEAL_FORCE_FALLBACK` – when truthy, always emit the reload fallback directive without contacting the LLM.
+
 ## Artifacts
 
 Each run overwrites `diagnostics/run_latest/` with:
