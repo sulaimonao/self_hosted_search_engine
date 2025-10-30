@@ -30,6 +30,15 @@ VERB_MAP: dict[str, str] = {
 ALLOWED_VERBS: set[str] = {"navigate", "reload", "click", "type", "waitForStable"}
 """Supported verbs for the executor boundary."""
 
+VERB_EXECUTION_METADATA: dict[str, dict[str, bool]] = {
+    "navigate": {"headless": True, "inTab": True},
+    "reload": {"headless": True, "inTab": True},
+    "click": {"headless": True, "inTab": True},
+    "type": {"headless": True, "inTab": True},
+    "waitForStable": {"headless": True, "inTab": True},
+}
+"""Executor verb capabilities exposed through shared schemas."""
+
 _ALLOWED_CONFIDENCE = {"low", "medium", "high"}
 _DEFAULT_REASON = "Planned fix"
 _MAX_DOM = 4_096
@@ -350,21 +359,19 @@ class Incident(BaseModel):
         if isinstance(console, (list, tuple)):
             cleaned: list[str] = []
             for entry in console:
-                text = ""
+                text_value = ""
                 if isinstance(entry, str):
-                    text = entry.strip()
+                    text_value = entry.strip()
                 elif isinstance(entry, Mapping):
                     candidate = entry.get("message") or entry.get("error") or entry.get("text")
                     if isinstance(candidate, str):
-                        lowered = candidate.strip()
-                        if lowered and any(
-                            token in lowered.lower() for token in ("error", "exception", "fail", "warning")
-                        ):
-                            text = lowered
+                        candidate_text = candidate.strip()
+                        if candidate_text:
+                            text_value = candidate_text
                 elif entry is not None:
-                    text = str(entry).strip()
-                if text:
-                    cleaned.append(text)
+                    text_value = str(entry).strip()
+                if text_value and any(token in text_value.lower() for token in ("error", "exception", "fail")):
+                    cleaned.append(text_value)
             if cleaned:
                 data["consoleErrors"] = cleaned[-5:]
             else:

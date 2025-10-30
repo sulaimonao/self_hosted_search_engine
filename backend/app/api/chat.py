@@ -15,7 +15,11 @@ from pydantic import ValidationError
 
 from server.json_logger import log_event
 
-from backend.app.io import chat_schema as io_chat_schema, normalize_model
+from backend.app.io import (
+    allowed_model_aliases,
+    chat_schema as io_chat_schema,
+    normalize_model_alias,
+)
 from backend.app.services.progress_bus import ProgressBus
 
 from ..config import AppConfig
@@ -162,24 +166,6 @@ def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[st
     return {"message": str(resp).strip()}
 
 
-def _coerce_model(name: str | None) -> str | None:
-    engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
-    configured: list[str] = []
-    base_url = None
-    if engine_config is not None:
-        base_url = getattr(engine_config.ollama, "base_url", None)
-        primary = getattr(engine_config.models, "llm_primary", None)
-        fallback = getattr(engine_config.models, "llm_fallback", None)
-        for candidate in (primary, fallback):
-            if isinstance(candidate, str) and candidate.strip():
-                configured.append(candidate.strip())
-
-    def _resolver(candidate: str) -> str | None:
-        return ollama_client.resolve_model_name(candidate, base_url=base_url, chat_only=True)
-
-    return normalize_model(name, resolver=_resolver, configured=configured)
-
-
 def _truncate(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -188,14 +174,25 @@ def _truncate(value: str, max_length: int) -> str:
 
 def _configured_models() -> tuple[str, str | None, str | None]:
     engine_config = current_app.config.get("RAG_ENGINE_CONFIG")
-    primary = "gpt-oss"
-    fallback: str | None = "gemma3"
-    embed: str | None = "embeddinggemma"
+    primary_alias = normalize_model_alias(None)
+    fallback_alias: str | None = None
+    embed_alias: str | None = "embeddinggemma:latest"
     if engine_config is not None:
-        primary = (engine_config.models.llm_primary or primary).strip() or primary
-        fallback = (engine_config.models.llm_fallback or "").strip() or None
-        embed = (engine_config.models.embed or embed).strip() or embed
-    return primary, fallback, embed
+        raw_primary = getattr(engine_config.models, "llm_primary", None)
+        try:
+            primary_alias = normalize_model_alias(raw_primary or primary_alias)
+        except ValueError:
+            primary_alias = normalize_model_alias(None)
+        raw_fallback = getattr(engine_config.models, "llm_fallback", None)
+        if isinstance(raw_fallback, str) and raw_fallback.strip():
+            try:
+                fallback_alias = normalize_model_alias(raw_fallback)
+            except ValueError:
+                fallback_alias = None
+        raw_embed = getattr(engine_config.models, "embed", None)
+        if isinstance(raw_embed, str) and raw_embed.strip():
+            embed_alias = raw_embed.strip()
+    return primary_alias, fallback_alias, embed_alias
 
 
 def _supports_json_format(model: str) -> bool:
@@ -876,8 +873,28 @@ def _execute_chat_request(
     server_time = chat_request.server_time
     server_timezone = chat_request.server_timezone
     server_time_utc = chat_request.server_time_utc
-
     trace_id = getattr(g, "trace_id", None)
+
+    allowed_alias_list = list(allowed_model_aliases())
+    resolved_requested_model: str | None = None
+    if requested_model:
+        try:
+            resolved_requested_model = normalize_model_alias(requested_model)
+        except ValueError as exc:
+            g.chat_error_class = "ModelNotAllowed"
+            g.chat_error_message = "unsupported_model"
+            error_response = jsonify(
+                {
+                    "error": "unsupported_model",
+                    "detail": str(exc),
+                    "allowed": allowed_alias_list,
+                    "trace_id": trace_id,
+                }
+            )
+            error_response.status_code = 400
+            error_response.headers["X-Request-Id"] = request_id
+            return error_response
+
     primary_model, fallback_model, _ = _configured_models()
 
     accept_header = (request.headers.get("Accept") or "").lower()
@@ -904,25 +921,27 @@ def _execute_chat_request(
         attributes={"http.route": "/api/chat", "http.method": request.method},
         inputs=trace_inputs,
     ) as chat_span:
-        candidates: list[str] = []
-        if requested_model:
-            candidates.append(requested_model)
-        else:
-            candidates.append(primary_model)
-            if fallback_model and fallback_model != primary_model:
-                candidates.append(fallback_model)
-
         candidate_pairs: list[tuple[str | None, str]] = []
         seen_models: set[str] = set()
-        for candidate in candidates:
-            resolved = _coerce_model(candidate) or ""
-            key = resolved.strip().lower()
-            if not key:
-                continue
-            if key in seen_models:
-                continue
+
+        def _add_candidate(label: str | None, canonical: str | None) -> None:
+            if not canonical:
+                return
+            key = canonical.strip().lower()
+            if not key or key in seen_models:
+                return
             seen_models.add(key)
-            candidate_pairs.append((candidate, resolved))
+            candidate_pairs.append((label, canonical))
+
+        if resolved_requested_model:
+            _add_candidate(requested_model, resolved_requested_model)
+        else:
+            _add_candidate(None, primary_model)
+            if fallback_model and fallback_model != primary_model:
+                _add_candidate(None, fallback_model)
+
+        if not candidate_pairs:
+            _add_candidate(None, normalize_model_alias(None))
 
         if chat_span is not None:
             chat_span.set_attribute("chat.candidate_count", len(candidate_pairs))
@@ -952,8 +971,8 @@ def _execute_chat_request(
                 "INFO",
                 "chat.request",
                 trace=trace_id,
-                model=display_model,
-                alias=candidate if alias_label and alias_label != candidate else None,
+                model=candidate,
+                alias=alias_label if alias_label and alias_label != candidate else None,
                 attempt=attempt_index,
                 url=url_value,
                 has_text=bool(text_context),
@@ -964,7 +983,7 @@ def _execute_chat_request(
                 chat_logger.info("forwarding chat request to ollama (model=%s)", display_model)
 
             request_payload: dict[str, Any] = {
-                "model": display_model,
+                "model": candidate,
                 "messages": prepared_messages,
                 "stream": bool(streaming_requested),
                 "system": system_prompt,

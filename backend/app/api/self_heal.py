@@ -4,18 +4,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+import time
+from time import perf_counter
+from typing import Any, Dict, Mapping, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
-from backend.app.ai.self_heal_prompt import ALLOWED_VERBS, build_prompts
-from backend.app.api.reasoning import route_to_browser  # noqa: F401 - imported for future integration
-from backend.app.io import coerce_directive, coerce_incident, self_heal_schema
-from backend.app.io.models import Directive, Step, VERB_MAP
-from backend.app.llm.ollama_client import (
-    DEFAULT_MODEL as DEFAULT_SELF_HEAL_MODEL,
-    OllamaClient,
+from backend.app.ai.self_heal_prompt import build_prompts
+from backend.app.io import (
+    DirectiveClampResult,
+    clamp_directive,
+    clamp_incident,
+    normalize_model_alias,
+    self_heal_schema,
 )
+from backend.app.io.models import Directive, Step
+from backend.app.llm.ollama_client import OllamaClient
 from backend.app.self_heal.episodes import append_episode
 from backend.app.self_heal.metrics import record_event
 from backend.app.self_heal.rules import try_rules_first
@@ -27,6 +31,10 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
 _VALID_VARIANTS = {"lite", "deep", "headless", "repair"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
+_PLAN_TIMEOUT_S = 8.0
+_TRUE_FLAGS = {"1", "true", "yes", "on"}
+
+_OLLAMA_CLIENT = OllamaClient()
 
 
 @bp.get("/self_heal/schema")
@@ -36,7 +44,12 @@ def self_heal_schema_echo():
     return jsonify(self_heal_schema())
 
 
-_OLLAMA_CLIENT = OllamaClient()
+def _progress_bus() -> ProgressBus | None:
+    try:
+        bus = current_app.config.get("PROGRESS_BUS")
+    except RuntimeError:
+        return None
+    return bus if isinstance(bus, ProgressBus) else None
 
 
 def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
@@ -64,22 +77,23 @@ def _payload_preview(payload: Any, *, limit: int = 900) -> str:
     return rendered
 
 
-def _publish_diagnostic(stage: str, message: str, *, payload: Any | None = None, **extra: Any) -> None:
-    event: Dict[str, Any] = {"stage": stage, "message": message}
-    if payload is not None:
-        event["kind"] = "payload"
-        event["payload"] = _shrink_payload(payload)
-        event["preview"] = _payload_preview(payload)
+def _emit(stage: str, message: str, *, payload: Any | None = None, **extra: Any) -> None:
+    bus = _progress_bus()
+    if bus is None:
+        return
+    event: Dict[str, Any] = {"stage": stage, "message": message, "ts": time.time()}
     for key, value in extra.items():
         if value is None:
             continue
         event[key] = value
+    if payload is not None:
+        event["kind"] = "payload"
+        event["payload"] = _shrink_payload(payload)
+        event["preview"] = _payload_preview(payload)
     try:
-        bus: ProgressBus | None = current_app.config.get("PROGRESS_BUS")
-    except RuntimeError:
-        bus = None
-    if isinstance(bus, ProgressBus):
         bus.publish(_DIAGNOSTIC_JOB_ID, event)
+    except Exception:  # pragma: no cover - diagnostics best effort
+        LOGGER.debug("diagnostics payload publish failed", exc_info=True)
 
 
 def _coerce_variant(raw: str | None) -> str:
@@ -91,308 +105,236 @@ def _coerce_variant(raw: str | None) -> str:
     return DEFAULT_VARIANT
 
 
-def _coerce_str(value: Any) -> str:
-    if isinstance(value, str):
-        text = value.strip()
-        if text:
-            return text
-    return ""
+def _flag(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in _TRUE_FLAGS
 
 
-def _coerce_bool(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
+def _fallback_directive(reason: str = "timeout_or_invalid") -> DirectiveClampResult:
+    directive = Directive(reason=reason, steps=[Step(type="reload")])
+    return DirectiveClampResult(directive=directive, dropped_steps=[], fallback_applied=True)
+
+
+def _plan_with_llm(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    variant: str,
+    timeout_s: float = _PLAN_TIMEOUT_S,
+) -> tuple[DirectiveClampResult, dict[str, Any]]:
+    start = perf_counter()
+    meta: dict[str, Any] = {
+        "status": "fallback",
+        "model": None,
+        "error": None,
+        "called_llm": False,
+    }
+
+    if variant == "lite":
+        meta["status"] = "variant_skip"
+        meta["took_ms"] = int((perf_counter() - start) * 1000)
+        return _fallback_directive(), meta
+
+    preferred_env = os.getenv("SELF_HEAL_MODEL")
+    try:
+        preferred_model = normalize_model_alias(preferred_env) if preferred_env else normalize_model_alias(None)
+    except ValueError:
+        preferred_model = normalize_model_alias(None)
+
+    try:
+        resolved_model = _OLLAMA_CLIENT.resolve_model(preferred_model)
+        meta["model"] = resolved_model
+    except Exception as exc:
+        LOGGER.warning("Self-heal planner could not resolve model: %s", exc)
+        meta["status"] = "resolve_error"
+        meta["error"] = str(exc)
+        meta["took_ms"] = int((perf_counter() - start) * 1000)
+        return _fallback_directive(), meta
+
+    try:
+        plan_payload_raw = _OLLAMA_CLIENT.chat_json(
+            system=system_prompt,
+            user=user_prompt,
+            model=resolved_model,
+            timeout=timeout_s,
+        )
+        meta["called_llm"] = True
+    except Exception as exc:
+        LOGGER.warning("Self-heal planner request failed: %s", exc)
+        meta["status"] = "chat_error"
+        meta["error"] = str(exc)
+        meta["took_ms"] = int((perf_counter() - start) * 1000)
+        return _fallback_directive(), meta
+
+    result = clamp_directive(plan_payload_raw, fallback_reason="timeout_or_invalid")
+    meta["status"] = "ok" if not result.fallback_applied else "invalid_plan"
+    if result.fallback_applied:
+        meta["error"] = "invalid_plan"
+    meta["preview"] = _payload_preview(plan_payload_raw)
+    meta["took_ms"] = int((perf_counter() - start) * 1000)
+    meta["step_count"] = len(result.directive.steps)
+    return result, meta
+
+
+def _has_headless_step(directive: Directive) -> bool:
+    for step in directive.steps or []:
+        if bool(step.headless):
             return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return None
-
-
-def _parse_plan(response: Any) -> Dict[str, Any]:
-    if isinstance(response, Mapping):
-        return dict(response)
-    if isinstance(response, str):
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"planner returned invalid JSON: {exc}") from exc
-    raise TypeError("planner response must be a string or mapping")
-
-
-def _fallback_directive(reason: str) -> Directive:
-    return Directive(reason=reason, steps=[Step(type="reload")], plan_confidence="low")
-
-
-def _validate_and_coerce(plan: Mapping[str, Any]) -> Tuple[Directive, List[str], bool]:
-    notes: List[str] = []
-    steps_payload: List[Dict[str, Any]] = []
-    steps_in = plan.get("steps")
-    if not isinstance(steps_in, list):
-        notes.append("Planner payload missing steps array; will fallback to reload().")
-        reason = _coerce_str(plan.get("reason")) or "Fallback: invalid plan"
-        return _fallback_directive(reason), notes, True
-
-    for idx, raw_step in enumerate(steps_in, start=1):
-        if not isinstance(raw_step, Mapping):
-            notes.append(f"Step {idx} ignored: not a mapping.")
-            continue
-        type_raw = raw_step.get("type") or raw_step.get("verb") or raw_step.get("action")
-        step_type = _coerce_str(type_raw).replace(" ", "")
-        step_type = VERB_MAP.get(step_type.lower(), step_type)
-        if step_type not in ALLOWED_VERBS:
-            notes.append(f"Step {idx} skipped: unsupported verb '{step_type}'.")
-            continue
-        is_headless = bool(raw_step.get("headless"))
-        args_raw = raw_step.get("args")
-        args = dict(args_raw) if isinstance(args_raw, Mapping) else {}
-        for alias in ("selector", "text", "url", "ms"):
-            if alias not in args and alias in raw_step:
-                args[alias] = raw_step[alias]
-
-        if step_type == "navigate":
-            url = _coerce_str(args.get("url"))
-            if not url:
-                notes.append(f"Step {idx} skipped: navigate requires a URL.")
-                continue
-            payload: Dict[str, Any] = {"type": "navigate", "url": url}
-            if is_headless:
-                payload["headless"] = True
-            steps_payload.append(payload)
-            continue
-        if step_type == "reload":
-            payload = {"type": "reload"}
-            if is_headless:
-                payload["headless"] = True
-            steps_payload.append(payload)
-            continue
-        if step_type == "click":
-            selector = _coerce_str(args.get("selector"))
-            text = _coerce_str(args.get("text"))
-            if not selector and not text:
-                notes.append(f"Step {idx} skipped: click requires selector or text.")
-                continue
-            payload: Dict[str, Any] = {"type": "click"}
-            if selector:
-                payload["selector"] = selector
-            if text:
-                payload["text"] = text
-            if is_headless:
-                payload["headless"] = True
-            steps_payload.append(payload)
-            continue
-        if step_type == "type":
-            selector = _coerce_str(args.get("selector"))
-            text_value = args.get("text")
-            text = str(text_value) if text_value is not None else ""
-            if not selector or not text:
-                notes.append(f"Step {idx} skipped: type requires selector and text.")
-                continue
-            payload = {"type": "type", "selector": selector, "text": text}
-            if is_headless:
-                payload["headless"] = True
-            steps_payload.append(payload)
-            continue
-        if step_type == "waitForStable":
-            ms_value = args.get("ms") or args.get("timeout") or args.get("delay")
-            delay_ms: int | None = None
-            if ms_value is not None:
-                try:
-                    delay_ms = max(0, int(float(ms_value)))
-                except (TypeError, ValueError):
-                    notes.append(f"Step {idx}: waitForStable ms invalid; defaulting to 600ms.")
-            payload = {"type": "waitForStable"}
-            if delay_ms:
-                payload["ms"] = delay_ms
-            if is_headless:
-                payload["headless"] = True
-            steps_payload.append(payload)
-            continue
-
-    reason = _coerce_str(plan.get("reason")) or "Planned fix"
-    directive_payload: Dict[str, Any] = {"reason": reason, "steps": steps_payload}
-
-    confidence = _coerce_str(plan.get("plan_confidence")).lower()
-    if confidence in {"low", "medium", "high"}:
-        directive_payload["plan_confidence"] = confidence
-
-    needs_permission = _coerce_bool(plan.get("needs_user_permission"))
-    if needs_permission is not None:
-        directive_payload["needs_user_permission"] = needs_permission
-
-    ask_user = plan.get("ask_user")
-    if isinstance(ask_user, (list, tuple)):
-        questions = [question for question in (_coerce_str(item) for item in ask_user) if question]
-        if questions:
-            directive_payload["ask_user"] = questions
-
-    fallback_info = plan.get("fallback")
-    if isinstance(fallback_info, Mapping):
-        headless_hint_raw = fallback_info.get("headless_hint")
-        hints: List[str] = []
-        if isinstance(headless_hint_raw, (list, tuple)):
-            hints = [hint for hint in (_coerce_str(item) for item in headless_hint_raw) if hint]
-        enabled_flag = _coerce_bool(fallback_info.get("enabled"))
-        directive_payload["fallback"] = {
-            "enabled": True if enabled_flag is None else enabled_flag,
-            "headless_hint": hints,
-        }
-
-    if not steps_payload:
-        notes.append("Planner produced no executable steps; fallback reload() will be used.")
-        return _fallback_directive(reason), notes, True
-
-    directive = coerce_directive(directive_payload)
-    return directive, notes, False
+    return False
 
 
 @bp.post("/self_heal")
 def self_heal():
     """Plan or apply a safe, permissioned fix."""
 
-    apply = request.args.get("apply", "false").lower() in {"1", "true", "yes", "on"}
+    request_start = perf_counter()
+    apply_flag = _flag(request.args.get("apply"))
     variant = _coerce_variant(request.args.get("variant"))
-    incident_model = coerce_incident(request.get_json(silent=True) or {})
-    incident = incident_model.as_payload()
+    incident_model = clamp_incident(request.get_json(silent=True) or {})
+    incident_payload = incident_model.as_payload()
 
-    _publish_diagnostic("io.self_heal.request", "incident captured", payload=incident)
+    _emit("payload.pre", "incident captured", payload=incident_payload)
+    _emit("planner.start", f"Planner invoked (variant={variant}, apply={apply_flag})", variant=variant, apply=apply_flag)
 
-    _publish_diagnostic(
-        "planner.start",
-        f"Self-heal planner invoked (apply={apply})",
-        variant=variant,
-        incident_id=incident.get("id"),
-    )
+    bus = _progress_bus()
 
-    bus: ProgressBus | None
-    try:
-        bus = current_app.config.get("PROGRESS_BUS")
-    except RuntimeError:
-        bus = None
+    rule_hit = try_rules_first(incident_payload)
+    directive_result: DirectiveClampResult
+    planner_meta: dict[str, Any]
+    source = "planner"
 
-    maybe_rule = try_rules_first(incident)
-    if maybe_rule:
-        rule_id, directive_payload = maybe_rule
-        _publish_diagnostic(
-            "planner.rulepack",
-            f"rule_hit:{rule_id}",
-            rule_id=rule_id,
-        )
-        if isinstance(bus, ProgressBus):
-            record_event("rule_hits_count", bus=bus)
-        directive = coerce_directive(
+    if rule_hit:
+        source = "rulepack"
+        rule_id, directive_payload = rule_hit
+        raw_steps = list(directive_payload.get("steps") or [])
+        directive_result = clamp_directive(
             {
                 "reason": directive_payload.get("reason", "Rule applied"),
-                "steps": list(directive_payload.get("steps") or []),
+                "steps": raw_steps,
             }
         )
-        directive_payload_out = directive.as_payload()
-        meta = {
-            "variant": variant,
-            "rule_id": rule_id,
-            "source": "rulepack",
-            "domSnippet": incident.get("domSnippet"),
-        }
-        episode_id, _ = append_episode(
-            url=incident.get("url", ""),
-            symptoms=incident.get("symptoms", {}),
-            directive=directive_payload_out,
-            mode="apply" if apply else "plan",
-            outcome="unknown",
-            meta=meta,
-        )
-        response = {
-            "mode": "apply" if apply else "plan",
-            "directive": directive_payload_out,
-            "meta": {**meta, "episode_id": episode_id},
-        }
-        _publish_diagnostic("io.self_heal.response", "rule directive", payload=response)
-        return jsonify(response), 200
-
-    system_prompt, user_prompt = build_prompts(incident, variant)
-    _publish_diagnostic(
-        "planner.prompt",
-        "Planner prompts prepared.",
-        system_chars=len(system_prompt),
-        user_chars=len(user_prompt),
-    )
-
-    directive: Optional[Directive] = None
-    resolved_model: Optional[str] = None
-
-    try:
-        resolved_model = _OLLAMA_CLIENT.resolve_model(os.getenv("SELF_HEAL_MODEL"))
-        _publish_diagnostic("planner.model", "Allowed Ollama model resolved.", model=resolved_model)
-    except Exception as exc:
-        reason = f"Ollama not ready or no allowed model: {exc}; safe fallback reload."
-        LOGGER.warning("Self-heal planner skipping Ollama call: %s", reason)
-        _publish_diagnostic("planner.error", reason)
-        directive = _fallback_directive(reason)
-        if isinstance(bus, ProgressBus):
-            record_event("planner_fallback_count", bus=bus)
-
-    if directive is None:
-        chosen_model = resolved_model or DEFAULT_SELF_HEAL_MODEL
-        try:
-            plan_payload_raw = _OLLAMA_CLIENT.chat_json(
-                system=system_prompt,
-                user=user_prompt,
-                model=chosen_model,
-            )
-            if isinstance(bus, ProgressBus):
-                record_event("planner_calls_total", bus=bus)
-            plan_payload = _parse_plan(plan_payload_raw)
-            serialized = json.dumps(plan_payload, ensure_ascii=False)
-            preview = serialized[:500]
-            _publish_diagnostic(
-                "planner.response",
-                f"Planner response received ({len(serialized)} chars).",
-                preview=preview,
-                model=chosen_model,
-            )
-            directive, notes, used_fallback = _validate_and_coerce(plan_payload)
-            for note in notes:
-                _publish_diagnostic("planner.validation", note)
-            if used_fallback:
-                _publish_diagnostic("planner.fallback", "Planner fallback triggered; reload() selected.")
-                if isinstance(bus, ProgressBus):
-                    record_event("planner_fallback_count", bus=bus)
-        except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
-            LOGGER.exception("Self-heal planner failed: %s", exc)
-            reason = f"Fallback reload (planner error: {exc})"
-            _publish_diagnostic("planner.error", reason)
-            directive = _fallback_directive(reason)
-            if isinstance(bus, ProgressBus):
+        planner_meta = {"status": "rule", "rule_id": rule_id, "model": None, "took_ms": 0}
+        _emit("planner.ok", f"rule_hit:{rule_id}", rule_id=rule_id)
+        if directive_result.fallback_applied:
+            _emit("planner.fallback", "Rulepack produced fallback reload().", rule_id=rule_id)
+            try:
                 record_event("planner_fallback_count", bus=bus)
+            except Exception:  # pragma: no cover - metrics best effort
+                pass
+        try:
+            record_event("rule_hits_count", bus=bus)
+        except Exception:  # pragma: no cover - defensive metrics guard
+            pass
+    else:
+        system_prompt, user_prompt = build_prompts(incident_payload, variant)
+        _emit(
+            "planner.prompt",
+            "Planner prompts prepared.",
+            system_chars=len(system_prompt),
+            user_chars=len(user_prompt),
+            preview=_payload_preview({"system": system_prompt, "user": user_prompt}),
+        )
+        directive_result, planner_meta = _plan_with_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            variant=variant,
+            timeout_s=_PLAN_TIMEOUT_S,
+        )
+        status = planner_meta.get("status")
+        if status == "ok":
+            _emit(
+                "planner.ok",
+                "Planner directive ready.",
+                model=planner_meta.get("model"),
+                took_ms=planner_meta.get("took_ms"),
+                steps=len(directive_result.directive.steps),
+            )
+        elif status == "variant_skip":
+            _emit(
+                "planner.fallback",
+                "Lite variant bypassed LLM; reload directive issued.",
+                took_ms=planner_meta.get("took_ms"),
+            )
+        elif status == "invalid_plan":
+            _emit(
+                "planner.fallback",
+                "Planner payload invalid; fallback reload() used.",
+                model=planner_meta.get("model"),
+                took_ms=planner_meta.get("took_ms"),
+                preview=planner_meta.get("preview"),
+            )
+        else:
+            _emit(
+                "planner.error",
+                f"Planner failure: {planner_meta.get('error')}",
+                model=planner_meta.get("model"),
+            )
+            _emit(
+                "planner.fallback",
+                "Planner failure triggered fallback reload().",
+                model=planner_meta.get("model"),
+                took_ms=planner_meta.get("took_ms"),
+            )
+        if planner_meta.get("called_llm"):
+            try:
+                record_event("planner_calls_total", bus=bus)
+            except Exception:  # pragma: no cover - metrics best effort
+                pass
+        if directive_result.fallback_applied or planner_meta.get("status") in {
+            "resolve_error",
+            "chat_error",
+            "variant_skip",
+            "invalid_plan",
+        }:
+            try:
+                record_event("planner_fallback_count", bus=bus)
+            except Exception:  # pragma: no cover - metrics best effort
+                pass
 
-    mode = "apply" if apply else "plan"
-    _publish_diagnostic("planner.complete", f"Planner returning directive (mode={mode}).")
+    directive_payload = directive_result.directive.as_payload()
+    total_ms = int((perf_counter() - request_start) * 1000)
+    needs_headless = _has_headless_step(directive_result.directive)
+    mode = "apply" if apply_flag else "plan"
 
-    meta = {
+    response_meta: Dict[str, Any] = {
         "variant": variant,
-        "source": "planner",
-        "domSnippet": incident.get("domSnippet"),
+        "source": source,
+        "domSnippet": incident_payload.get("domSnippet"),
+        "planner_status": planner_meta.get("status"),
     }
-    directive_payload_out = directive.as_payload()
+    if planner_meta.get("model"):
+        response_meta["planner_model"] = planner_meta["model"]
+    if planner_meta.get("took_ms") is not None:
+        response_meta["planner_took_ms"] = planner_meta.get("took_ms")
+    if planner_meta.get("rule_id"):
+        response_meta["rule_id"] = planner_meta.get("rule_id")
+
+    response: Dict[str, Any] = {
+        "mode": mode,
+        "directive": directive_payload,
+        "meta": response_meta,
+        "took_ms": total_ms,
+    }
+    if apply_flag:
+        response["needs_headless"] = bool(needs_headless)
+
     try:
         episode_id, _ = append_episode(
-            url=incident.get("url", ""),
-            symptoms=incident.get("symptoms", {}),
-            directive=directive_payload_out,
+            url=incident_payload.get("url", ""),
+            symptoms=incident_payload.get("symptoms", {}),
+            directive=directive_payload,
             mode=mode,
             outcome="unknown",
-            meta=meta,
+            meta={**response_meta},
         )
-    except Exception:  # pragma: no cover - diagnostics best-effort
+    except Exception:  # pragma: no cover - diagnostics best effort
         episode_id = None
-    response = {
-        "mode": mode,
-        "directive": directive_payload_out,
-        "meta": {**meta, "episode_id": episode_id},
-    }
-    _publish_diagnostic("io.self_heal.response", f"directive ready ({mode})", payload=response)
+    if episode_id:
+        response_meta["episode_id"] = episode_id
+
+    _emit("payload.post", f"directive ready ({mode})", payload=response)
     return jsonify(response), 200
+
+
+__all__ = ["bp"]

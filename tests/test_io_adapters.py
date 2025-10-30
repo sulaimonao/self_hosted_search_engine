@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.io import coerce_directive, coerce_incident, normalize_model
+from backend.app.io import clamp_directive, clamp_incident, normalize_model_alias
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -32,13 +32,13 @@ def test_coerce_incident_basic() -> None:
         },
         "domSnippet": "<div class='error'>Something went wrong</div>",
     }
-    incident = coerce_incident(raw)
+    incident = clamp_incident(raw)
     assert incident.as_payload() == load_golden("incident_basic.json")
 
 
 def test_coerce_incident_minimal_defaults() -> None:
     raw = {"url": "https://example.com", "symptoms": None, "domSnippet": "   "}
-    incident = coerce_incident(raw)
+    incident = clamp_incident(raw)
     assert incident.as_payload() == load_golden("incident_minimal.json")
 
 
@@ -58,8 +58,8 @@ def test_coerce_directive_basic() -> None:
         "ask_user": ["  Is the banner still visible?  "],
         "fallback": {"enabled": "true", "headless_hint": ["Run headless verification", "  "]},
     }
-    directive = coerce_directive(raw)
-    assert directive.as_payload() == load_golden("directive_basic.json")
+    directive_result = clamp_directive(raw)
+    assert directive_result.directive.as_payload() == load_golden("directive_basic.json")
 
 
 def test_coerce_directive_headless() -> None:
@@ -81,8 +81,8 @@ def test_coerce_directive_headless() -> None:
         "needs_user_permission": True,
         "fallback": {"enabled": False},
     }
-    directive = coerce_directive(raw)
-    assert directive.as_payload() == load_golden("directive_headless.json")
+    directive_result = clamp_directive(raw)
+    assert directive_result.directive.as_payload() == load_golden("directive_headless.json")
 
 
 def test_coerce_directive_drops_invalid_steps() -> None:
@@ -93,8 +93,8 @@ def test_coerce_directive_drops_invalid_steps() -> None:
             {"verb": "click", "selector": "#submit"},
         ],
     }
-    directive = coerce_directive(raw)
-    payload = directive.as_payload()
+    directive_result = clamp_directive(raw)
+    payload = directive_result.directive.as_payload()
     assert payload["steps"][0]["type"] == "click"
     assert len(payload["steps"]) == 1
 
@@ -102,11 +102,25 @@ def test_coerce_directive_drops_invalid_steps() -> None:
 @pytest.mark.parametrize(
     "name,expected",
     [
-        (" gemma:2b ", "gemma3"),
-        ("GPT", "gpt-oss"),
-        (None, "gpt-oss"),
+        (" gemma:2b ", "gemma3:latest"),
+        ("GPT", "gpt-oss:20b"),
+        (None, "gpt-oss:20b"),
     ],
 )
 def test_normalize_model_aliases(name: str | None, expected: str) -> None:
-    result = normalize_model(name)
+    result = normalize_model_alias(name)
     assert result == expected
+
+
+def test_normalize_model_alias_rejects_invalid() -> None:
+    with pytest.raises(ValueError):
+        normalize_model_alias("llama3")
+
+
+def test_clamp_directive_timeout_fallback() -> None:
+    payload = {"error": "504 Gateway Timeout"}
+    directive_result = clamp_directive(payload, fallback_reason="timeout_or_invalid")
+    directive_payload = directive_result.directive.as_payload()
+    assert directive_result.fallback_applied is True
+    assert directive_payload["reason"] == "timeout_or_invalid"
+    assert directive_payload["steps"] == [{"type": "reload"}]

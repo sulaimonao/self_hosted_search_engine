@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 import requests
 
 DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_MODEL = os.getenv("SELF_HEAL_MODEL", "gpt-oss")
+DEFAULT_MODEL = os.getenv("SELF_HEAL_MODEL", "gpt-oss:20b")
 DEFAULT_TIMEOUT = float(os.getenv("SELF_HEAL_TIMEOUT_S", "4"))
 DEFAULT_TRIES = int(os.getenv("SELF_HEAL_TRIES", "1"))
 ALLOWED_PREFIXES = ("gemma3:", "gpt-oss:")

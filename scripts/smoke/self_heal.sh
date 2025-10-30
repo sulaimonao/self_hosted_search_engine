@@ -1,62 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python - <<'PY'
-from __future__ import annotations
+BASE_URL="${SELF_HEAL_BASE_URL:-http://127.0.0.1:5000}"
 
-import json
-from pathlib import Path
+schema_url="${BASE_URL%/}/api/self_heal/schema"
+plan_url="${BASE_URL%/}/api/self_heal?variant=lite"
+headless_url="${BASE_URL%/}/api/self_heal/execute_headless"
 
-from backend.app.io import coerce_directive, coerce_incident
+curl -sS -m 5 -f "$schema_url" > /dev/null
 
-base = Path("tests/golden")
+incident_payload='{"id":"smoke","url":"https://example.com/smoke","symptoms":{"bannerText":"Smoke test"}}'
+curl -sS -m 8 -f -H "Content-Type: application/json" -X POST "$plan_url" -d "$incident_payload" > /dev/null
 
-incident_raw = {
-    "id": " incident-001 ",
-    "url": "https://example.com/app",
-    "symptoms": {
-        "bannerText": " Something went wrong ",
-        "consoleErrors": [
-            " TypeError: cannot read properties of undefined ",
-            {"message": "ignored"},
-        ],
-        "networkErrors": [
-            {"url": "https://example.com/api/data", "status": "500", "error": " Server error "},
-            "noise",
-        ],
-    },
-    "domSnippet": "<div class='error'>Something went wrong</div>",
-}
-expected_incident = json.loads((base / "incident_basic.json").read_text(encoding="utf-8"))
-assert coerce_incident(incident_raw).as_payload() == expected_incident
+headless_status=$(
+  curl -sS -m 5 -o /dev/null -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -X POST "$headless_url" \
+    -d '{"directive":{"steps":[{"type":"reload"}]},"consent":false}'
+)
 
-plan_raw = json.loads((base / "directive_basic.json").read_text(encoding="utf-8"))
-# introduce drift to ensure normalization
-plan_raw_source = {
-    "reason": plan_raw["reason"],
-    "steps": [
-        {"verb": " reload "},
-        {"verb": "press", "text": "Retry"},
-    ],
-    "plan_confidence": plan_raw.get("plan_confidence", ""),
-    "needs_user_permission": plan_raw.get("needs_user_permission", False),
-    "ask_user": plan_raw.get("ask_user", []),
-    "fallback": plan_raw.get("fallback"),
-}
-assert coerce_directive(plan_raw_source).as_payload() == plan_raw
+if [[ "$headless_status" != "400" && "$headless_status" != "200" ]]; then
+  echo "unexpected status from headless endpoint: $headless_status" >&2
+  exit 1
+fi
 
-headless_raw = json.loads((base / "directive_headless.json").read_text(encoding="utf-8"))
-headless_source = {
-    "reason": headless_raw["reason"],
-    "steps": [
-        {"type": "Navigate", "args": {"url": "https://example.com/login"}, "headless": True},
-        {"type": "wait", "args": {"ms": "800"}, "headless": "true"},
-    ],
-    "plan_confidence": headless_raw.get("plan_confidence"),
-    "needs_user_permission": headless_raw.get("needs_user_permission"),
-    "fallback": headless_raw.get("fallback"),
-}
-assert coerce_directive(headless_source).as_payload() == headless_raw
-
-print("✅ self-heal smoke passed")
-PY
+echo "✅ self-heal smoke passed against ${BASE_URL}"
