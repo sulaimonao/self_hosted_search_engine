@@ -36,6 +36,12 @@ def _is_embedding_model(name: str) -> bool:
     return any(pattern.search(name) for pattern in EMBEDDING_MODEL_PATTERNS)
 
 
+def _as_bool(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 def create_app() -> Flask:
     from backend.agent.document_store import DocumentStore
     from backend.agent.frontier_store import FrontierStore
@@ -247,6 +253,37 @@ def create_app() -> Flask:
     feature_agent_mode = os.getenv("FEATURE_AGENT_MODE", "0").lower() in {"1", "true", "yes", "on"}
     app.config.setdefault("FEATURE_AGENT_MODE", feature_agent_mode)
 
+    agent_browser_enabled = _as_bool(os.getenv("AGENT_BROWSER_ENABLED"), feature_agent_mode)
+    agent_browser_headless = _as_bool(os.getenv("AGENT_BROWSER_HEADLESS"), True)
+    try:
+        agent_browser_timeout = int(os.getenv("AGENT_BROWSER_DEFAULT_TIMEOUT_S", "15"))
+    except (TypeError, ValueError):
+        agent_browser_timeout = 15
+    agent_browser_prewarm = _as_bool(os.getenv("AGENT_BROWSER_PREWARM"), False)
+
+    app.config.setdefault("AGENT_BROWSER_ENABLED", agent_browser_enabled)
+    app.config.setdefault("AGENT_BROWSER_HEADLESS", agent_browser_headless)
+    app.config.setdefault("AGENT_BROWSER_DEFAULT_TIMEOUT_S", agent_browser_timeout)
+    app.config.setdefault("AGENT_BROWSER_PREWARM", agent_browser_prewarm)
+    app.config.setdefault("AGENT_BROWSER_MANAGER", None)
+
+    if app.config["AGENT_BROWSER_ENABLED"] and app.config["AGENT_BROWSER_PREWARM"]:
+        try:
+            from .services.agent_browser import AgentBrowserManager
+
+            browser_manager = AgentBrowserManager(
+                default_timeout_s=app.config["AGENT_BROWSER_DEFAULT_TIMEOUT_S"],
+                headless=app.config["AGENT_BROWSER_HEADLESS"],
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            LOGGER.exception("Agent browser prewarm failed")
+        else:
+            app.config["AGENT_BROWSER_MANAGER"] = browser_manager
+            try:
+                browser_manager.health()
+            except Exception:  # pragma: no cover - defensive logging
+                LOGGER.exception("Agent browser health check failed after prewarm")
+
     feature_local_discovery = (
         os.getenv("FEATURE_LOCAL_DISCOVERY", "0").lower() in {"1", "true", "yes", "on"}
     )
@@ -324,20 +361,6 @@ def create_app() -> Flask:
         app.config.setdefault("LOCAL_DISCOVERY_SERVICE", service)
     else:
         app.config.setdefault("LOCAL_DISCOVERY_SERVICE", None)
-
-    browser_manager = None
-    if feature_agent_mode:
-        try:
-            from .services.agent_browser import AgentBrowserManager
-
-            browser_manager = AgentBrowserManager()
-        except Exception:  # pragma: no cover - defensive logging
-            LOGGER.exception("Agent browser manager unavailable; disabling agent browser endpoints")
-            app.config.setdefault("AGENT_BROWSER_MANAGER", None)
-        else:
-            app.config.setdefault("AGENT_BROWSER_MANAGER", browser_manager)
-    else:
-        app.config.setdefault("AGENT_BROWSER_MANAGER", None)
 
     from backend.app.services.pending_vector_worker import PendingVectorWorker
 
@@ -448,7 +471,7 @@ def create_app() -> Flask:
     app.register_blueprint(shipit_ingest_api.bp)
     app.register_blueprint(system_check_api.bp)
     app.register_blueprint(sources_api.bp)
-    if feature_agent_mode and browser_manager is not None:
+    if app.config.get("AGENT_BROWSER_ENABLED"):
         app.register_blueprint(agent_browser_api.bp)
 
     @app.get("/api/healthz")
