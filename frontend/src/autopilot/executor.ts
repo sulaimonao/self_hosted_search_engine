@@ -1,3 +1,5 @@
+import { api } from "@/lib/api";
+
 type BaseVerb = { headless?: boolean };
 
 export type Verb =
@@ -114,7 +116,7 @@ export class AutopilotExecutor {
   }
 
   private async runHeadless(steps: Verb[]) {
-    const response = await fetch("/api/self_heal/execute_headless", {
+    const response = await fetch(api("/api/self_heal/execute_headless"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ consent: true, directive: { steps } }),
