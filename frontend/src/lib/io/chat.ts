@@ -1,4 +1,7 @@
 import type { AutopilotDirective, AutopilotToolDirective, ChatResponsePayload } from "@/lib/types";
+import { fromDirective } from "@/lib/io/self_heal";
+import type { DirectivePayload } from "@/lib/io/self_heal";
+import type { Verb } from "@/autopilot/executor";
 
 const CHAT_ROLES = new Set(["system", "user", "assistant", "tool"]);
 
@@ -150,6 +153,29 @@ function parseTools(value: unknown): AutopilotToolDirective[] | null {
   return tools.length > 0 ? tools : null;
 }
 
+function parseDirectivePayload(value: unknown): DirectivePayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  try {
+    return fromDirective(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseDirectiveSteps(value: unknown): Verb[] | null {
+  if (!value) {
+    return null;
+  }
+  const wrapper = typeof value === "object" && value !== null ? value : { steps: value };
+  const directive = parseDirectivePayload(wrapper);
+  if (!directive) {
+    return null;
+  }
+  return directive.steps.length > 0 ? (directive.steps as Verb[]) : null;
+}
+
 function parseAutopilot(value: unknown): AutopilotDirective | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -162,6 +188,17 @@ function parseAutopilot(value: unknown): AutopilotDirective | null {
   if (reason) directive.reason = reason;
   const tools = parseTools(record.tools);
   if (tools) directive.tools = tools;
+  const nestedDirective = parseDirectivePayload(record.directive);
+  if (nestedDirective) {
+    directive.directive = nestedDirective;
+    if (nestedDirective.steps.length > 0) {
+      directive.steps = nestedDirective.steps as Verb[];
+    }
+  }
+  const topLevelSteps = parseDirectiveSteps(record.steps);
+  if (topLevelSteps && topLevelSteps.length > 0) {
+    directive.steps = topLevelSteps;
+  }
   return directive;
 }
 

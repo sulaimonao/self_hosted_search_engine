@@ -1,3 +1,6 @@
+import type { DirectivePayload } from "@/lib/io/self_heal";
+import type { Verb } from "@/autopilot/executor";
+
 export type Role = "user" | "assistant" | "system" | "agent";
 
 export interface ChatMessage {
@@ -166,6 +169,8 @@ export interface AutopilotDirective {
   query: string;
   reason?: string | null;
   tools?: AutopilotToolDirective[] | null;
+  directive?: DirectivePayload | null;
+  steps?: Verb[] | null;
 }
 
 export interface AutopilotToolDirective {

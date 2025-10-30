@@ -124,20 +124,28 @@ export default function DiagnosticsPage(): JSX.Element {
         </p>
       </header>
 
-      <div className="flex items-center gap-3">
-        <Button type="button" onClick={runDiagnostics} disabled={loading}>
-          {loading ? "Running…" : "Run diagnostics"}
-        </Button>
-        {jobId ? (
-          <Link
-            href={`/api/jobs/${encodeURIComponent(jobId)}/status`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm underline"
-          >
-            View job {jobId}
-          </Link>
-        ) : null}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <Button type="button" onClick={runDiagnostics} disabled={loading}>
+            {loading ? "Running…" : "Run diagnostics"}
+          </Button>
+          {jobId ? (
+            <Link
+              href={`/api/jobs/${encodeURIComponent(jobId)}/status`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm underline"
+            >
+              View job {jobId}
+            </Link>
+          ) : null}
+        </div>
+        <Link
+          href="/shipit/diagnostics/self-heal"
+          className="text-sm font-medium text-primary underline-offset-2 hover:underline"
+        >
+          Open Self-Heal planner
+        </Link>
       </div>
 
       {error ? <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}

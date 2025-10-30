@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, StopCircle } from "lucide-react";
+import { AutopilotExecutor, type Verb } from "@/autopilot/executor";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -159,6 +160,10 @@ export function ChatPanel() {
     null,
   );
   const [toolExecutions, setToolExecutions] = useState<Record<string, ToolExecutionState>>({});
+  const [planExecutions, setPlanExecutions] = useState<
+    Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }>
+  >({});
+  const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
   const {
     state: llmStream,
     start: startLlmStream,
@@ -485,6 +490,33 @@ export function ChatPanel() {
       }
     },
     [setBanner, threadId],
+  );
+
+  const handleRunAutopilotPlan = useCallback(
+    async (messageId: string, steps: Verb[]) => {
+      const key = `${messageId}:directive`;
+      if (!steps || steps.length === 0) {
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: "Directive has no executable steps." },
+        }));
+        return;
+      }
+      setPlanExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
+      try {
+        await autopilotExecutor.run({ steps });
+        setPlanExecutions((prev) => ({ ...prev, [key]: { status: "success" } }));
+        setBanner({ intent: "info", text: "Autopilot plan executed." });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Autopilot run failed");
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: message },
+        }));
+        setBanner({ intent: "error", text: message });
+      }
+    },
+    [autopilotExecutor, setBanner],
   );
 
   const handleLinkNavigation = useCallback(
@@ -1070,6 +1102,61 @@ export function ChatPanel() {
                             {message.autopilot.reason ? (
                               <p className="mt-1 text-foreground/80">{message.autopilot.reason}</p>
                             ) : null}
+                            {message.autopilot.directive?.reason ? (
+                              <p className="mt-1 text-foreground/80">
+                                Plan: {message.autopilot.directive.reason}
+                              </p>
+                            ) : null}
+                            {(() => {
+                              const directiveSteps =
+                                (message.autopilot.directive?.steps ?? message.autopilot.steps ?? []) as Verb[];
+                              const planKey = `${message.id}:directive`;
+                              const execution = planExecutions[planKey];
+                              const running = execution?.status === "running";
+                              const succeeded = execution?.status === "success";
+                              const failed = execution?.status === "error";
+                              if (!directiveSteps || directiveSteps.length === 0) {
+                                return null;
+                              }
+                              return (
+                                <div className="mt-3 space-y-2">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
+                                    Directive steps
+                                  </p>
+                                  <ol className="list-decimal space-y-1 rounded-md border border-primary/20 bg-background/80 p-2 text-[11px]">
+                                    {directiveSteps.map((step, index) => (
+                                      <li key={`${message.id}:directive:${index}`} className="leading-relaxed">
+                                        <span className="font-medium text-foreground">{step.type}</span>
+                                        {step.headless ? <span className="ml-1 text-muted-foreground">(headless)</span> : null}
+                                        {step.selector ? <span className="ml-1 text-muted-foreground">{step.selector}</span> : null}
+                                        {step.text ? <span className="ml-1 text-muted-foreground">“{step.text}”</span> : null}
+                                        {step.url ? (
+                                          <span className="ml-1 truncate text-muted-foreground">{step.url}</span>
+                                        ) : null}
+                                      </li>
+                                    ))}
+                                  </ol>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    disabled={running}
+                                    onClick={() => {
+                                      void handleRunAutopilotPlan(message.id, directiveSteps);
+                                    }}
+                                  >
+                                    {running ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                                    {running ? "Running" : "Run plan"}
+                                  </Button>
+                                  {succeeded ? (
+                                    <p className="text-[11px] text-foreground/80">Plan executed.</p>
+                                  ) : null}
+                                  {failed && execution?.detail ? (
+                                    <p className="text-[11px] text-destructive">{execution.detail}</p>
+                                  ) : null}
+                                </div>
+                              );
+                            })()}
                             {message.autopilot.tools && message.autopilot.tools.length > 0 ? (
                               <div className="mt-2 space-y-2">
                                 <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
