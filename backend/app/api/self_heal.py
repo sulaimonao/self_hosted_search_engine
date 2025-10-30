@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from flask import Blueprint, current_app, jsonify, request
@@ -320,37 +321,53 @@ def self_heal():
         user_chars=len(user_prompt),
     )
 
+    directive: Optional[Directive] = None
+    resolved_model: Optional[str] = None
+
     try:
-        plan_payload_raw = _OLLAMA_CLIENT.chat_json(
-            system=system_prompt,
-            user=user_prompt,
-            model=DEFAULT_SELF_HEAL_MODEL,
-        )
-        if isinstance(bus, ProgressBus):
-            record_event("planner_calls_total", bus=bus)
-        plan_payload = _parse_plan(plan_payload_raw)
-        serialized = json.dumps(plan_payload, ensure_ascii=False)
-        preview = serialized[:500]
-        _publish_diagnostic(
-            "planner.response",
-            f"Planner response received ({len(serialized)} chars).",
-            preview=preview,
-            model=DEFAULT_SELF_HEAL_MODEL,
-        )
-        directive, notes, used_fallback = _validate_and_coerce(plan_payload)
-        for note in notes:
-            _publish_diagnostic("planner.validation", note)
-        if used_fallback:
-            _publish_diagnostic("planner.fallback", "Planner fallback triggered; reload() selected.")
-            if isinstance(bus, ProgressBus):
-                record_event("planner_fallback_count", bus=bus)
-    except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
-        LOGGER.exception("Self-heal planner failed: %s", exc)
-        reason = f"Fallback reload (planner error: {exc})"
+        resolved_model = _OLLAMA_CLIENT.resolve_model(os.getenv("SELF_HEAL_MODEL"))
+        _publish_diagnostic("planner.model", "Allowed Ollama model resolved.", model=resolved_model)
+    except Exception as exc:
+        reason = f"Ollama not ready or no allowed model: {exc}; safe fallback reload."
+        LOGGER.warning("Self-heal planner skipping Ollama call: %s", reason)
         _publish_diagnostic("planner.error", reason)
         directive = _fallback_directive(reason)
         if isinstance(bus, ProgressBus):
             record_event("planner_fallback_count", bus=bus)
+
+    if directive is None:
+        chosen_model = resolved_model or DEFAULT_SELF_HEAL_MODEL
+        try:
+            plan_payload_raw = _OLLAMA_CLIENT.chat_json(
+                system=system_prompt,
+                user=user_prompt,
+                model=chosen_model,
+            )
+            if isinstance(bus, ProgressBus):
+                record_event("planner_calls_total", bus=bus)
+            plan_payload = _parse_plan(plan_payload_raw)
+            serialized = json.dumps(plan_payload, ensure_ascii=False)
+            preview = serialized[:500]
+            _publish_diagnostic(
+                "planner.response",
+                f"Planner response received ({len(serialized)} chars).",
+                preview=preview,
+                model=chosen_model,
+            )
+            directive, notes, used_fallback = _validate_and_coerce(plan_payload)
+            for note in notes:
+                _publish_diagnostic("planner.validation", note)
+            if used_fallback:
+                _publish_diagnostic("planner.fallback", "Planner fallback triggered; reload() selected.")
+                if isinstance(bus, ProgressBus):
+                    record_event("planner_fallback_count", bus=bus)
+        except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
+            LOGGER.exception("Self-heal planner failed: %s", exc)
+            reason = f"Fallback reload (planner error: {exc})"
+            _publish_diagnostic("planner.error", reason)
+            directive = _fallback_directive(reason)
+            if isinstance(bus, ProgressBus):
+                record_event("planner_fallback_count", bus=bus)
 
     mode = "apply" if apply else "plan"
     _publish_diagnostic("planner.complete", f"Planner returning directive (mode={mode}).")

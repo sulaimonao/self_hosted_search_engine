@@ -195,23 +195,19 @@ def run(
                     last_url = str(response_payload.get("url") or url)
                     result.last_state = {"url": last_url, "action": "navigate"}
                 elif step_type == "reload":
-                    if not last_url:
-                        # attempt reload regardless via dedicated endpoint
+                    response_payload = None
+                    try:
                         response_payload = _post(
                             http,
                             f"{base}/api/agent/reload",
                             {"sid": sid},
                             timeout=request_timeout,
                         )
+                    except Exception:
+                        # Reload failures should not block the planner; treat as best-effort.
+                        response_payload = None
+                    if isinstance(response_payload, dict):
                         last_url = str(response_payload.get("url") or last_url or "") or None
-                    else:
-                        response_payload = _post(
-                            http,
-                            f"{base}/api/agent/reload",
-                            {"sid": sid},
-                            timeout=request_timeout,
-                        )
-                        last_url = str(response_payload.get("url") or last_url)
                     result.last_state = {"url": last_url, "action": "reload"}
                 elif step_type == "click":
                     selector = str(effective_args.get("selector") or "").strip()

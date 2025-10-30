@@ -13,8 +13,9 @@ import requests
 
 DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_MODEL = os.getenv("SELF_HEAL_MODEL", "gpt-oss")
-DEFAULT_TIMEOUT = float(os.getenv("SELF_HEAL_TIMEOUT_S", "20"))
-DEFAULT_TRIES = int(os.getenv("SELF_HEAL_TRIES", "2"))
+DEFAULT_TIMEOUT = float(os.getenv("SELF_HEAL_TIMEOUT_S", "4"))
+DEFAULT_TRIES = int(os.getenv("SELF_HEAL_TRIES", "1"))
+ALLOWED_PREFIXES = ("gemma3:", "gpt-oss:")
 
 _JSON_EXTRACT = re.compile(r"\{.*\}", re.S)
 
@@ -34,9 +35,49 @@ class OllamaResponse:
 class OllamaClient:
     """Lightweight HTTP wrapper around the Ollama REST API."""
 
+    _model_cache = {"name": None, "ts": 0.0}
+
     def __init__(self, base_url: str | None = None) -> None:
         base = (base_url or DEFAULT_OLLAMA_HOST).rstrip("/")
         self.base_url = base or "http://127.0.0.1:11434"
+
+    def resolve_model(self, preferred: str | None = None) -> str:
+        """
+        Return the first allowed model currently available.
+
+        Restrict selection to gemma3:* or gpt-oss:* families and cache lookups
+        briefly to avoid repeated /api/tags calls while the planner is busy.
+        """
+        now = time.time()
+        cached = self._model_cache
+        if cached["name"] and (now - cached["ts"]) < 60:
+            return cached["name"]  # reuse healthy model discovered recently
+
+        tags = self.health()
+        models_raw = tags.get("models", []) if isinstance(tags, dict) else []
+
+        models: list[str] = []
+        for item in models_raw:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    models.append(name)
+            elif isinstance(item, str):
+                models.append(item)
+
+        if preferred:
+            for candidate in models:
+                if candidate == preferred or candidate.startswith(preferred):
+                    cached.update({"name": candidate, "ts": now})
+                    return candidate
+
+        for prefix in ALLOWED_PREFIXES:
+            for candidate in models:
+                if candidate.startswith(prefix):
+                    cached.update({"name": candidate, "ts": now})
+                    return candidate
+
+        raise RuntimeError("No allowed Ollama model available (need gemma3:* or gpt-oss:*)")
 
     # ------------------------------------------------------------------
     # Low-level helpers
