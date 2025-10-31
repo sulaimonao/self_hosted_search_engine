@@ -7,13 +7,13 @@ schema_url="${BASE_URL%/}/api/self_heal/schema"
 plan_url="${BASE_URL%/}/api/self_heal?variant=lite"
 headless_url="${BASE_URL%/}/api/self_heal/execute_headless"
 
-curl -sS -m 5 -f "$schema_url" > /dev/null
+curl -sS -m 10 -f "$schema_url" > /dev/null
 
 incident_payload='{"id":"smoke","url":"https://example.com/smoke","symptoms":{"bannerText":"Smoke test"}}'
-curl -sS -m 8 -f -H "Content-Type: application/json" -X POST "$plan_url" -d "$incident_payload" > /dev/null
+curl -sS -m 30 -f -H "Content-Type: application/json" -X POST "$plan_url" -d "$incident_payload" > /dev/null
 
 headless_status=$(
-  curl -sS -m 5 -o /dev/null -w "%{http_code}" \
+  curl -sS -m 15 -o /dev/null -w "%{http_code}" \
     -H "Content-Type: application/json" \
     -X POST "$headless_url" \
     -d '{"directive":{"steps":[{"type":"reload"}]},"consent":false}'

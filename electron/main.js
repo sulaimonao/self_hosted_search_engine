@@ -688,6 +688,7 @@ async function createBrowserTab(url, options = {}) {
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
+      webviewTag: true,
     },
   });
 

@@ -141,6 +141,7 @@ function attachLiveView(browserWindow: BrowserWindow) {
       sandbox: true,
       partition: MAIN_SESSION_KEY,
       nodeIntegration: false,
+      webviewTag: true,
     },
   });
   browserWindow.setBrowserView(liveView);

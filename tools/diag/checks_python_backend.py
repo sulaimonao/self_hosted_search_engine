@@ -5,7 +5,15 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - fallback for older interpreters
+    try:
+        import tomli as tomllib  # type: ignore[import]
+    except ModuleNotFoundError as exc:  # pragma: no cover - guidance for misconfigured envs
+        raise ModuleNotFoundError(
+            "tomllib is unavailable. Run the diagnostics under Python 3.11+ or install 'tomli'."
+        ) from exc
 
 from .engine import Finding, RuleContext, Severity, register
 

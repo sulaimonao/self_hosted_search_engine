@@ -259,11 +259,31 @@ def create_app() -> Flask:
         agent_browser_timeout = int(os.getenv("AGENT_BROWSER_DEFAULT_TIMEOUT_S", "15"))
     except (TypeError, ValueError):
         agent_browser_timeout = 15
+    try:
+        agent_browser_action_timeout_ms = int(os.getenv("AGENT_BROWSER_ACTION_TIMEOUT_MS", "5000"))
+    except (TypeError, ValueError):
+        agent_browser_action_timeout_ms = 5_000
+    try:
+        agent_browser_navigation_timeout_ms = int(os.getenv("AGENT_BROWSER_NAV_TIMEOUT_MS", "15000"))
+    except (TypeError, ValueError):
+        agent_browser_navigation_timeout_ms = 15_000
+    try:
+        agent_browser_idle_timeout = float(os.getenv("AGENT_BROWSER_IDLE_TIMEOUT_S", "120"))
+    except (TypeError, ValueError):
+        agent_browser_idle_timeout = 120.0
+    try:
+        agent_browser_max_retries = int(os.getenv("AGENT_BROWSER_MAX_RETRIES", "1"))
+    except (TypeError, ValueError):
+        agent_browser_max_retries = 1
     agent_browser_prewarm = _as_bool(os.getenv("AGENT_BROWSER_PREWARM"), False)
 
     app.config.setdefault("AGENT_BROWSER_ENABLED", agent_browser_enabled)
     app.config.setdefault("AGENT_BROWSER_HEADLESS", agent_browser_headless)
     app.config.setdefault("AGENT_BROWSER_DEFAULT_TIMEOUT_S", agent_browser_timeout)
+    app.config.setdefault("AGENT_BROWSER_ACTION_TIMEOUT_MS", agent_browser_action_timeout_ms)
+    app.config.setdefault("AGENT_BROWSER_NAV_TIMEOUT_MS", agent_browser_navigation_timeout_ms)
+    app.config.setdefault("AGENT_BROWSER_IDLE_TIMEOUT_S", agent_browser_idle_timeout)
+    app.config.setdefault("AGENT_BROWSER_MAX_RETRIES", agent_browser_max_retries)
     app.config.setdefault("AGENT_BROWSER_PREWARM", agent_browser_prewarm)
     app.config.setdefault("AGENT_BROWSER_MANAGER", None)
 
@@ -274,6 +294,10 @@ def create_app() -> Flask:
             browser_manager = AgentBrowserManager(
                 default_timeout_s=app.config["AGENT_BROWSER_DEFAULT_TIMEOUT_S"],
                 headless=app.config["AGENT_BROWSER_HEADLESS"],
+                idle_timeout=app.config["AGENT_BROWSER_IDLE_TIMEOUT_S"],
+                action_timeout_ms=app.config["AGENT_BROWSER_ACTION_TIMEOUT_MS"],
+                navigation_timeout_ms=app.config["AGENT_BROWSER_NAV_TIMEOUT_MS"],
+                max_retries=app.config["AGENT_BROWSER_MAX_RETRIES"],
             )
         except Exception:  # pragma: no cover - defensive logging
             LOGGER.exception("Agent browser prewarm failed")

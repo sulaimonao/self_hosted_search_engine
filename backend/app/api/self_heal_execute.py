@@ -265,6 +265,43 @@ def execute_headless():
     return jsonify(response), status_code
 
 
+@bp.get("/ping")
+def self_heal_ping():
+    trace_id = request.headers.get("X-Trace-Id") or request.headers.get("X-Request-Id")
+    base_url = request.host_url.rstrip("/")
+    directive = {
+        "steps": [
+            {"type": "navigate", "url": "https://example.org", "headless": True},
+            {"type": "reload", "headless": True},
+        ]
+    }
+    try:
+        result = run_headless(directive, base_url=base_url, sse_publish=None)
+    except HeadlessExecutionError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        if trace_id:
+            payload["trace_id"] = trace_id
+        return jsonify(payload), 503
+    except Exception as exc:  # pragma: no cover - defensive guard
+        payload = {"ok": False, "error": str(exc)}
+        if trace_id:
+            payload["trace_id"] = trace_id
+        return jsonify(payload), 500
+
+    summary = _result_to_payload(result)
+    response_payload: Dict[str, Any] = {
+        "ok": result.ok,
+        "steps": len(summary.get("steps", [])),
+        "result": summary,
+    }
+    if result.failed_step is not None:
+        response_payload["failed_step"] = result.failed_step
+    if trace_id:
+        response_payload["trace_id"] = trace_id
+    status = 200 if result.ok else 500
+    return jsonify(response_payload), status
+
+
 @bp.post("/headless_apply")
 def headless_apply():
     body = request.get_json(silent=True) or {}

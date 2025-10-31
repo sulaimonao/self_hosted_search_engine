@@ -8,7 +8,7 @@ import time
 from time import perf_counter
 from typing import Any, Dict, Mapping, Optional
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from backend.app.ai.self_heal_prompt import build_prompts
 from backend.app.io import (
@@ -18,7 +18,7 @@ from backend.app.io import (
     normalize_model_alias,
     self_heal_schema,
 )
-from backend.app.io.models import Directive, Step
+from backend.app.io.models import Directive, Incident, Step
 from backend.app.llm.ollama_client import OllamaClient
 from backend.app.self_heal.episodes import append_episode
 from backend.app.self_heal.metrics import record_event
@@ -29,11 +29,15 @@ bp = Blueprint("self_heal_api", __name__, url_prefix="/api")
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
-_VALID_VARIANTS = {"lite", "deep", "headless", "repair", "fallback"}
+_VALID_VARIANTS = {"lite", "fallback", "full"}
+_FULL_VARIANT_ALIASES = {"full", "deep", "repair", "plan", "apply", "default", "headless"}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
-_PLAN_TIMEOUT_S = float(os.getenv("SELF_HEAL_PLAN_TIMEOUT_S", "12"))
+_PLAN_TIMEOUT_S = float(os.getenv("SELF_HEAL_PLAN_TIMEOUT_S", "20"))
 _FALLBACK_REASON = "fallback: reload"
 _TRUE_FLAGS = {"1", "true", "yes", "on"}
+_MODEL_FRIENDLY_HINT = (
+    "Self-heal model unavailable. Run `ollama pull gpt-oss:20b` or choose an installed Gemma3/GPT-OSS model."
+)
 
 _OLLAMA_CLIENT = OllamaClient()
 
@@ -94,6 +98,9 @@ def _emit(stage: str, message: str, *, payload: Any | None = None, **extra: Any)
     if bus is None:
         return
     event: Dict[str, Any] = {"stage": stage, "message": message, "ts": time.time()}
+    trace_id = extra.pop("trace_id", None) or getattr(g, "trace_id", None)
+    if trace_id:
+        event["trace_id"] = trace_id
     for key, value in extra.items():
         if value is None:
             continue
@@ -114,6 +121,8 @@ def _coerce_variant(raw: str | None) -> str:
     variant = raw.strip().lower()
     if variant in _VALID_VARIANTS:
         return variant
+    if variant in _FULL_VARIANT_ALIASES:
+        return "full"
     return DEFAULT_VARIANT
 
 
@@ -123,8 +132,14 @@ def _flag(value: str | None) -> bool:
     return value.strip().lower() in _TRUE_FLAGS
 
 
-def _fallback_directive(reason: str | None = None) -> DirectiveClampResult:
+def _fallback_directive(reason: str | None = None, *, incident: Incident | None = None) -> DirectiveClampResult:
     final_reason = reason or _FALLBACK_REASON
+    if incident is not None:
+        url = (incident.url or "").strip()
+        if url:
+            final_reason = f"Reload {url}"
+        elif not reason:
+            final_reason = "Reload current page"
     directive = Directive(reason=final_reason, steps=[Step(type="reload")])
     return DirectiveClampResult(directive=directive, dropped_steps=[], fallback_applied=True)
 
@@ -134,6 +149,7 @@ def _plan_with_llm(
     system_prompt: str,
     user_prompt: str,
     variant: str,
+    incident: Incident | None = None,
     timeout_s: float = _PLAN_TIMEOUT_S,
 ) -> tuple[DirectiveClampResult, dict[str, Any]]:
     start = perf_counter()
@@ -148,7 +164,7 @@ def _plan_with_llm(
     if variant == "lite":
         meta["status"] = "variant_skip"
         meta["took_ms"] = int((perf_counter() - start) * 1000)
-        return _fallback_directive(), meta
+        return _fallback_directive(incident=incident), meta
 
     preferred_env = os.getenv("SELF_HEAL_MODEL")
     try:
@@ -162,9 +178,10 @@ def _plan_with_llm(
     except Exception as exc:
         LOGGER.warning("Self-heal planner could not resolve model: %s", exc)
         meta["status"] = "resolve_error"
-        meta["error"] = str(exc)
+        meta["error"] = _MODEL_FRIENDLY_HINT
+        meta["detail"] = str(exc)
         meta["took_ms"] = int((perf_counter() - start) * 1000)
-        return _fallback_directive(), meta
+        return _fallback_directive(incident=incident), meta
 
     try:
         plan_payload_raw = _OLLAMA_CLIENT.chat_json(
@@ -179,7 +196,7 @@ def _plan_with_llm(
         meta["status"] = "chat_error"
         meta["error"] = str(exc)
         meta["took_ms"] = int((perf_counter() - start) * 1000)
-        return _fallback_directive(), meta
+        return _fallback_directive(incident=incident), meta
 
     result = clamp_directive(plan_payload_raw, fallback_reason=_FALLBACK_REASON)
     meta["status"] = "ok" if not result.fallback_applied else "invalid_plan"
@@ -207,9 +224,19 @@ def self_heal():
     variant = _coerce_variant(request.args.get("variant"))
     incident_model = clamp_incident(request.get_json(silent=True) or {})
     incident_payload = incident_model.as_payload()
+    trace_id = getattr(g, "trace_id", None) or request.headers.get("X-Trace-Id") or request.headers.get("X-Request-Id")
+    if trace_id and getattr(g, "trace_id", None) != trace_id:
+        g.trace_id = trace_id
+        g.request_id = trace_id
 
-    _emit("payload.pre", "incident captured", payload=incident_payload)
-    _emit("planner.start", f"Planner invoked (variant={variant}, apply={apply_flag})", variant=variant, apply=apply_flag)
+    _emit("payload.pre", "incident captured", payload=incident_payload, trace_id=trace_id)
+    _emit(
+        "planner.start",
+        f"Planner invoked (variant={variant}, apply={apply_flag})",
+        variant=variant,
+        apply=apply_flag,
+        trace_id=trace_id,
+    )
 
     bus = _progress_bus()
 
@@ -229,9 +256,9 @@ def self_heal():
             }
         )
         planner_meta = {"status": "rule", "rule_id": rule_id, "model": None, "took_ms": 0}
-        _emit("planner.ok", f"rule_hit:{rule_id}", rule_id=rule_id)
+        _emit("planner.ok", f"rule_hit:{rule_id}", rule_id=rule_id, trace_id=trace_id)
         if directive_result.fallback_applied:
-            _emit("planner.fallback", "Rulepack produced fallback reload().", rule_id=rule_id)
+            _emit("planner.fallback", "Rulepack produced fallback reload().", rule_id=rule_id, trace_id=trace_id)
             try:
                 record_event("planner_fallback_count", bus=bus)
             except Exception:  # pragma: no cover - metrics best effort
@@ -246,7 +273,7 @@ def self_heal():
         force_fallback = variant in {"lite", "fallback"} or _flag(os.getenv("SELF_HEAL_FORCE_FALLBACK"))
 
         if force_fallback:
-            directive_result = _fallback_directive()
+            directive_result = _fallback_directive(incident=incident_model)
             planner_meta = {
                 "status": "variant_skip",
                 "model": None,
@@ -263,11 +290,13 @@ def self_heal():
                 system_chars=len(system_prompt),
                 user_chars=len(user_prompt),
                 preview=_payload_preview({"system": system_prompt, "user": user_prompt}),
+                trace_id=trace_id,
             )
             directive_result, planner_meta = _plan_with_llm(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 variant=variant,
+                incident=incident_model,
                 timeout_s=planner_timeout,
             )
         status = planner_meta.get("status")
@@ -278,12 +307,14 @@ def self_heal():
                 model=planner_meta.get("model"),
                 took_ms=planner_meta.get("took_ms"),
                 steps=len(directive_result.directive.steps),
+                trace_id=trace_id,
             )
         elif status == "variant_skip":
             _emit(
                 "planner.fallback",
                 "Lite variant bypassed LLM; reload directive issued.",
                 took_ms=planner_meta.get("took_ms"),
+                trace_id=trace_id,
             )
         elif status == "invalid_plan":
             _emit(
@@ -292,18 +323,21 @@ def self_heal():
                 model=planner_meta.get("model"),
                 took_ms=planner_meta.get("took_ms"),
                 preview=planner_meta.get("preview"),
+                trace_id=trace_id,
             )
         else:
             _emit(
                 "planner.error",
                 f"Planner failure: {planner_meta.get('error')}",
                 model=planner_meta.get("model"),
+                trace_id=trace_id,
             )
             _emit(
                 "planner.fallback",
                 "Planner failure triggered fallback reload().",
                 model=planner_meta.get("model"),
                 took_ms=planner_meta.get("took_ms"),
+                trace_id=trace_id,
             )
         if planner_meta.get("called_llm"):
             try:
@@ -339,6 +373,10 @@ def self_heal():
         response_meta["planner_model"] = planner_meta["model"]
     if planner_meta.get("took_ms") is not None:
         response_meta["planner_took_ms"] = planner_meta.get("took_ms")
+    if planner_meta.get("error"):
+        response_meta["planner_error"] = planner_meta.get("error")
+    if planner_meta.get("detail"):
+        response_meta["planner_detail"] = planner_meta.get("detail")
     if planner_meta.get("rule_id"):
         response_meta["rule_id"] = planner_meta.get("rule_id")
 
@@ -346,6 +384,11 @@ def self_heal():
     response_meta["autopilot_steps_count"] = step_count
     response_meta["autopilot_contains_headless"] = bool(needs_headless)
     response_meta["planner_duration_ms"] = planner_meta.get("took_ms")
+    response_meta["steps_count"] = step_count
+    response_meta["has_headless"] = bool(needs_headless)
+    response_meta["dur_ms"] = total_ms
+    if trace_id:
+        response_meta["trace_id"] = trace_id
 
     _emit(
         "planner.metrics",
@@ -355,6 +398,7 @@ def self_heal():
         headless=bool(needs_headless),
         planner_ms=planner_meta.get("took_ms"),
         total_ms=total_ms,
+        trace_id=trace_id,
     )
     LOGGER.info(
         "self_heal.plan",
@@ -364,6 +408,8 @@ def self_heal():
             "autopilot_contains_headless": bool(needs_headless),
             "planner_ms": planner_meta.get("took_ms"),
             "total_ms": total_ms,
+            "dur_ms": total_ms,
+            "trace_id": trace_id,
         },
     )
 
@@ -373,6 +419,8 @@ def self_heal():
         "meta": response_meta,
         "took_ms": total_ms,
     }
+    if trace_id:
+        response["trace_id"] = trace_id
     if apply_flag:
         response["needs_headless"] = bool(needs_headless)
 
@@ -390,7 +438,7 @@ def self_heal():
     if episode_id:
         response_meta["episode_id"] = episode_id
 
-    _emit("payload.post", f"directive ready ({mode})", payload=response)
+    _emit("payload.post", f"directive ready ({mode})", payload=response, trace_id=trace_id)
     return jsonify(response), 200
 
 

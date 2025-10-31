@@ -27,9 +27,37 @@ def _manager() -> AgentBrowserManager:
         else:
             headless_flag = bool(headless_value)
 
+        action_timeout_value = current_app.config.get("AGENT_BROWSER_ACTION_TIMEOUT_MS", 5_000)
+        try:
+            action_timeout_ms = int(action_timeout_value)
+        except (TypeError, ValueError):
+            action_timeout_ms = 5_000
+
+        navigation_timeout_value = current_app.config.get("AGENT_BROWSER_NAV_TIMEOUT_MS", 15_000)
+        try:
+            navigation_timeout_ms = int(navigation_timeout_value)
+        except (TypeError, ValueError):
+            navigation_timeout_ms = 15_000
+
+        idle_timeout_value = current_app.config.get("AGENT_BROWSER_IDLE_TIMEOUT_S", 120.0)
+        try:
+            idle_timeout_s = float(idle_timeout_value)
+        except (TypeError, ValueError):
+            idle_timeout_s = 120.0
+
+        max_retries_value = current_app.config.get("AGENT_BROWSER_MAX_RETRIES", 1)
+        try:
+            max_retries = int(max_retries_value)
+        except (TypeError, ValueError):
+            max_retries = 1
+
         manager = AgentBrowserManager(
             default_timeout_s=timeout_s,
             headless=headless_flag,
+            idle_timeout=idle_timeout_s,
+            action_timeout_ms=action_timeout_ms,
+            navigation_timeout_ms=navigation_timeout_ms,
+            max_retries=max_retries,
         )
         current_app.config["AGENT_BROWSER_MANAGER"] = manager
     return manager

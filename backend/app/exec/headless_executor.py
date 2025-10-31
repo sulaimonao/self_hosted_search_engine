@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ import requests
 from flask import current_app
 
 _STAGE = "headless"
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -174,20 +176,8 @@ def run(
     timeout = _resolve_timeout(request_timeout)
 
     manager = _agent_manager()
-    http: Optional[requests.Session] = None
-    if manager is None:
-        http = requests.Session()
-
-    own_session = False
-    sid = (session_id or "").strip()
-
-    def _call(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if manager is not None:
-            return _manager_call(manager, path, payload)
-        if http is None:
-            raise HeadlessExecutionError("Agent browser HTTP session unavailable")
-        url = f"{base}/api/agent{path}"
-        return _http_post(http, url, payload, timeout=timeout)
+    channel: str = "manager" if manager is not None else "http"
+    http_session: Optional[requests.Session] = None
 
     def _emit(event: Dict[str, Any]) -> None:
         payload = {"stage": _STAGE}
@@ -198,6 +188,40 @@ def run(
                 sse_publish(payload)
             except Exception:  # pragma: no cover - defensive
                 pass
+
+    def _ensure_http_session() -> requests.Session:
+        nonlocal http_session, channel
+        if http_session is None:
+            session = requests.Session()
+            session.trust_env = False
+            http_session = session
+        channel = "http"
+        return http_session
+
+    def _call(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal manager, channel
+        if channel == "manager" and manager is not None:
+            try:
+                return _manager_call(manager, path, payload)
+            except Exception as exc:
+                if path == "/session/start":
+                    LOGGER.warning("Agent browser manager unavailable; falling back to HTTP executor: %s", exc)
+                    _emit(
+                        {
+                            "status": "warn",
+                            "message": "Falling back to HTTP agent executor.",
+                            "detail": str(exc),
+                        }
+                    )
+                    manager = None
+                else:
+                    raise
+        session = _ensure_http_session()
+        url = f"{base}/api/agent{path}"
+        return _http_post(session, url, payload, timeout=timeout)
+
+    own_session = False
+    sid = (session_id or "").strip()
 
     def _record_step(
         *,
@@ -476,8 +500,8 @@ def run(
                 _call("/session/close", {"sid": sid})
             except Exception:  # pragma: no cover - defensive cleanup
                 pass
-        if http is not None:
-            http.close()
+        if http_session is not None:
+            http_session.close()
 
 
 __all__ = ["HeadlessExecutionError", "HeadlessResult", "StepRecord", "run"]

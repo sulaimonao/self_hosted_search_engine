@@ -26,7 +26,8 @@ class SelfHealMetrics:
 class MetricsStore:
     def __init__(self, path: Path) -> None:
         self._path = path
-        self._lock = threading.Lock()
+        # Use RLock because increment() reuses snapshot() while holding the lock.
+        self._lock = threading.RLock()
         self._metrics = SelfHealMetrics()
         self._load()
 

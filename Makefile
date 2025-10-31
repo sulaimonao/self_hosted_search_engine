@@ -6,10 +6,15 @@
 .PHONY: api web
 .PHONY: lint-makefile diag
 .PHONY: ollama-pull-self-heal ollama-health index-health index-rebuild
-.PHONY: smoke:selfheal
+.PHONY: smoke-selfheal smoke
+.PHONY: deps-playwright
 
 lint-makefile:
 	@echo "Ensure all recipe lines use tabs (not spaces)."
+
+deps-playwright:
+	@echo "Installing Playwright Chromium runtime…"
+	@npx playwright install chromium
 
 .PHONY: ollama-pull-self-heal
 ollama-pull-self-heal:
@@ -47,8 +52,10 @@ index-rebuild:
 	printf '%s\n' "$$RESPONSE"; \
 	fi
 
-smoke:selfheal:
-	@bash scripts/smoke/self_heal.sh
+smoke-selfheal:
+	@SELF_HEAL_BASE_URL="$${SELF_HEAL_BASE_URL:-http://127.0.0.1:$(BACKEND_PORT)}" bash scripts/smoke/self_heal.sh
+
+smoke: smoke-selfheal
 
 FRONTEND_PORT ?= 3100
 BACKEND_PORT  ?= 5050
@@ -80,6 +87,17 @@ setup:
 	  echo "✖ No suitable Python interpreter found (tried $$py_cmd, python3, python)."; \
 	  echo "  Set PY=/path/to/python if installed elsewhere."; \
 	  exit 1; \
+	fi; \
+	py_ver="$$( "$$py_cmd" -V 2>&1 )"; \
+	if ! "$$py_cmd" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then \
+	  echo "✖ Python >= 3.11 required (found $$py_ver). Set PY=/path/to/python3.11"; \
+	  exit 1; \
+	fi; \
+	if [ -x "$(VENV_PY)" ]; then \
+	  if ! "$(VENV_PY)" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then \
+	    echo "♻️  Recreating virtualenv with $$py_cmd (current venv uses older Python)."; \
+	    rm -rf "$(VENV_DIR)"; \
+	  fi; \
 	fi; \
 	if [ ! -d "$(VENV_DIR)" ]; then \
 	  echo "Creating virtualenv at $(VENV_DIR) with $$py_cmd"; \
@@ -281,5 +299,5 @@ export-dataset: setup
 	  exit 1; \
 	fi
 	@$(VENV_PY) scripts/export_dataset.py --out "$(OUT)" $(ARGS)
-diag:
-	python3 tools/e2e_diag.py --fail-on=high
+diag: setup
+	@$(VENV_PY) tools/e2e_diag.py --fail-on=high
