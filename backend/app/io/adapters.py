@@ -12,9 +12,9 @@ from .models import ALLOWED_VERBS, Directive, Incident, Step
 
 ModelResolver = Callable[[str], str | None]
 
-_DEFAULT_MODEL_ALIAS = "gpt-oss:20b"
+_DEFAULT_MODEL_ALIAS = "gpt-oss"
 _ALLOWED_MODEL_ALIASES: dict[str, Sequence[str]] = {
-    "gpt-oss:20b": (
+    "gpt-oss": (
         "gpt-oss",
         "gptoss",
         "gpt",
@@ -26,8 +26,12 @@ _ALLOWED_MODEL_ALIASES: dict[str, Sequence[str]] = {
         "gpt-oss20b",
         "gptoss20b",
         "gpt-oss:20b",
+        "llama2",
+        "llama-2",
+        "llama 2",
+        "llama",
     ),
-    "gemma3:latest": (
+    "gemma3": (
         "gemma3",
         "gemma-3",
         "gemma 3",

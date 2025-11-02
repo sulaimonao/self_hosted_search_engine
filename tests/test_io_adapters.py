@@ -102,9 +102,10 @@ def test_coerce_directive_drops_invalid_steps() -> None:
 @pytest.mark.parametrize(
     "name,expected",
     [
-        (" gemma:2b ", "gemma3:latest"),
-        ("GPT", "gpt-oss:20b"),
-        (None, "gpt-oss:20b"),
+        (" gemma:2b ", "gemma3"),
+        ("GPT", "gpt-oss"),
+        (None, "gpt-oss"),
+        ("llama2", "gpt-oss"),
     ],
 )
 def test_normalize_model_aliases(name: str | None, expected: str) -> None:

@@ -137,6 +137,7 @@ diagnostics/*
 !tests/backend/test_migrations.py
 !tests/backend/test_app_state_browser.py
 !tests/backend/test_agent_runtime.py
+!tests/backend/test_diagnostics_aliases.py
 !tests/backend/test_source_follow.py
 !tests/backend/test_ollama_client_cli.py
 !tests/backend/test_metrics_histogram.py
