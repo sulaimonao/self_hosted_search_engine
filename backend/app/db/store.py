@@ -98,6 +98,56 @@ class AppStateDB:
         self._schema_validation: SchemaValidation = self._validate_schema()
 
     # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
+    def config_snapshot(self) -> dict[str, Any]:
+        with self._lock, self._conn:
+            rows = list(self._conn.execute("SELECT k, v FROM app_config"))
+        snapshot: dict[str, Any] = {}
+        for row in rows:
+            key = str(row["k"]) if row["k"] is not None else ""
+            if not key:
+                continue
+            snapshot[key] = _deserialize(row["v"], None)
+        return snapshot
+
+    def get_config(self, key: str, default: Any = None) -> Any:
+        if not key:
+            return default
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT v FROM app_config WHERE k=?",
+                (key,),
+            ).fetchone()
+        payload = row["v"] if row is not None else None
+        return _deserialize(payload, default)
+
+    def set_config(self, key: str, value: Any) -> None:
+        if not key:
+            raise ValueError("config key required")
+        serialized = _serialize(value)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO app_config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (key, serialized),
+            )
+
+    def update_config(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(values, Mapping):
+            raise TypeError("values must be a mapping")
+        with self._lock, self._conn:
+            for key, value in values.items():
+                normalized_key = str(key or "").strip()
+                if not normalized_key:
+                    continue
+                serialized = _serialize(value)
+                self._conn.execute(
+                    "INSERT INTO app_config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                    (normalized_key, serialized),
+                )
+        return self.config_snapshot()
+
+    # ------------------------------------------------------------------
     # Tabs & history
     # ------------------------------------------------------------------
     def ensure_tab(self, tab_id: str, *, shadow_mode: str | None = None) -> None:

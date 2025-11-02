@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
 
 import { NavProgressProvider } from "@/app/nav-progress-provider";
+import { StatusRibbon } from "@/components/status/StatusRibbon";
+import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
 
 import "./globals.css";
 
@@ -28,7 +30,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} ${robotoMono.variable} antialiased`}>
-        <NavProgressProvider>{children}</NavProgressProvider>
+        <NavProgressProvider>
+          <StatusRibbon />
+          <FirstRunWizard />
+          {children}
+        </NavProgressProvider>
       </body>
     </html>
   );

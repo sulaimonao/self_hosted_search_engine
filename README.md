@@ -10,6 +10,11 @@ required.
   [http://localhost:3100](http://localhost:3100).
 - The backend root `/` responds with `{"ok":true,"service":"backend-api","ui":"frontend-only"}`;
   every other non-`/api/*` path returns a JSON 404.
+- First launch now drives everything through the UI: the first-run wizard checks
+  Python, Ollama, port health, and kicks off Gemma-3/GPT-OSS downloads if
+  needed. The top-right status ribbon mirrors those checks in real time.
+- All configuration, crawler toggles, browser privacy controls, and repair tools
+  live in the Control Center (`/control-center`) — no `.env` editing required.
 
 ## Table of contents
 
