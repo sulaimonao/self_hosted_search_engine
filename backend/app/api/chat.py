@@ -982,8 +982,9 @@ def _execute_chat_request(
             if hasattr(chat_logger, "info"):
                 chat_logger.info("forwarding chat request to ollama (model=%s)", display_model)
 
+            upstream_model = alias_label or candidate
             request_payload: dict[str, Any] = {
-                "model": candidate,
+                "model": upstream_model,
                 "messages": prepared_messages,
                 "stream": bool(streaming_requested),
                 "system": system_prompt,

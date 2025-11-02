@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 import requests
 
 from ..config import AppConfig
+from ..io import allowed_model_aliases, normalize_model_alias
 
 
 def _read_env_flag(name: str, default: bool) -> bool:
@@ -124,6 +125,32 @@ def _collect_dependencies(repo_root: Path, timeout: int) -> Dict[str, Any]:
     return {"result": result, "packages": packages}
 
 
+def _chat_alias_snapshot() -> Dict[str, Any]:
+    """Validate chat model aliases resolve to canonical names."""
+
+    aliases_to_probe = [
+        "gpt-oss",
+        "gpt-oss:20b",
+        "llama2",
+        "gemma3",
+        "gemma3:latest",
+    ]
+    checks: List[Dict[str, Any]] = []
+    for alias in aliases_to_probe:
+        entry: Dict[str, Any] = {"alias": alias}
+        try:
+            normalized = normalize_model_alias(alias)
+        except ValueError as exc:
+            entry.update({"ok": False, "error": str(exc)})
+        else:
+            entry.update({"ok": True, "normalized": normalized})
+        checks.append(entry)
+
+    allowed = sorted(set(allowed_model_aliases()))
+    ok = all(entry.get("ok") for entry in checks)
+    return {"checks": checks, "allowed": allowed, "ok": ok}
+
+
 def _probe_chat_endpoint(api_base: str, timeout: int) -> Dict[str, Any]:
     """Send a simple chat request to verify the API responds."""
 
@@ -152,6 +179,7 @@ def _probe_chat_endpoint(api_base: str, timeout: int) -> Dict[str, Any]:
         probe["error"] = "empty_response"
     elif not response.ok:
         probe["error"] = text
+    probe["aliases"] = _chat_alias_snapshot()
     return probe
 
 
@@ -243,6 +271,17 @@ def _render_summary(data: Dict[str, Any]) -> str:
             summary.extend(["", "```", chat.get("body_preview", ""), "```"])
         if chat.get("error"):
             summary.append(f"- Error: {chat.get('error')}")
+        aliases = chat.get("aliases") or {}
+        if aliases:
+            summary.append("- Alias checks:")
+            summary.append(f"  - Allowed: {', '.join(aliases.get('allowed', [])) or 'n/a'}")
+            checks = aliases.get("checks") or []
+            for entry in checks:
+                alias = entry.get("alias", "?")
+                if entry.get("ok"):
+                    summary.append(f"  - {alias}: ok → {entry.get('normalized')}")
+                else:
+                    summary.append(f"  - {alias}: fail ({entry.get('error', 'unknown error')})")
     else:
         summary.append("- Chat probe not executed")
     summary.append("")
