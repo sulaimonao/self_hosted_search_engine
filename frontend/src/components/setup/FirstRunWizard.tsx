@@ -12,11 +12,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { fetchConfig, fetchHealth, requestModelInstall, updateConfig } from "@/lib/configClient";
+import {
+  type AppConfig,
+  type HealthSnapshot,
+  getConfig,
+  getHealth,
+  putConfig,
+  requestModelInstall,
+} from "@/lib/configClient";
 
 const REQUIRED_MODELS = ["gemma-3", "gpt-oss", "embeddinggemma"];
 
-function detectMissingModels(health: Awaited<ReturnType<typeof fetchHealth>> | null): string[] {
+function detectMissingModels(health: Awaited<ReturnType<typeof getHealth>> | null): string[] {
   if (!health) {
     return [];
   }
@@ -39,13 +46,13 @@ function detectMissingModels(health: Awaited<ReturnType<typeof fetchHealth>> | n
 }
 
 export function FirstRunWizard() {
-  const { data: config, mutate: mutateConfig } = useSWR("runtime-config", fetchConfig);
-  const { data: health, mutate: mutateHealth } = useSWR("runtime-health", fetchHealth);
+  const { data: config, mutate: mutateConfig } = useSWR<AppConfig>("runtime-config", getConfig);
+  const { data: health, mutate: mutateHealth } = useSWR<HealthSnapshot>("runtime-health", getHealth);
   const [installing, setInstalling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const completed = Boolean(config?.["setup.completed"]);
+  const completed = Boolean(config?.setup_completed);
   const missingModels = useMemo(() => detectMissingModels(health ?? null), [health]);
   const [open, setOpen] = useState(false);
 
@@ -74,7 +81,7 @@ export function FirstRunWizard() {
   };
 
   const handleFinish = async () => {
-    await updateConfig({ "setup.completed": true });
+    await putConfig({ setup_completed: true });
     await mutateConfig();
     setOpen(false);
   };

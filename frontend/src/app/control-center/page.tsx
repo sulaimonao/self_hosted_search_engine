@@ -22,12 +22,12 @@ import {
   fetchConfig,
   fetchConfigSchema,
   fetchDiagnosticsSnapshot,
-  fetchHealth,
+  getHealth,
   requestModelInstall,
   triggerRepair,
   updateConfig,
 } from "@/lib/configClient";
-import type { ConfigFieldOption, ConfigSchema, RuntimeConfig } from "@/lib/configClient";
+import type { ConfigFieldOption, ConfigSchema, RuntimeConfig, HealthSnapshot } from "@/lib/configClient";
 
 function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigFieldOption) {
   const raw = config?.[field.key];
@@ -47,7 +47,7 @@ function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigField
 export default function ControlCenterPage() {
   const { data: config, mutate: mutateConfig } = useSWR("runtime-config", fetchConfig);
   const { data: schema } = useSWR<ConfigSchema>("runtime-config-schema", fetchConfigSchema);
-  const { data: health, mutate: mutateHealth } = useSWR("runtime-health", fetchHealth, {
+  const { data: health, mutate: mutateHealth } = useSWR<HealthSnapshot>("runtime-health", getHealth, {
     refreshInterval: 30000,
   });
   const { data: diagnostics, mutate: mutateDiagnostics } = useSWR(

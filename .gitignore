@@ -61,6 +61,10 @@ diagnostics/*
 !backend/app/api/self_heal_execute.py
 !backend/app/api/diagnostics_self_heal.py
 !backend/app/api/utils.py
+!backend/app/config/
+!backend/app/config/__init__.py
+!backend/app/config/models.py
+!backend/app/config/store.py
 !backend/app/io/__init__.py
 !backend/app/io/models.py
 !backend/app/io/adapters.py
@@ -97,8 +101,11 @@ diagnostics/*
 !backend/app/services/auth_clearance.py
 !backend/app/services/fallbacks.py
 !backend/app/services/index_health.py
-!backend/app/services/runtime_config.py
 !backend/app/services/runtime_status.py
+!backend/app/routes/
+!backend/app/routes/__init__.py
+!backend/app/routes/config.py
+!backend/app/routes/util.py
 !backend/tools/__init__.py
 !backend/tools/termsearch/__init__.py
 !backend/tools/termsearch/core.py
