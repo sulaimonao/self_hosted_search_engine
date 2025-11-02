@@ -51,6 +51,9 @@ diagnostics/*
 !backend/app/api/shipit_ingest.py
 !backend/app/api/system_check.py
 !backend/app/api/meta.py
+!backend/app/api/runtime.py
+!backend/app/api/config.py
+!backend/app/api/dev_diag.py
 !backend/app/api/sources.py
 !backend/app/api/schemas.py
 !backend/app/api/reasoning.py
@@ -94,6 +97,8 @@ diagnostics/*
 !backend/app/services/auth_clearance.py
 !backend/app/services/fallbacks.py
 !backend/app/services/index_health.py
+!backend/app/services/runtime_config.py
+!backend/app/services/runtime_status.py
 !backend/tools/__init__.py
 !backend/tools/termsearch/__init__.py
 !backend/tools/termsearch/core.py

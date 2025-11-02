@@ -33,7 +33,6 @@ import { SiteInfoPopover } from "@/components/browser/SiteInfoPopover";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 import { DownloadsTray } from "@/components/browser/DownloadsTray";
 import { PermissionPrompt } from "@/components/browser/PermissionPrompt";
-import { SettingsSheet } from "@/components/browser/SettingsSheet";
 import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
@@ -108,8 +107,6 @@ export function BrowserShell() {
     () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
     [downloadOrder, downloads],
   );
-
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const fallbackWebviewRef = useRef<ElectronWebviewElement | null>(null);
   const fallbackIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -507,19 +504,11 @@ export function BrowserShell() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem
-                onSelect={() => {
-                  setDownloadsOpen(true);
-                }}
-              >
+              <DropdownMenuItem onSelect={() => { setDownloadsOpen(true); }}>
                 Downloads
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => {
-                  setSettingsOpen(true);
-                }}
-              >
-                Settings
+              <DropdownMenuItem onSelect={() => { router.push("/control-center"); }}>
+                Control Center
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
@@ -533,8 +522,8 @@ export function BrowserShell() {
           <Button
             variant="outline"
             size="icon"
-            title="Settings"
-            onClick={() => setSettingsOpen(true)}
+            title="Control Center"
+            onClick={() => router.push("/control-center")}
           >
             <Cog size={16} />
           </Button>
@@ -608,7 +597,6 @@ export function BrowserShell() {
       <StatusBar />
       <DownloadsTray />
       <PermissionPrompt />
-      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
       <DiagnosticsDrawer
         open={diagnosticsOpen}
         onOpenChange={setDiagnosticsOpen}

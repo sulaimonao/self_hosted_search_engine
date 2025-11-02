@@ -149,7 +149,7 @@ class AppConfig:
         use_llm_rerank = os.getenv("USE_LLM_RERANK", "false").lower() in {"1", "true", "yes", "on"}
         chat_log_level_name = os.getenv("CHAT_LOG_LEVEL", "INFO").upper()
         chat_log_level = getattr(logging, chat_log_level_name, logging.INFO)
-        dev_allow_autopull = os.getenv("DEV_ALLOW_AUTOPULL", "false").lower() in {
+        dev_allow_autopull = os.getenv("DEV_ALLOW_AUTOPULL", "true").lower() in {
             "1",
             "true",
             "yes",

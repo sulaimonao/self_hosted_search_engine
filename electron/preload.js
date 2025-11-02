@@ -160,6 +160,29 @@ function createBrowserAPI() {
   };
 }
 
+function createSettingsAPI() {
+  const request = async (path, init) => {
+    const response = await fetch(path, {
+      credentials: 'include',
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = payload?.error || `request failed (${response.status})`;
+      throw new Error(error);
+    }
+    return payload;
+  };
+  return {
+    getConfig: () => request('/api/config'),
+    updateConfig: (patch) =>
+      request('/api/config', { method: 'PUT', body: JSON.stringify(patch ?? {}) }),
+    getSchema: () => request('/api/config/schema'),
+    getHealth: () => request('/api/health'),
+  };
+}
+
 spoofNavigator();
 
 contextBridge.exposeInMainWorld('desktop', {
@@ -225,3 +248,4 @@ contextBridge.exposeInMainWorld('llm', {
 });
 
 contextBridge.exposeInMainWorld('browserAPI', createBrowserAPI());
+contextBridge.exposeInMainWorld('settingsAPI', createSettingsAPI());
