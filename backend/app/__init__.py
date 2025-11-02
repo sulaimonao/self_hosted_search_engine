@@ -77,7 +77,6 @@ def create_app() -> Flask:
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
     from .api import admin as admin_api
-    from .api import config as config_api
     from .api import meta as meta_api
     from .api import refresh as refresh_api
     from .api import plan as plan_api
@@ -103,7 +102,7 @@ def create_app() -> Flask:
     from .services.progress_bus import ProgressBus
     from .services.log_bus import AgentLogBus
     from .services.labeler import LabelWorker, MemoryAgingWorker
-    from .services.runtime_config import RuntimeConfigService
+    from .routes.config import bp as config_bp
     from server.refresh_worker import RefreshWorker
     from server.learned_web_db import get_db
     from .middleware import request_id as request_id_middleware
@@ -181,8 +180,6 @@ def create_app() -> Flask:
     config.log_summary()
 
     state_db = AppStateDB(config.app_state_db_path)
-    runtime_config = RuntimeConfigService(state_db)
-    app.config.setdefault("RUNTIME_CONFIG_SERVICE", runtime_config)
     domain_profiles_db.configure(config.agent_data_dir / "domain_profiles.sqlite3")
     progress_bus = ProgressBus()
     agent_log_bus = AgentLogBus()
@@ -486,7 +483,7 @@ def create_app() -> Flask:
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(meta_api.bp)
-    app.register_blueprint(config_api.bp)
+    app.register_blueprint(config_bp)
     app.register_blueprint(admin_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)

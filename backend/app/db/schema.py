@@ -522,6 +522,21 @@ def _migration_008_app_config(connection: sqlite3.Connection) -> None:
         connection.executescript(script)
 
 
+def _migration_20251102_app_config(connection: sqlite3.Connection) -> None:
+    schema_path = Path(__file__).resolve().parent / "20251102_app_config.sql"
+    try:
+        sql = schema_path.read_text("utf-8")
+    except OSError:
+        LOGGER.warning("app config defaults missing at %s", schema_path)
+        return
+    script = sql.strip()
+    if not script:
+        LOGGER.debug("app config defaults file %s is empty", schema_path)
+        return
+    with connection:
+        connection.executescript(script)
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -531,6 +546,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("006_sources", _migration_006_sources),
     ("007_domain_profiles", _migration_007_domain_profiles),
     ("008_app_config", _migration_008_app_config),
+    ("20251102_app_config", _migration_20251102_app_config),
 ]
 
 MIGRATION_IDS = tuple(migration_id for migration_id, _ in _MIGRATIONS)

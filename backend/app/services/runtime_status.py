@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import socket
 import sys
@@ -12,9 +13,14 @@ from typing import Any, Mapping
 
 from flask import current_app
 
-from backend.app.services import ollama_client
+from backend.app.config.store import read_config
+from backend.app.routes.util import get_db
 from backend.app.services import index_health
+from backend.app.services import ollama_client
 from server.refresh_worker import RefreshWorker
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 REQUIRED_CHAT_FAMILIES = ("gemma-3", "gpt-oss")
@@ -197,8 +203,12 @@ def _list_models() -> tuple[list[str], list[str]]:
 def diagnostics_snapshot() -> dict[str, Any]:
     health = build_health_snapshot()
     capabilities = build_capability_snapshot()
-    config_service = current_app.config.get("RUNTIME_CONFIG_SERVICE")
-    config = config_service.snapshot() if config_service else {}
+    config: dict[str, Any] = {}
+    try:
+        with get_db() as conn:
+            config = read_config(conn).model_dump()
+    except Exception:  # pragma: no cover - diagnostics best-effort
+        LOGGER.debug("failed to capture config snapshot", exc_info=True)
     return {
         "captured_at": time.time(),
         "health": health,

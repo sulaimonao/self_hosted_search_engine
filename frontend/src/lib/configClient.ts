@@ -1,4 +1,4 @@
-"use client";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
 export type ConfigFieldOption = {
   key: string;
@@ -22,16 +22,177 @@ export type ConfigSchema = {
 
 export type RuntimeConfig = Record<string, unknown>;
 
-export type HealthSnapshot = {
-  status: string;
-  timestamp: string;
-  environment?: Record<string, unknown>;
-  components: Record<string, { status: string; detail: Record<string, unknown> }>;
+export type ModelRef = {
+  name: string;
 };
 
-export type CapabilitySnapshot = Record<string, unknown>;
+export type SeedSources = {
+  news: string[];
+  music: string[];
+  tech: string[];
+  art: string[];
+  other: string[];
+};
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
+export type AppConfig = {
+  models_primary: ModelRef;
+  models_fallback: ModelRef;
+  models_embedder: ModelRef;
+  features_shadow_mode: boolean;
+  features_agent_mode: boolean;
+  features_local_discovery: boolean;
+  features_browsing_fallbacks: boolean;
+  features_index_auto_rebuild: boolean;
+  features_auth_clearance_detectors: boolean;
+  chat_use_page_context_default: boolean;
+  browser_persist: boolean;
+  browser_allow_cookies: boolean;
+  sources_seed: SeedSources;
+  setup_completed: boolean;
+};
+
+type FieldDefinition = {
+  legacyKey: string;
+  property: keyof AppConfig;
+  type: "boolean" | "select";
+  label: string;
+  description?: string;
+  section: "models" | "features" | "browser" | "chat" | "setup";
+  options?: string[];
+  defaultBoolean?: boolean;
+  defaultOption?: string;
+};
+
+const FIELD_DEFINITIONS: FieldDefinition[] = [
+  {
+    legacyKey: "models.chat.primary",
+    property: "models_primary",
+    type: "select",
+    label: "Primary chat model",
+    description: "Default chat model offered to the assistant UI.",
+    section: "models",
+    options: ["gemma-3", "gpt-oss"],
+    defaultOption: "gemma-3",
+  },
+  {
+    legacyKey: "models.chat.fallback",
+    property: "models_fallback",
+    type: "select",
+    label: "Fallback chat model",
+    description: "Used when the primary model is unavailable or busy.",
+    section: "models",
+    options: ["gemma-3", "gpt-oss"],
+    defaultOption: "gpt-oss",
+  },
+  {
+    legacyKey: "models.embedding.primary",
+    property: "models_embedder",
+    type: "select",
+    label: "Embedding model",
+    description: "Vector store embedding model used for hybrid search.",
+    section: "models",
+    options: ["embeddinggemma"],
+    defaultOption: "embeddinggemma",
+  },
+  {
+    legacyKey: "features.shadow_mode",
+    property: "features_shadow_mode",
+    type: "boolean",
+    label: "Shadow mode",
+    description: "Mirror your browsing session for offline replay.",
+    section: "features",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "features.agent_mode",
+    property: "features_agent_mode",
+    type: "boolean",
+    label: "Agent mode",
+    description: "Allow the assistant to stage multi-step browsing plans.",
+    section: "features",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "features.local_discovery",
+    property: "features_local_discovery",
+    type: "boolean",
+    label: "Local discovery",
+    description: "Stream link previews and domain annotations in real time.",
+    section: "features",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "features.browsing_fallbacks",
+    property: "features_browsing_fallbacks",
+    type: "boolean",
+    label: "Browser fallbacks",
+    description: "Open the desktop browser when the embedded engine fails.",
+    section: "features",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "features.index_auto_rebuild",
+    property: "features_index_auto_rebuild",
+    type: "boolean",
+    label: "Auto rebuild index",
+    description: "Automatically rebuild keyword + vector indexes when corruption is detected.",
+    section: "features",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "features.auth_clearance_detectors",
+    property: "features_auth_clearance_detectors",
+    type: "boolean",
+    label: "Auth clearance detectors",
+    description: "Detect authentication gates and prompt for manual review.",
+    section: "features",
+    defaultBoolean: false,
+  },
+  {
+    legacyKey: "chat.use_page_context_default",
+    property: "chat_use_page_context_default",
+    type: "boolean",
+    label: "Use page context by default",
+    description: "Provide the active tab context to the assistant when chats begin.",
+    section: "chat",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "browser.persist",
+    property: "browser_persist",
+    type: "boolean",
+    label: "Persist browsing state",
+    description: "Persist browsing sessions across restarts.",
+    section: "browser",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "browser.allow_cookies",
+    property: "browser_allow_cookies",
+    type: "boolean",
+    label: "Allow cookies",
+    description: "Retain cookies for authenticated browsing sessions.",
+    section: "browser",
+    defaultBoolean: true,
+  },
+  {
+    legacyKey: "setup.completed",
+    property: "setup_completed",
+    type: "boolean",
+    label: "Setup completed",
+    description: "Tracks whether the first-run wizard has been acknowledged.",
+    section: "setup",
+    defaultBoolean: false,
+  },
+];
+
+const SECTION_LABELS: Record<FieldDefinition["section"], string> = {
+  models: "Models",
+  features: "Features",
+  browser: "Browser",
+  chat: "Chat",
+  setup: "Setup",
+};
 
 function apiPath(path: string): string {
   if (!path.startsWith("/")) {
@@ -49,73 +210,140 @@ async function parseJson<T>(response: Response): Promise<T> {
   return data as T;
 }
 
-export async function fetchConfig(): Promise<RuntimeConfig> {
-  const response = await fetch(apiPath("/api/config"), {
-    credentials: "include",
-  });
-  const payload = await parseJson<{ config: RuntimeConfig }>(response);
-  return payload.config ?? {};
+export async function getConfig(): Promise<AppConfig> {
+  const response = await fetch(apiPath("/api/config"), { credentials: "include" });
+  return parseJson<AppConfig>(response);
 }
 
-export async function updateConfig(patch: Record<string, unknown>): Promise<RuntimeConfig> {
+export async function putConfig(patch: Partial<AppConfig>): Promise<void> {
   const response = await fetch(apiPath("/api/config"), {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch ?? {}),
   });
-  const payload = await parseJson<{ config: RuntimeConfig }>(response);
-  return payload.config ?? {};
+  await parseJson<{ ok: boolean }>(response);
+}
+
+export async function getConfigSchema(): Promise<Record<string, unknown>> {
+  const response = await fetch(apiPath("/api/config/schema"), { credentials: "include" });
+  return parseJson<Record<string, unknown>>(response);
+}
+
+function toRuntimeConfig(config: AppConfig): RuntimeConfig {
+  const payload: RuntimeConfig = {};
+  for (const field of FIELD_DEFINITIONS) {
+    const value = config[field.property];
+    if (field.type === "select" && typeof value === "object" && value !== null) {
+      payload[field.legacyKey] = (value as ModelRef).name;
+    } else {
+      payload[field.legacyKey] = value as unknown;
+    }
+  }
+  return payload;
+}
+
+function normaliseBoolean(input: unknown, fallback: boolean): boolean {
+  if (typeof input === "boolean") {
+    return input;
+  }
+  if (typeof input === "string") {
+    const lowered = input.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(lowered)) return true;
+    if (["false", "0", "no", "off"].includes(lowered)) return false;
+  }
+  return fallback;
+}
+
+function buildPatch(patch: Record<string, unknown>, current?: AppConfig): Partial<AppConfig> {
+  const partial: Partial<AppConfig> = {};
+  for (const [key, value] of Object.entries(patch ?? {})) {
+    const definition = FIELD_DEFINITIONS.find((field) => field.legacyKey === key);
+    if (!definition) {
+      continue;
+    }
+    if (definition.type === "select") {
+      const selected = typeof value === "string" && value ? value : (current?.[definition.property] as ModelRef | undefined)?.name;
+      if (selected) {
+        partial[definition.property] = { name: selected } as AppConfig[typeof definition.property];
+      }
+    } else {
+      const currentValue = current?.[definition.property];
+      const fallback = typeof currentValue === "boolean" ? currentValue : false;
+      partial[definition.property] = normaliseBoolean(value, fallback) as AppConfig[typeof definition.property];
+    }
+  }
+  return partial;
+}
+
+export async function fetchConfig(): Promise<RuntimeConfig> {
+  const config = await getConfig();
+  return toRuntimeConfig(config);
+}
+
+export async function updateConfig(patch: Record<string, unknown>): Promise<RuntimeConfig> {
+  const current = await getConfig();
+  const partial = buildPatch(patch, current);
+  if (Object.keys(partial).length > 0) {
+    await putConfig(partial);
+  }
+  const next = await getConfig();
+  return toRuntimeConfig(next);
 }
 
 export async function fetchConfigSchema(): Promise<ConfigSchema> {
-  const response = await fetch(apiPath("/api/config/schema"), {
-    credentials: "include",
-  });
-  return parseJson<ConfigSchema>(response);
+  try {
+    await getConfigSchema();
+  } catch (error) {
+    console.warn("Failed to load config JSON schema", error);
+  }
+  const sections = Object.entries(SECTION_LABELS).map(([sectionId, label]) => ({
+    id: sectionId,
+    label,
+    fields: FIELD_DEFINITIONS.filter((field) => field.section === sectionId).map((field) => ({
+      key: field.legacyKey,
+      type: field.type,
+      label: field.label,
+      description: field.description,
+      default:
+        field.type === "select"
+          ? field.defaultOption ?? field.options?.[0] ?? null
+          : normaliseBoolean(undefined, field.defaultBoolean ?? false),
+      options: field.options ?? null,
+    })),
+  }));
+  return { version: 1, sections };
 }
 
-export async function fetchHealth(): Promise<HealthSnapshot> {
-  const response = await fetch(apiPath("/api/health"), {
-    credentials: "include",
-  });
+export type HealthSnapshot = {
+  status: string;
+  timestamp: string;
+  environment?: Record<string, unknown>;
+  components: Record<string, { status: string; detail: Record<string, unknown> }>;
+};
+
+export async function getHealth(): Promise<HealthSnapshot> {
+  const response = await fetch(apiPath("/api/health"), { credentials: "include" });
   return parseJson<HealthSnapshot>(response);
 }
 
-export async function fetchCapabilities(): Promise<CapabilitySnapshot> {
-  const response = await fetch(apiPath("/api/capabilities"), {
-    credentials: "include",
-  });
-  return parseJson<CapabilitySnapshot>(response);
+export async function getCapabilities(): Promise<Record<string, unknown>> {
+  const response = await fetch(apiPath("/api/capabilities"), { credentials: "include" });
+  return parseJson<Record<string, unknown>>(response);
 }
 
-export async function requestModelInstall(
-  models: string[],
-): Promise<{ ok: boolean; results?: unknown }> {
+export async function requestModelInstall(models: string[]): Promise<{ ok: boolean; results?: unknown }> {
   const response = await fetch(apiPath("/api/admin/install_models"), {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ models }),
   });
-  try {
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(typeof payload?.error === "string" ? payload.error : "Install failed");
-    }
-    return { ok: true, results: payload?.results };
-  } catch (error) {
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error("Install failed");
-  }
+  return parseJson<{ ok: boolean; results?: unknown; error?: string }>(response);
 }
 
-export async function fetchDiagnosticsSnapshot(): Promise<Record<string, unknown>> {
-  const response = await fetch(apiPath("/api/dev/diag/snapshot"), {
-    credentials: "include",
-  });
+export async function getDiagnosticsSnapshot(): Promise<Record<string, unknown>> {
+  const response = await fetch(apiPath("/api/dev/diag/snapshot"), { credentials: "include" });
   return parseJson<Record<string, unknown>>(response);
 }
 
