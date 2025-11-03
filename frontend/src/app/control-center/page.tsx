@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { AlertTriangle, RefreshCcw } from "lucide-react";
 
@@ -10,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import ClientOnly from "@/components/layout/ClientOnly";
 import {
   Select,
   SelectContent,
@@ -110,6 +112,7 @@ export default function ControlCenterPage() {
     fetchModels,
   );
 
+  const router = useRouter();
   const [saving, setSaving] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [repairing, setRepairing] = useState(false);
@@ -464,311 +467,320 @@ export default function ControlCenterPage() {
   const environment = useMemo(() => health?.environment ?? {}, [health?.environment]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
-      <header className="space-y-2">
-        <h1 className="text-2xl font-bold">Control Center</h1>
-        <p className="text-sm text-muted-foreground">
-          Configure runtime features, monitor model availability, and repair the local stack without editing files.
-        </p>
-        <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-3">
-          <div className="rounded border p-3">
-            <Label className="text-[11px] uppercase text-muted-foreground">Python</Label>
-            <p className="font-semibold text-foreground">{environment?.python ?? "checking"}</p>
+    <ClientOnly fallback={<div className="px-6 py-8 text-sm text-muted-foreground">Loading Control Center…</div>}>
+      <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
+        <header className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold">Control Center</h1>
+              <p className="text-sm text-muted-foreground">
+                Configure runtime features, monitor model availability, and repair the local stack without editing files.
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => router.push("/browser")}>
+              Back to Browser
+            </Button>
           </div>
-          <div className="rounded border p-3">
-            <Label className="text-[11px] uppercase text-muted-foreground">Ollama CLI</Label>
-            <p className="font-semibold text-foreground">{environment?.ollama ? "available" : "missing"}</p>
+          <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-3">
+            <div className="rounded border p-3">
+              <Label className="text-[11px] uppercase text-muted-foreground">Python</Label>
+              <p className="font-semibold text-foreground">{environment?.python ?? "checking"}</p>
+            </div>
+            <div className="rounded border p-3">
+              <Label className="text-[11px] uppercase text-muted-foreground">Ollama CLI</Label>
+              <p className="font-semibold text-foreground">{environment?.ollama ? "available" : "missing"}</p>
+            </div>
+            <div className="rounded border p-3">
+              <Label className="text-[11px] uppercase text-muted-foreground">API port</Label>
+              <p className="font-semibold text-foreground">{environment?.api_port_open ? "open" : "unreachable"}</p>
+            </div>
           </div>
-          <div className="rounded border p-3">
-            <Label className="text-[11px] uppercase text-muted-foreground">API port</Label>
-            <p className="font-semibold text-foreground">{environment?.api_port_open ? "open" : "unreachable"}</p>
-          </div>
-        </div>
-        {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
-        <Separator className="mt-4" />
-      </header>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList>
+          {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
+          <Separator className="mt-4" />
+        </header>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList>
+            {sections.map((section) => (
+              <TabsTrigger key={section.id} value={section.id}>
+                {section.label}
+              </TabsTrigger>
+            ))}
+            <TabsTrigger value={RUNTIME_TAB_ID}>Runtime & Desktop</TabsTrigger>
+          </TabsList>
           {sections.map((section) => (
-            <TabsTrigger key={section.id} value={section.id}>
-              {section.label}
-            </TabsTrigger>
+            <TabsContent key={section.id} value={section.id}>
+              {renderSection(section.id)}
+            </TabsContent>
           ))}
-          <TabsTrigger value={RUNTIME_TAB_ID}>Runtime & Desktop</TabsTrigger>
-        </TabsList>
-        {sections.map((section) => (
-          <TabsContent key={section.id} value={section.id}>
-            {renderSection(section.id)}
-          </TabsContent>
-        ))}
-        <TabsContent value={RUNTIME_TAB_ID}>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card className="space-y-3 p-4">
-              <div>
-                <h3 className="text-sm font-semibold">Desktop / Electron</h3>
-                <p className="text-xs text-muted-foreground">
-                  Shows the state of the hardened Electron shell.
-                </p>
-              </div>
-              {desktopRuntimeUnavailable ? (
-                <p className="text-xs italic text-muted-foreground">
-                  Runtime endpoint unavailable; displaying fallback values from the local build.
-                </p>
-              ) : null}
-              <div className="space-y-1 text-xs">
+          <TabsContent value={RUNTIME_TAB_ID}>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card className="space-y-3 p-4">
                 <div>
-                  <span className="font-medium">User-Agent:</span>{" "}
-                  {typeof desktopRuntime?.desktop_user_agent === "string"
-                    ? desktopRuntime.desktop_user_agent
-                    : "unknown"}
+                  <h3 className="text-sm font-semibold">Desktop / Electron</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Shows the state of the hardened Electron shell.
+                  </p>
                 </div>
-                <div>
-                  <span className="font-medium">Session partition:</span>{" "}
-                  {typeof desktopRuntime?.session_partition === "string"
-                    ? desktopRuntime.session_partition
-                    : "persist:main"}
-                </div>
-                <div>
-                  <span className="font-medium">Hardened:</span> {desktopHardened ? "yes" : "no"}
-                </div>
-              </div>
-              <div>
-                <p className="text-[11px] uppercase text-muted-foreground">Documented env keys</p>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {documentedEnvKeys.map((key) => (
-                    <span
-                      key={key}
-                      className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                    >
-                      {key}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </Card>
-
-            <Card className="space-y-4 p-4">
-              <div>
-                <h3 className="text-sm font-semibold">Agent browser</h3>
-                <p className="text-xs text-muted-foreground">
-                  Enable the Playwright-powered browser and adjust its safety limits.
-                </p>
-              </div>
-              {agentConfigUnavailable ? (
-                <p className="text-xs italic text-muted-foreground">
-                  Config endpoint missing; update .env or backend to persist changes.
-                </p>
-              ) : null}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="agent-browser-enabled" className="text-xs font-medium">
-                    Enabled
-                  </Label>
-                  <Switch
-                    id="agent-browser-enabled"
-                    checked={agentEnabled}
-                    onCheckedChange={(next) =>
-                      void mutateAgentConfig(
-                        (previous?: AgentBrowserConfigPayload) => ({
-                          ...(previous ?? AGENT_BROWSER_DEFAULTS),
-                          enabled: next,
-                          AGENT_BROWSER_ENABLED: next,
-                        }),
-                        false,
-                      )
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="agent-browser-headless" className="text-xs font-medium">
-                    Headless mode
-                  </Label>
-                  <Switch
-                    id="agent-browser-headless"
-                    checked={agentHeadless}
-                    onCheckedChange={(next) =>
-                      void mutateAgentConfig(
-                        (previous?: AgentBrowserConfigPayload) => ({
-                          ...(previous ?? AGENT_BROWSER_DEFAULTS),
-                          AGENT_BROWSER_HEADLESS: next,
-                        }),
-                        false,
-                      )
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="agent-browser-default-timeout" className="text-xs">
-                    Default timeout (seconds)
-                  </Label>
-                  <Input
-                    id="agent-browser-default-timeout"
-                    type="number"
-                    min={1}
-                    value={agentDefaultTimeoutValue === "" ? "" : String(agentDefaultTimeoutValue)}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      void mutateAgentConfig(
-                        (previous?: AgentBrowserConfigPayload) => {
-                          const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
-                          if (!nextValue) {
-                            nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = undefined;
-                          } else {
-                            const numeric = Number.parseFloat(nextValue);
-                            nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = Number.isFinite(numeric)
-                              ? numeric
-                              : coerceNumber(
-                                  nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S,
-                                  coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_DEFAULT_TIMEOUT_S, 15),
-                                );
-                          }
-                          return nextConfig;
-                        },
-                        false,
-                      );
-                    }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="agent-browser-nav-timeout" className="text-xs">
-                    Navigation timeout (milliseconds)
-                  </Label>
-                  <Input
-                    id="agent-browser-nav-timeout"
-                    type="number"
-                    min={1000}
-                    step={500}
-                    value={
-                      agentNavigationTimeoutValue === "" ? "" : String(agentNavigationTimeoutValue)
-                    }
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      void mutateAgentConfig(
-                        (previous?: AgentBrowserConfigPayload) => {
-                          const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
-                          if (!nextValue) {
-                            nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = undefined;
-                          } else {
-                            const numeric = Number.parseInt(nextValue, 10);
-                            nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = Number.isFinite(numeric)
-                              ? numeric
-                              : coerceNumber(
-                                  nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS,
-                                  coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS, 15000),
-                                );
-                          }
-                          return nextConfig;
-                        },
-                        false,
-                      );
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => void handleAgentSave()} disabled={savingAgent}>
-                  {savingAgent ? "Saving…" : "Save agent settings"}
-                </Button>
-                {agentMessage ? (
-                  <span className="text-xs text-muted-foreground">{agentMessage}</span>
+                {desktopRuntimeUnavailable ? (
+                  <p className="text-xs italic text-muted-foreground">
+                    Runtime endpoint unavailable; displaying fallback values from the local build.
+                  </p>
                 ) : null}
-              </div>
-            </Card>
-
-            <Card className="space-y-4 p-4">
-              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-1 text-xs">
+                  <div>
+                    <span className="font-medium">User-Agent:</span>{" "}
+                    {typeof desktopRuntime?.desktop_user_agent === "string"
+                      ? desktopRuntime.desktop_user_agent
+                      : "unknown"}
+                  </div>
+                  <div>
+                    <span className="font-medium">Session partition:</span>{" "}
+                    {typeof desktopRuntime?.session_partition === "string"
+                      ? desktopRuntime.session_partition
+                      : "persist:main"}
+                  </div>
+                  <div>
+                    <span className="font-medium">Hardened:</span> {desktopHardened ? "yes" : "no"}
+                  </div>
+                </div>
                 <div>
-                  <h3 className="text-sm font-semibold">Models</h3>
+                  <p className="text-[11px] uppercase text-muted-foreground">Documented env keys</p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {documentedEnvKeys.map((key) => (
+                      <span
+                        key={key}
+                        className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                      >
+                        {key}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="space-y-4 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold">Agent browser</h3>
                   <p className="text-xs text-muted-foreground">
-                    Install or verify the required Ollama models.
+                    Enable the Playwright-powered browser and adjust its safety limits.
                   </p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void mutateModels()}
-                  disabled={installingModel !== null}
-                >
-                  <RefreshCcw className="mr-2 h-3.5 w-3.5" />
-                  Refresh
-                </Button>
-              </div>
-              <div className="space-y-2 text-xs">
-                {MANDATORY_MODEL_FAMILIES.map((name) => {
-                  const installed = installedModelFamilies.has(name.toLowerCase());
-                  const inFlight = installingModel === name;
-                  return (
-                    <div key={name} className="flex items-center justify-between rounded border p-2">
-                      <span className="font-medium">{name}</span>
-                      {installed ? (
-                        <span className="text-[10px] font-semibold uppercase text-green-600">
-                          installed
-                        </span>
-                      ) : (
-                        <Button
-                          size="xs"
-                          onClick={() => void handleInstallOllamaModel(name)}
-                          disabled={inFlight}
-                        >
-                          {inFlight ? "Installing…" : "Install"}
-                        </Button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {modelsMessage ? (
-                <p className="text-xs text-muted-foreground">{modelsMessage}</p>
-              ) : null}
-              {ollamaHealth?.ok === false ? (
-                <p className="text-xs text-destructive">
-                  Ollama reported an error – check the backend logs.
-                </p>
-              ) : null}
-            </Card>
-
-            <Card className="space-y-4 p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-semibold">Diagnostics</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Trigger backend diagnostics and review the latest snapshot.
+                {agentConfigUnavailable ? (
+                  <p className="text-xs italic text-muted-foreground">
+                    Config endpoint missing; update .env or backend to persist changes.
                   </p>
+                ) : null}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="agent-browser-enabled" className="text-xs font-medium">
+                      Enabled
+                    </Label>
+                    <Switch
+                      id="agent-browser-enabled"
+                      checked={agentEnabled}
+                      onCheckedChange={(next) =>
+                        void mutateAgentConfig(
+                          (previous?: AgentBrowserConfigPayload) => ({
+                            ...(previous ?? AGENT_BROWSER_DEFAULTS),
+                            enabled: next,
+                            AGENT_BROWSER_ENABLED: next,
+                          }),
+                          false,
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="agent-browser-headless" className="text-xs font-medium">
+                      Headless mode
+                    </Label>
+                    <Switch
+                      id="agent-browser-headless"
+                      checked={agentHeadless}
+                      onCheckedChange={(next) =>
+                        void mutateAgentConfig(
+                          (previous?: AgentBrowserConfigPayload) => ({
+                            ...(previous ?? AGENT_BROWSER_DEFAULTS),
+                            AGENT_BROWSER_HEADLESS: next,
+                          }),
+                          false,
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="agent-browser-default-timeout" className="text-xs">
+                      Default timeout (seconds)
+                    </Label>
+                    <Input
+                      id="agent-browser-default-timeout"
+                      type="number"
+                      min={1}
+                      value={agentDefaultTimeoutValue === "" ? "" : String(agentDefaultTimeoutValue)}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        void mutateAgentConfig(
+                          (previous?: AgentBrowserConfigPayload) => {
+                            const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
+                            if (!nextValue) {
+                              nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = undefined;
+                            } else {
+                              const numeric = Number.parseFloat(nextValue);
+                              nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = Number.isFinite(numeric)
+                                ? numeric
+                                : coerceNumber(
+                                    nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S,
+                                    coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_DEFAULT_TIMEOUT_S, 15),
+                                  );
+                            }
+                            return nextConfig;
+                          },
+                          false,
+                        );
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="agent-browser-nav-timeout" className="text-xs">
+                      Navigation timeout (milliseconds)
+                    </Label>
+                    <Input
+                      id="agent-browser-nav-timeout"
+                      type="number"
+                      min={1000}
+                      step={500}
+                      value={
+                        agentNavigationTimeoutValue === "" ? "" : String(agentNavigationTimeoutValue)
+                      }
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        void mutateAgentConfig(
+                          (previous?: AgentBrowserConfigPayload) => {
+                            const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
+                            if (!nextValue) {
+                              nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = undefined;
+                            } else {
+                              const numeric = Number.parseInt(nextValue, 10);
+                              nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = Number.isFinite(numeric)
+                                ? numeric
+                                : coerceNumber(
+                                    nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS,
+                                    coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS, 15000),
+                                  );
+                            }
+                            return nextConfig;
+                          },
+                          false,
+                        );
+                      }}
+                    />
+                  </div>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => void mutateDiagnostics()}>
-                  <RefreshCcw className="mr-2 h-3.5 w-3.5" />
-                  Refresh
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={() => void handleAgentSave()} disabled={savingAgent}>
+                    {savingAgent ? "Saving…" : "Save agent settings"}
+                  </Button>
+                  {agentMessage ? (
+                    <span className="text-xs text-muted-foreground">{agentMessage}</span>
+                  ) : null}
+                </div>
+              </Card>
+
+              <Card className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold">Models</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Install or verify the required Ollama models.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void mutateModels()}
+                    disabled={installingModel !== null}
+                  >
+                    <RefreshCcw className="mr-2 h-3.5 w-3.5" />
+                    Refresh
+                  </Button>
+                </div>
+                <div className="space-y-2 text-xs">
+                  {MANDATORY_MODEL_FAMILIES.map((name) => {
+                    const installed = installedModelFamilies.has(name.toLowerCase());
+                    const inFlight = installingModel === name;
+                    return (
+                      <div key={name} className="flex items-center justify-between rounded border p-2">
+                        <span className="font-medium">{name}</span>
+                        {installed ? (
+                          <span className="text-[10px] font-semibold uppercase text-green-600">
+                            installed
+                          </span>
+                        ) : (
+                          <Button
+                            size="xs"
+                            onClick={() => void handleInstallOllamaModel(name)}
+                            disabled={inFlight}
+                          >
+                            {inFlight ? "Installing…" : "Install"}
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {modelsMessage ? (
+                  <p className="text-xs text-muted-foreground">{modelsMessage}</p>
+                ) : null}
+                {ollamaHealth?.ok === false ? (
+                  <p className="text-xs text-destructive">
+                    Ollama reported an error – check the backend logs.
+                  </p>
+                ) : null}
+              </Card>
+
+              <Card className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold">Diagnostics</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Trigger backend diagnostics and review the latest snapshot.
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => void mutateDiagnostics()}>
+                    <RefreshCcw className="mr-2 h-3.5 w-3.5" />
+                    Refresh
+                  </Button>
+                </div>
+                <Button size="sm" onClick={() => void handleRunDiagnostics()}>
+                  Run diagnostics
                 </Button>
-              </div>
-              <Button size="sm" onClick={() => void handleRunDiagnostics()}>
-                Run diagnostics
-              </Button>
-              {runtimeDiagnosticsMessage ? (
-                <p className="text-xs text-muted-foreground">{runtimeDiagnosticsMessage}</p>
-              ) : null}
-              <div className="space-y-1 text-xs">
-                <div>
-                  <span className="font-medium">Last snapshot:</span> {diagnosticsCapturedLabel}
+                {runtimeDiagnosticsMessage ? (
+                  <p className="text-xs text-muted-foreground">{runtimeDiagnosticsMessage}</p>
+                ) : null}
+                <div className="space-y-1 text-xs">
+                  <div>
+                    <span className="font-medium">Last snapshot:</span> {diagnosticsCapturedLabel}
+                  </div>
+                  <div>
+                    <span className="font-medium">LLM:</span>{" "}
+                    {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
+                      Record<string, { status?: string }> | undefined)?.llm?.status ?? "unknown"}
+                  </div>
+                  <div>
+                    <span className="font-medium">Index:</span>{" "}
+                    {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
+                      Record<string, { status?: string }> | undefined)?.index?.status ?? "unknown"}
+                  </div>
                 </div>
-                <div>
-                  <span className="font-medium">LLM:</span>{" "}
-                  {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
-                    Record<string, { status?: string }> | undefined)?.llm?.status ?? "unknown"}
+                <div className="text-xs">
+                  <span className="font-medium">Counts:</span>{" "}
+                  High {diagHigh} · Medium {diagMedium} · Low {diagLow}
                 </div>
-                <div>
-                  <span className="font-medium">Index:</span>{" "}
-                  {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
-                    Record<string, { status?: string }> | undefined)?.index?.status ?? "unknown"}
-                </div>
-              </div>
-              <div className="text-xs">
-                <span className="font-medium">Counts:</span>{" "}
-                High {diagHigh} · Medium {diagMedium} · Low {diagLow}
-              </div>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </ClientOnly>
   );
 }

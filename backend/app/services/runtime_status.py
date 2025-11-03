@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from flask import current_app
 
+from backend.app.api.llm import ALIAS_MAP
 from backend.app.config.store import read_config
 from backend.app.routes.util import get_db
 from backend.app.services import index_health
@@ -38,7 +39,16 @@ class HealthComponent:
 
 
 def _normalise_family(name: str) -> str:
-    base = name.split(":", 1)[0]
+    base = name.split(":", 1)[0].strip()
+    if not base:
+        return ""
+    key = "".join(ch for ch in base.lower() if ch.isalnum())
+    for canonical, aliases in ALIAS_MAP.items():
+        canonical_key = "".join(ch for ch in canonical.lower() if ch.isalnum())
+        if key == canonical_key:
+            return canonical
+        if any(key == "".join(ch for ch in alias.lower() if ch.isalnum()) for alias in aliases):
+            return canonical
     return base.lower()
 
 

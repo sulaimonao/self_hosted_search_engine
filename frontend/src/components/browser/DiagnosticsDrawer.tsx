@@ -521,12 +521,6 @@ export function DiagnosticsDrawer({
     });
   }, [appendLog, fetchDirective, report]);
 
-  useEffect(() => {
-    if (activeTab !== "self-heal") {
-      setSelfHealSubTab("actions");
-    }
-  }, [activeTab]);
-
   const loadEpisodes = useCallback(async () => {
     setEpisodesLoading(true);
     try {
@@ -543,6 +537,12 @@ export function DiagnosticsDrawer({
       setEpisodesLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "self-heal") {
+      setSelfHealSubTab("actions");
+    }
+  }, [activeTab]);
 
   const loadRulepack = useCallback(
     async (options?: { withEpisodes?: boolean }) => {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 from flask import Blueprint, current_app, jsonify, request
 
 from ..config import AppConfig
@@ -37,3 +40,38 @@ def diagnostics_endpoint():
     job_id = runner.submit(_job)
     return jsonify({"job_id": job_id})
 
+
+@bp.post("/diagnostics/run")
+def diagnostics_run():
+    project_root = Path(current_app.root_path).resolve().parent.parent
+    script_path = project_root / "tools" / "e2e_diag.py"
+    if not script_path.exists():
+        return jsonify({"ok": False, "error": "script_missing"}), 500
+
+    try:
+        result = subprocess.run(
+            ["python3", str(script_path)],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            check=False,
+        )
+    except OSError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": exc.__class__.__name__,
+                    "message": str(exc),
+                }
+            ),
+            500,
+        )
+
+    payload = {
+        "ok": result.returncode == 0,
+        "returncode": result.returncode,
+        "stdout": (result.stdout or "").strip(),
+        "stderr": (result.stderr or "").strip(),
+    }
+    return jsonify(payload)

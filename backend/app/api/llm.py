@@ -24,6 +24,27 @@ if TYPE_CHECKING:  # pragma: no cover - imports for type checkers only
 bp = Blueprint("llm_api", __name__, url_prefix="/api/llm")
 
 
+ALIAS_MAP: dict[str, tuple[str, ...]] = {
+    "gemma-3": (
+        "gemma3",
+        "gemma-3",
+        "gemma3instruct",
+        "gemma",
+    ),
+    "gpt-oss": (
+        "gpt-oss",
+        "gptoss",
+        "gpt4all-oss",
+        "gpt",
+    ),
+    "embeddinggemma": (
+        "embeddinggemma",
+        "embedding-gemma",
+        "embedgemma",
+    ),
+}
+
+
 def _get_engine_config() -> "EngineConfig":
     config = current_app.config.get("RAG_ENGINE_CONFIG")
     if config is None:
@@ -70,6 +91,35 @@ def _unique(items: Iterable[str]) -> list[str]:
     for item in items:
         if item not in seen:
             seen[item] = None
+    return list(seen.keys())
+
+
+def _alias_key(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _normalize(value: str | None) -> str | None:
+    if not value:
+        return None
+    base = value.split(":", 1)[0].strip()
+    if not base:
+        return None
+    key = _alias_key(base)
+    for canonical, aliases in ALIAS_MAP.items():
+        canonical_key = _alias_key(canonical)
+        if key == canonical_key:
+            return canonical
+        if any(key == _alias_key(alias) for alias in aliases):
+            return canonical
+    return base.lower()
+
+
+def _present(models: Iterable[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for model in models:
+        normalised = _normalize(model)
+        if normalised and normalised not in seen:
+            seen[normalised] = None
     return list(seen.keys())
 
 
@@ -249,6 +299,7 @@ def llm_health() -> Any:
     probe = _probe_ollama(engine_config.ollama.base_url, manager)
     models = probe.get("models") if isinstance(probe, Mapping) else []
     model_list = list(models) if isinstance(models, Iterable) else []
+    families = _present(model_list)
     duration_ms = int(probe.get("duration_ms", 0)) if isinstance(probe, Mapping) else 0
     reachable = bool(probe.get("reachable")) if isinstance(probe, Mapping) else False
     payload = {
@@ -256,15 +307,18 @@ def llm_health() -> Any:
         "data": {
             "host": engine_config.ollama.base_url,
             "reachable": reachable,
-            "model_count": len(model_list),
+            "model_count": len(families) if families else len(model_list),
         },
         "reachable": reachable,
-        "model_count": len(model_list),
+        "model_count": len(families) if families else len(model_list),
         "duration_ms": duration_ms,
         "host": engine_config.ollama.base_url,
     }
     if model_list:
         payload["data"]["models"] = model_list
+    if families:
+        payload["data"]["families"] = families
+        payload["families"] = families
     if probe.get("error"):
         payload["data"]["error"] = probe["error"]
         payload["error"] = probe["error"]
@@ -288,6 +342,7 @@ def llm_status() -> Any:
     probe = _probe_ollama(engine_config.ollama.base_url, manager)
     reachable = bool(probe["reachable"])
     available = probe["models"]
+    families = _present(available)
     installed = shutil.which("ollama") is not None or reachable
 
     payload = {
@@ -296,6 +351,8 @@ def llm_status() -> Any:
         "host": engine_config.ollama.base_url or app_config.ollama_url,
         "models": available,
     }
+    if families:
+        payload["families"] = families
     if probe.get("error"):
         payload["error"] = probe["error"]
 
