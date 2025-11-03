@@ -158,9 +158,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.setAppLogsPath();
 
 const MAIN_SESSION_KEY = 'persist:main';
-const DEFAULT_USER_AGENT =
-  process.env.DESKTOP_USER_AGENT ||
+const DESKTOP_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const RESOLVED_USER_AGENT = (() => {
+  const candidate = process.env.DESKTOP_USER_AGENT;
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return DESKTOP_USER_AGENT;
+})();
 const DEFAULT_TAB_URL = 'https://wikipedia.org';
 const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
@@ -454,7 +463,7 @@ async function createBrowserTab(url?: string, options: { activate?: boolean } = 
   const id = randomUUID();
   const view = new BrowserView({
     webPreferences: {
-      partition: MAIN_SESSION_KEY,
+      partition: MAIN_SESSION_KEY ?? 'persist:main',
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -463,7 +472,7 @@ async function createBrowserTab(url?: string, options: { activate?: boolean } = 
     },
   });
 
-  view.webContents.setUserAgent(DEFAULT_USER_AGENT);
+  view.webContents.setUserAgent(RESOLVED_USER_AGENT);
 
   const tab: BrowserTabRecord = {
     id,
@@ -678,7 +687,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
-      partition: MAIN_SESSION_KEY,
+      partition: MAIN_SESSION_KEY ?? 'persist:main',
       webviewTag: true,
       spellcheck: true,
     },
@@ -727,18 +736,14 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   const mainSession = session.fromPartition(MAIN_SESSION_KEY);
+  mainSession.setUserAgent(RESOLVED_USER_AGENT);
 
   mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const headers = {
-      ...details.requestHeaders,
-      'User-Agent': DEFAULT_USER_AGENT,
-    };
+    const acceptLanguageHeader =
+      details.requestHeaders['Accept-Language'] ??
+      details.requestHeaders['accept-language'];
 
-    if (details.requestHeaders['Accept-Language']) {
-      headers['Accept-Language'] = details.requestHeaders['Accept-Language'];
-    }
-
-    const forwardedSecChUaHeaders = [
+    const hintKeys = [
       'sec-ch-ua',
       'sec-ch-ua-mobile',
       'sec-ch-ua-platform',
@@ -747,8 +752,19 @@ app.whenReady().then(async () => {
       'sec-ch-ua-platform-version',
       'sec-ch-ua-full-version-list',
     ];
-    for (const key of forwardedSecChUaHeaders) {
-      const value = details.requestHeaders[key];
+
+    const headers = {
+      ...details.requestHeaders,
+      'User-Agent': RESOLVED_USER_AGENT,
+    };
+
+    if (acceptLanguageHeader) {
+      headers['Accept-Language'] = acceptLanguageHeader;
+    }
+
+    for (const key of hintKeys) {
+      const value =
+        details.requestHeaders[key] ?? details.requestHeaders[key.toUpperCase()];
       if (value != null) {
         headers[key] = value;
       }

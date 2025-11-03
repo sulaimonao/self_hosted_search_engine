@@ -15,6 +15,7 @@ _DB_DIR = Path(__file__).resolve().parent
 _MIGRATIONS_DIR = _DB_DIR / "migrations"
 _APP_CONFIG_SCHEMA = _MIGRATIONS_DIR / "008_app_config.sql"
 _APP_CONFIG_DEFAULTS = _MIGRATIONS_DIR / "20251102_app_config.sql"
+_APP_CONFIG_DESKTOP_DEFAULTS = _MIGRATIONS_DIR / "20251115_desktop_defaults.sql"
 
 MigrationFn = Callable[[sqlite3.Connection], None]
 
@@ -540,6 +541,21 @@ def _migration_20251102_app_config(connection: sqlite3.Connection) -> None:
         connection.executescript(script)
 
 
+def _migration_20251115_desktop_defaults(connection: sqlite3.Connection) -> None:
+    schema_path = _APP_CONFIG_DESKTOP_DEFAULTS
+    try:
+        sql = schema_path.read_text("utf-8")
+    except OSError:
+        LOGGER.warning("desktop defaults missing at %s", schema_path)
+        return
+    script = sql.strip()
+    if not script:
+        LOGGER.debug("desktop defaults file %s is empty", schema_path)
+        return
+    with connection:
+        connection.executescript(script)
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -550,6 +566,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("007_domain_profiles", _migration_007_domain_profiles),
     ("008_app_config", _migration_008_app_config),
     ("20251102_app_config", _migration_20251102_app_config),
+    ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]
 
 MIGRATION_IDS = tuple(migration_id for migration_id, _ in _MIGRATIONS)

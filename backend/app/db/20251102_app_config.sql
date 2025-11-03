@@ -1,11 +1,10 @@
--- idempotent table for app-wide config
+-- Default runtime configuration values for zero-touch boot.
 CREATE TABLE IF NOT EXISTS app_config (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
--- sensible defaults for zero-touch boot
 INSERT OR IGNORE INTO app_config(k, v) VALUES
 ('models.primary',          '{"name": "gemma-3"}'),
 ('models.fallback',          '{"name": "gpt-oss"}'),

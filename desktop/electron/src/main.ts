@@ -21,9 +21,18 @@ let isQuitting = false;
 let appProtocolRegistered = false;
 
 const MAIN_SESSION_KEY = "persist:main";
-const DEFAULT_USER_AGENT =
-  process.env.DESKTOP_USER_AGENT ||
+const DESKTOP_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const RESOLVED_USER_AGENT = (() => {
+  const candidate = process.env.DESKTOP_USER_AGENT;
+  if (typeof candidate === "string") {
+    const trimmed = candidate.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return DESKTOP_USER_AGENT;
+})();
 
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const IS_DEV = Boolean(FRONTEND_URL) || process.env.NODE_ENV === "development";
@@ -142,7 +151,7 @@ function attachLiveView(browserWindow: BrowserWindow) {
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
-      partition: MAIN_SESSION_KEY,
+      partition: MAIN_SESSION_KEY ?? "persist:main",
       nodeIntegration: false,
       webviewTag: true,
     },
@@ -186,7 +195,7 @@ function createWindow() {
       sandbox: true,
       spellcheck: true,
       webviewTag: true,
-      partition: MAIN_SESSION_KEY,
+      partition: MAIN_SESSION_KEY ?? "persist:main",
     },
   });
 
@@ -217,7 +226,7 @@ function createWindow() {
     }
     try {
       await liveView.webContents.loadURL(url, {
-        userAgent: DEFAULT_USER_AGENT,
+        userAgent: RESOLVED_USER_AGENT,
       });
     } catch (error) {
       console.warn("Live view load failed", error);
@@ -247,22 +256,13 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   const mainSession = session.fromPartition(MAIN_SESSION_KEY);
+  mainSession.setUserAgent(RESOLVED_USER_AGENT);
   mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const headers = {
-      ...details.requestHeaders,
-      "User-Agent": DEFAULT_USER_AGENT,
-    };
+    const acceptLanguageHeader =
+      details.requestHeaders["Accept-Language"] ??
+      details.requestHeaders["accept-language"];
 
-    if (details.requestHeaders["Accept-Language"]) {
-      headers["Accept-Language"] = details.requestHeaders["Accept-Language"];
-    } else if (!headers["Accept-Language"]) {
-      const locale = app.getLocale();
-      if (locale) {
-        headers["Accept-Language"] = locale;
-      }
-    }
-
-    const forwardedSecChUaHeaders = [
+    const hintKeys = [
       "sec-ch-ua",
       "sec-ch-ua-mobile",
       "sec-ch-ua-platform",
@@ -271,8 +271,24 @@ app.whenReady().then(async () => {
       "sec-ch-ua-platform-version",
       "sec-ch-ua-full-version-list",
     ];
-    for (const key of forwardedSecChUaHeaders) {
-      const value = details.requestHeaders[key];
+
+    const headers = {
+      ...details.requestHeaders,
+      "User-Agent": RESOLVED_USER_AGENT,
+    };
+
+    if (acceptLanguageHeader) {
+      headers["Accept-Language"] = acceptLanguageHeader;
+    } else if (!headers["Accept-Language"]) {
+      const locale = app.getLocale();
+      if (locale) {
+        headers["Accept-Language"] = locale;
+      }
+    }
+
+    for (const key of hintKeys) {
+      const value =
+        details.requestHeaders[key] ?? details.requestHeaders[key.toUpperCase()];
       if (value != null) {
         headers[key] = value;
       }

@@ -1,0 +1,13 @@
+-- Primary schema for the app_config key/value store.
+CREATE TABLE IF NOT EXISTS app_config (
+  k TEXT PRIMARY KEY,
+  v TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_app_config_updated
+AFTER UPDATE ON app_config
+FOR EACH ROW
+BEGIN
+  UPDATE app_config SET updated_at = CURRENT_TIMESTAMP WHERE k = NEW.k;
+END;
