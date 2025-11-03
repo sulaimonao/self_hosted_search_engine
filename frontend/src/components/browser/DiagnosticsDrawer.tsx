@@ -527,6 +527,23 @@ export function DiagnosticsDrawer({
     }
   }, [activeTab]);
 
+  const loadEpisodes = useCallback(async () => {
+    setEpisodesLoading(true);
+    try {
+      const response = await fetch("/api/diagnostics/rules/episodes?limit=120");
+      if (!response.ok) {
+        throw new Error(`failed to load episodes (${response.status})`);
+      }
+      const data = (await response.json()) as EpisodesResponse;
+      setEpisodes(Array.isArray(data.episodes) ? data.episodes : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setRulesError(message);
+    } finally {
+      setEpisodesLoading(false);
+    }
+  }, []);
+
   const loadRulepack = useCallback(
     async (options?: { withEpisodes?: boolean }) => {
       setRulesLoading(true);
@@ -552,23 +569,6 @@ export function DiagnosticsDrawer({
     },
     [loadEpisodes],
   );
-
-  const loadEpisodes = useCallback(async () => {
-    setEpisodesLoading(true);
-    try {
-      const response = await fetch("/api/diagnostics/rules/episodes?limit=120");
-      if (!response.ok) {
-        throw new Error(`failed to load episodes (${response.status})`);
-      }
-      const data = (await response.json()) as EpisodesResponse;
-      setEpisodes(Array.isArray(data.episodes) ? data.episodes : []);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setRulesError(message);
-    } finally {
-      setEpisodesLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     if (activeTab !== "self-heal" || selfHealSubTab !== "rules") {

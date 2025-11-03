@@ -1466,8 +1466,18 @@ if (!app.requestSingleInstanceLock()) {
           headers['Accept-Language'] = details.requestHeaders['Accept-Language'];
         }
 
-        for (const [key, value] of Object.entries(details.requestHeaders)) {
-          if (key.toLowerCase().startsWith('sec-ch-ua')) {
+        const forwardedSecChUaHeaders = [
+          'sec-ch-ua',
+          'sec-ch-ua-mobile',
+          'sec-ch-ua-platform',
+          'sec-ch-ua-arch',
+          'sec-ch-ua-model',
+          'sec-ch-ua-platform-version',
+          'sec-ch-ua-full-version-list',
+        ];
+        for (const key of forwardedSecChUaHeaders) {
+          const value = details.requestHeaders[key];
+          if (value != null) {
             headers[key] = value;
           }
         }
