@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -18,6 +19,19 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { IndexHealthPanel } from "@/components/index-health/IndexHealthPanel";
+import {
+  fetchAgentBrowserConfig,
+  fetchDesktopRuntime,
+  fetchModels,
+  installModels as installOllamaModels,
+  runDiagnostics as runDiagnosticsJob,
+  updateAgentBrowserConfig,
+} from "@/lib/api";
+import type {
+  AgentBrowserConfigPayload,
+  DesktopRuntimeInfo,
+  OllamaHealthResponse,
+} from "@/lib/api";
 import {
   fetchConfig,
   fetchConfigSchema,
@@ -44,6 +58,38 @@ function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigField
   return String(raw ?? "");
 }
 
+const RUNTIME_TAB_ID = "runtime-desktop";
+
+const AGENT_BROWSER_DEFAULTS: AgentBrowserConfigPayload = {
+  enabled: false,
+  AGENT_BROWSER_ENABLED: false,
+  AGENT_BROWSER_DEFAULT_TIMEOUT_S: 15,
+  AGENT_BROWSER_NAV_TIMEOUT_MS: 15000,
+  AGENT_BROWSER_HEADLESS: true,
+};
+
+const MANDATORY_MODEL_FAMILIES = ["gpt-oss", "gemma3", "embeddinggemma"] as const;
+
+function coerceBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalised = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalised)) return true;
+    if (["false", "0", "no", "off"].includes(normalised)) return false;
+  }
+  return fallback;
+}
+
+function coerceNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
 export default function ControlCenterPage() {
   const { data: config, mutate: mutateConfig } = useSWR("runtime-config", fetchConfig);
   const { data: schema } = useSWR<ConfigSchema>("runtime-config-schema", fetchConfigSchema);
@@ -54,14 +100,111 @@ export default function ControlCenterPage() {
     "runtime-diagnostics",
     fetchDiagnosticsSnapshot,
   );
+  const { data: agentConfig, mutate: mutateAgentConfig } = useSWR<AgentBrowserConfigPayload>(
+    "agent-browser-config",
+    fetchAgentBrowserConfig,
+  );
+  const { data: desktopRuntime } = useSWR<DesktopRuntimeInfo>("desktop-runtime", fetchDesktopRuntime);
+  const { data: ollamaHealth, mutate: mutateModels } = useSWR<OllamaHealthResponse>(
+    "ollama-model-health",
+    fetchModels,
+  );
 
   const [saving, setSaving] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [savingAgent, setSavingAgent] = useState(false);
+  const [agentMessage, setAgentMessage] = useState<string | null>(null);
+  const [installingModel, setInstallingModel] = useState<string | null>(null);
+  const [modelsMessage, setModelsMessage] = useState<string | null>(null);
+  const [runtimeDiagnosticsMessage, setRuntimeDiagnosticsMessage] = useState<string | null>(null);
 
   const sections = schema?.sections ?? [];
   const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? "models");
+
+  const agentState = agentConfig ?? AGENT_BROWSER_DEFAULTS;
+  const agentSource =
+    typeof agentState["_source"] === "string" ? (agentState["_source"] as string) : null;
+  const agentConfigUnavailable = Boolean(agentSource && agentSource.startsWith("fallback"));
+  const agentEnabled = coerceBoolean(
+    agentState.AGENT_BROWSER_ENABLED ?? agentState.enabled,
+    coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_ENABLED, false),
+  );
+  const agentHeadless = coerceBoolean(
+    agentState.AGENT_BROWSER_HEADLESS,
+    coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_HEADLESS, true),
+  );
+  const agentDefaultTimeoutValue =
+    agentState.AGENT_BROWSER_DEFAULT_TIMEOUT_S ??
+    agentState.default_timeout_s ??
+    AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_DEFAULT_TIMEOUT_S ??
+    "";
+  const agentNavigationTimeoutValue =
+    agentState.AGENT_BROWSER_NAV_TIMEOUT_MS ??
+    agentState.nav_timeout_ms ??
+    AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS ??
+    "";
+
+  const desktopRuntimeSource =
+    typeof desktopRuntime?.["_source"] === "string" ? (desktopRuntime["_source"] as string) : null;
+  const desktopRuntimeUnavailable = Boolean(desktopRuntimeSource && desktopRuntimeSource.startsWith("fallback"));
+  const desktopHardened = coerceBoolean(desktopRuntime?.hardened, true);
+
+  const documentedEnvKeys = useMemo(() => {
+    if (Array.isArray(desktopRuntime?.documented_env_keys)) {
+      return desktopRuntime.documented_env_keys
+        .map((item) => (typeof item === "string" ? item : String(item)))
+        .filter((item, index, list) => item && index === list.indexOf(item));
+    }
+    return [
+      "DESKTOP_USER_AGENT",
+      "AGENT_BROWSER_ENABLED",
+      "AGENT_BROWSER_DEFAULT_TIMEOUT_S",
+      "AGENT_BROWSER_NAV_TIMEOUT_MS",
+      "AGENT_BROWSER_HEADLESS",
+    ];
+  }, [desktopRuntime?.documented_env_keys]);
+
+  const installedModelFamilies = useMemo(() => {
+    if (!Array.isArray(ollamaHealth?.models)) {
+      return new Set<string>();
+    }
+    return new Set(
+      (ollamaHealth.models as unknown[])
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.split(":")[0].toLowerCase()),
+    );
+  }, [ollamaHealth?.models]);
+
+  const diagnosticsCapturedLabel = useMemo(() => {
+    const captured = diagnostics?.captured_at;
+    if (typeof captured === "number") {
+      return new Date(captured * 1000).toLocaleString();
+    }
+    const generated = diagnostics?.generated_at;
+    if (typeof generated === "string") {
+      return generated;
+    }
+    return "unknown";
+  }, [diagnostics?.captured_at, diagnostics?.generated_at]);
+
+  const diagnosticsCounts = useMemo(() => {
+    const summary =
+      diagnostics && typeof diagnostics === "object"
+        ? (diagnostics as Record<string, unknown>).summary
+        : null;
+    if (summary && typeof summary === "object") {
+      const counts = (summary as Record<string, unknown>).counts;
+      if (counts && typeof counts === "object") {
+        return counts as Record<string, unknown>;
+      }
+    }
+    return null;
+  }, [diagnostics]);
+  const diagHigh = coerceNumber(diagnosticsCounts?.high, 0);
+  const diagMedium = coerceNumber(diagnosticsCounts?.medium, 0);
+  const diagLow = coerceNumber(diagnosticsCounts?.low, 0);
 
   const handleBooleanChange = async (field: ConfigFieldOption, value: boolean) => {
     setSaving(field.key);
@@ -117,6 +260,74 @@ export default function ControlCenterPage() {
       setMessage(error instanceof Error ? error.message : "Repair failed");
     } finally {
       setRepairing(false);
+    }
+  };
+
+  const handleAgentSave = async () => {
+    setSavingAgent(true);
+    setAgentMessage(null);
+    if (agentConfigUnavailable) {
+      setAgentMessage("Runtime config endpoint unavailable; edit .env to persist changes.");
+      setSavingAgent(false);
+      return;
+    }
+    const payload: AgentBrowserConfigPayload = {
+      ...agentState,
+      enabled: agentEnabled,
+      AGENT_BROWSER_ENABLED: agentEnabled,
+      AGENT_BROWSER_DEFAULT_TIMEOUT_S: coerceNumber(
+        agentState.AGENT_BROWSER_DEFAULT_TIMEOUT_S ?? agentState.default_timeout_s,
+        coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_DEFAULT_TIMEOUT_S, 15),
+      ),
+      AGENT_BROWSER_NAV_TIMEOUT_MS: coerceNumber(
+        agentState.AGENT_BROWSER_NAV_TIMEOUT_MS ?? agentState.nav_timeout_ms,
+        coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS, 15000),
+      ),
+      AGENT_BROWSER_HEADLESS: agentHeadless,
+    };
+    delete (payload as Record<string, unknown>)["_source"];
+    try {
+      const result = await updateAgentBrowserConfig(payload);
+      await mutateAgentConfig(result, false);
+      setAgentMessage("Agent browser settings saved.");
+    } catch (error) {
+      setAgentMessage(error instanceof Error ? error.message : "Failed to save agent browser settings.");
+    } finally {
+      setSavingAgent(false);
+    }
+  };
+
+  const handleInstallOllamaModel = async (model: string) => {
+    setInstallingModel(model);
+    setModelsMessage(null);
+    try {
+      await installOllamaModels({ models: [model] });
+      setModelsMessage(`Install triggered for ${model}.`);
+      await mutateModels();
+      await mutateHealth();
+    } catch (error) {
+      setModelsMessage(error instanceof Error ? error.message : `Failed to install ${model}.`);
+    } finally {
+      setInstallingModel(null);
+    }
+  };
+
+  const handleRunDiagnostics = async () => {
+    setRuntimeDiagnosticsMessage(null);
+    try {
+      const result = await runDiagnosticsJob();
+      if (result?.ok) {
+        setRuntimeDiagnosticsMessage("Diagnostics run started.");
+        await mutateDiagnostics();
+      } else {
+        setRuntimeDiagnosticsMessage(
+          result?.message ?? "Diagnostics endpoint unavailable. Run python3 tools/e2e_diag.py locally.",
+        );
+      }
+    } catch (error) {
+      setRuntimeDiagnosticsMessage(
+        error instanceof Error ? error.message : "Failed to trigger diagnostics run.",
+      );
     }
   };
 
@@ -283,12 +494,280 @@ export default function ControlCenterPage() {
               {section.label}
             </TabsTrigger>
           ))}
+          <TabsTrigger value={RUNTIME_TAB_ID}>Runtime & Desktop</TabsTrigger>
         </TabsList>
         {sections.map((section) => (
           <TabsContent key={section.id} value={section.id}>
             {renderSection(section.id)}
           </TabsContent>
         ))}
+        <TabsContent value={RUNTIME_TAB_ID}>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card className="space-y-3 p-4">
+              <div>
+                <h3 className="text-sm font-semibold">Desktop / Electron</h3>
+                <p className="text-xs text-muted-foreground">
+                  Shows the state of the hardened Electron shell.
+                </p>
+              </div>
+              {desktopRuntimeUnavailable ? (
+                <p className="text-xs italic text-muted-foreground">
+                  Runtime endpoint unavailable; displaying fallback values from the local build.
+                </p>
+              ) : null}
+              <div className="space-y-1 text-xs">
+                <div>
+                  <span className="font-medium">User-Agent:</span>{" "}
+                  {typeof desktopRuntime?.desktop_user_agent === "string"
+                    ? desktopRuntime.desktop_user_agent
+                    : "unknown"}
+                </div>
+                <div>
+                  <span className="font-medium">Session partition:</span>{" "}
+                  {typeof desktopRuntime?.session_partition === "string"
+                    ? desktopRuntime.session_partition
+                    : "persist:main"}
+                </div>
+                <div>
+                  <span className="font-medium">Hardened:</span> {desktopHardened ? "yes" : "no"}
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Documented env keys</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {documentedEnvKeys.map((key) => (
+                    <span
+                      key={key}
+                      className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                    >
+                      {key}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </Card>
+
+            <Card className="space-y-4 p-4">
+              <div>
+                <h3 className="text-sm font-semibold">Agent browser</h3>
+                <p className="text-xs text-muted-foreground">
+                  Enable the Playwright-powered browser and adjust its safety limits.
+                </p>
+              </div>
+              {agentConfigUnavailable ? (
+                <p className="text-xs italic text-muted-foreground">
+                  Config endpoint missing; update .env or backend to persist changes.
+                </p>
+              ) : null}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="agent-browser-enabled" className="text-xs font-medium">
+                    Enabled
+                  </Label>
+                  <Switch
+                    id="agent-browser-enabled"
+                    checked={agentEnabled}
+                    onCheckedChange={(next) =>
+                      void mutateAgentConfig(
+                        (previous?: AgentBrowserConfigPayload) => ({
+                          ...(previous ?? AGENT_BROWSER_DEFAULTS),
+                          enabled: next,
+                          AGENT_BROWSER_ENABLED: next,
+                        }),
+                        false,
+                      )
+                    }
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="agent-browser-headless" className="text-xs font-medium">
+                    Headless mode
+                  </Label>
+                  <Switch
+                    id="agent-browser-headless"
+                    checked={agentHeadless}
+                    onCheckedChange={(next) =>
+                      void mutateAgentConfig(
+                        (previous?: AgentBrowserConfigPayload) => ({
+                          ...(previous ?? AGENT_BROWSER_DEFAULTS),
+                          AGENT_BROWSER_HEADLESS: next,
+                        }),
+                        false,
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="agent-browser-default-timeout" className="text-xs">
+                    Default timeout (seconds)
+                  </Label>
+                  <Input
+                    id="agent-browser-default-timeout"
+                    type="number"
+                    min={1}
+                    value={agentDefaultTimeoutValue === "" ? "" : String(agentDefaultTimeoutValue)}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      void mutateAgentConfig(
+                        (previous?: AgentBrowserConfigPayload) => {
+                          const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
+                          if (!nextValue) {
+                            nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = undefined;
+                          } else {
+                            const numeric = Number.parseFloat(nextValue);
+                            nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S = Number.isFinite(numeric)
+                              ? numeric
+                              : coerceNumber(
+                                  nextConfig.AGENT_BROWSER_DEFAULT_TIMEOUT_S,
+                                  coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_DEFAULT_TIMEOUT_S, 15),
+                                );
+                          }
+                          return nextConfig;
+                        },
+                        false,
+                      );
+                    }}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="agent-browser-nav-timeout" className="text-xs">
+                    Navigation timeout (milliseconds)
+                  </Label>
+                  <Input
+                    id="agent-browser-nav-timeout"
+                    type="number"
+                    min={1000}
+                    step={500}
+                    value={
+                      agentNavigationTimeoutValue === "" ? "" : String(agentNavigationTimeoutValue)
+                    }
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      void mutateAgentConfig(
+                        (previous?: AgentBrowserConfigPayload) => {
+                          const nextConfig = { ...(previous ?? AGENT_BROWSER_DEFAULTS) };
+                          if (!nextValue) {
+                            nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = undefined;
+                          } else {
+                            const numeric = Number.parseInt(nextValue, 10);
+                            nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS = Number.isFinite(numeric)
+                              ? numeric
+                              : coerceNumber(
+                                  nextConfig.AGENT_BROWSER_NAV_TIMEOUT_MS,
+                                  coerceNumber(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS, 15000),
+                                );
+                          }
+                          return nextConfig;
+                        },
+                        false,
+                      );
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={() => void handleAgentSave()} disabled={savingAgent}>
+                  {savingAgent ? "Saving…" : "Save agent settings"}
+                </Button>
+                {agentMessage ? (
+                  <span className="text-xs text-muted-foreground">{agentMessage}</span>
+                ) : null}
+              </div>
+            </Card>
+
+            <Card className="space-y-4 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">Models</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Install or verify the required Ollama models.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void mutateModels()}
+                  disabled={installingModel !== null}
+                >
+                  <RefreshCcw className="mr-2 h-3.5 w-3.5" />
+                  Refresh
+                </Button>
+              </div>
+              <div className="space-y-2 text-xs">
+                {MANDATORY_MODEL_FAMILIES.map((name) => {
+                  const installed = installedModelFamilies.has(name.toLowerCase());
+                  const inFlight = installingModel === name;
+                  return (
+                    <div key={name} className="flex items-center justify-between rounded border p-2">
+                      <span className="font-medium">{name}</span>
+                      {installed ? (
+                        <span className="text-[10px] font-semibold uppercase text-green-600">
+                          installed
+                        </span>
+                      ) : (
+                        <Button
+                          size="xs"
+                          onClick={() => void handleInstallOllamaModel(name)}
+                          disabled={inFlight}
+                        >
+                          {inFlight ? "Installing…" : "Install"}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {modelsMessage ? (
+                <p className="text-xs text-muted-foreground">{modelsMessage}</p>
+              ) : null}
+              {ollamaHealth?.ok === false ? (
+                <p className="text-xs text-destructive">
+                  Ollama reported an error – check the backend logs.
+                </p>
+              ) : null}
+            </Card>
+
+            <Card className="space-y-4 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">Diagnostics</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Trigger backend diagnostics and review the latest snapshot.
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => void mutateDiagnostics()}>
+                  <RefreshCcw className="mr-2 h-3.5 w-3.5" />
+                  Refresh
+                </Button>
+              </div>
+              <Button size="sm" onClick={() => void handleRunDiagnostics()}>
+                Run diagnostics
+              </Button>
+              {runtimeDiagnosticsMessage ? (
+                <p className="text-xs text-muted-foreground">{runtimeDiagnosticsMessage}</p>
+              ) : null}
+              <div className="space-y-1 text-xs">
+                <div>
+                  <span className="font-medium">Last snapshot:</span> {diagnosticsCapturedLabel}
+                </div>
+                <div>
+                  <span className="font-medium">LLM:</span>{" "}
+                  {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
+                    Record<string, { status?: string }> | undefined)?.llm?.status ?? "unknown"}
+                </div>
+                <div>
+                  <span className="font-medium">Index:</span>{" "}
+                  {((diagnostics?.health as Record<string, unknown> | undefined)?.components as
+                    Record<string, { status?: string }> | undefined)?.index?.status ?? "unknown"}
+                </div>
+              </div>
+              <div className="text-xs">
+                <span className="font-medium">Counts:</span>{" "}
+                High {diagHigh} · Medium {diagMedium} · Low {diagLow}
+              </div>
+            </Card>
+          </div>
+        </TabsContent>
       </Tabs>
     </div>
   );

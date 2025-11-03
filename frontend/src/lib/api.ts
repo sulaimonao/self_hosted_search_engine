@@ -2197,3 +2197,163 @@ export async function extractSelection(payload: SelectionActionPayload): Promise
     "Failed to extract selection"
   );
 }
+
+export type AgentBrowserConfigPayload = {
+  enabled?: boolean;
+  AGENT_BROWSER_ENABLED?: boolean;
+  AGENT_BROWSER_DEFAULT_TIMEOUT_S?: number;
+  AGENT_BROWSER_NAV_TIMEOUT_MS?: number;
+  AGENT_BROWSER_HEADLESS?: boolean;
+  [key: string]: unknown;
+};
+
+const DEFAULT_AGENT_BROWSER_CONFIG: AgentBrowserConfigPayload = {
+  enabled: false,
+  AGENT_BROWSER_ENABLED: false,
+  AGENT_BROWSER_DEFAULT_TIMEOUT_S: 15,
+  AGENT_BROWSER_NAV_TIMEOUT_MS: 15000,
+  AGENT_BROWSER_HEADLESS: true,
+};
+
+export async function fetchAgentBrowserConfig(): Promise<AgentBrowserConfigPayload> {
+  try {
+    const response = await fetch(api("/api/agent/config"), { cache: "no-store" });
+    if (!response.ok) {
+      if (response.status === 404) {
+        return { ...DEFAULT_AGENT_BROWSER_CONFIG, _source: "fallback" };
+      }
+      const detail = await response.text();
+      throw new Error(detail || `Failed to load agent browser config (${response.status})`);
+    }
+    return (await response.json()) as AgentBrowserConfigPayload;
+  } catch (error) {
+    console.warn("fetchAgentBrowserConfig failed; returning defaults", error);
+    return { ...DEFAULT_AGENT_BROWSER_CONFIG, _source: "fallback_error" };
+  }
+}
+
+export async function updateAgentBrowserConfig(
+  payload: AgentBrowserConfigPayload
+): Promise<AgentBrowserConfigPayload> {
+  const response = await fetch(api("/api/agent/config"), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to update agent browser config (${response.status})`);
+  }
+
+  return (await response.json()) as AgentBrowserConfigPayload;
+}
+
+export type DesktopRuntimeInfo = {
+  desktop_user_agent?: string;
+  session_partition?: string;
+  hardened?: boolean;
+  documented_env_keys?: string[];
+  [key: string]: unknown;
+};
+
+export async function fetchDesktopRuntime(): Promise<DesktopRuntimeInfo> {
+  try {
+    const response = await fetch(api("/api/admin/runtime"), { cache: "no-store" });
+    if (!response.ok) {
+      if (response.status !== 404) {
+        const detail = await response.text();
+        throw new Error(detail || `Failed to load desktop runtime (${response.status})`);
+      }
+      return {
+        desktop_user_agent:
+          process.env.NEXT_PUBLIC_DESKTOP_USER_AGENT ??
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        session_partition: "persist:main",
+        hardened: true,
+        documented_env_keys: [
+          "DESKTOP_USER_AGENT",
+          "AGENT_BROWSER_ENABLED",
+          "AGENT_BROWSER_DEFAULT_TIMEOUT_S",
+          "AGENT_BROWSER_NAV_TIMEOUT_MS",
+          "AGENT_BROWSER_HEADLESS",
+        ],
+        _source: "fallback",
+      };
+    }
+    return (await response.json()) as DesktopRuntimeInfo;
+  } catch (error) {
+    console.warn("fetchDesktopRuntime failed; returning defaults", error);
+    return {
+      desktop_user_agent:
+        process.env.NEXT_PUBLIC_DESKTOP_USER_AGENT ??
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      session_partition: "persist:main",
+      hardened: true,
+      documented_env_keys: [
+        "DESKTOP_USER_AGENT",
+        "AGENT_BROWSER_ENABLED",
+        "AGENT_BROWSER_DEFAULT_TIMEOUT_S",
+        "AGENT_BROWSER_NAV_TIMEOUT_MS",
+        "AGENT_BROWSER_HEADLESS",
+      ],
+      _source: "fallback_error",
+    };
+  }
+}
+
+export type OllamaHealthResponse = {
+  ok: boolean;
+  models?: string[];
+  [key: string]: unknown;
+};
+
+export async function fetchModels(): Promise<OllamaHealthResponse> {
+  const response = await fetch(api("/api/admin/ollama/health"), { cache: "no-store" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to load model health (${response.status})`);
+  }
+  return (await response.json()) as OllamaHealthResponse;
+}
+
+export async function installModels(payload: { models: string[] }): Promise<OllamaHealthResponse> {
+  const response = await fetch(api("/api/admin/install_models"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to install models (${response.status})`);
+  }
+
+  return (await response.json()) as OllamaHealthResponse;
+}
+
+export type DiagnosticsRunResponse = {
+  ok: boolean;
+  message?: string;
+  summary?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export async function runDiagnostics(): Promise<DiagnosticsRunResponse> {
+  const response = await fetch(api("/api/diagnostics/run"), { method: "POST" });
+  if (!response.ok) {
+    if (response.status === 404) {
+      return {
+        ok: false,
+        message: "Backend does not expose /api/diagnostics/run; run python3 tools/e2e_diag.py locally.",
+      };
+    }
+    const detail = await response.text();
+    throw new Error(detail || `Failed to run diagnostics (${response.status})`);
+  }
+  return (await response.json()) as DiagnosticsRunResponse;
+}
