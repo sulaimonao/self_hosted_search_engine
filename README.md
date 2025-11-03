@@ -21,6 +21,7 @@ required.
 - [Stack overview](#stack-overview)
 - [Requirements](#requirements)
 - [Initial setup](#initial-setup)
+- [Zero-Touch Dev UX](#zero-touch-dev-ux)
 - [Running the application](#running-the-application)
 - [Researcher browser & shadow mode](#researcher-browser--shadow-mode)
 - [Desktop browser mode](#desktop-browser-mode)
@@ -104,6 +105,30 @@ Verify the interpreter that will back your virtual environment before running
    ```bash
    make paths
    ```
+
+## Zero-Touch Dev UX
+
+All runtime configuration now persists inside the SQLite `app_config` table and
+is surfaced through a single `/api/config` (GET/PUT/`/schema`) endpoint. The UI
+keeps the API as the source of truth, so fresh clones can be configured without
+editing `.env` files:
+
+- **First-Run Wizard.** Appears automatically until `setup_completed=true`. It
+  runs environment checks, kicks off `POST /api/admin/install_models` for
+  Gemma-3/GPT-OSS/embeddinggemma, and dismisses itself after writing to
+  `/api/config`.
+- **Control Center (`/control-center`).** Presents the config schema, toggles
+  runtime features (shadow/agent/discovery/index rebuild, privacy controls), and
+  exposes diagnostics + model install actions backed by `/api/dev/diag/*` and
+  `/api/admin/install_models`.
+- **Status Ribbon.** Polls `/api/health` and `/api/dev/diag/snapshot` to show
+  health at a glance and deep-link into fixes.
+- **Desktop parity.** The Electron preload bridge proxies the same endpoints via
+  `window.desktop.settingsAPI`, so desktop sessions stay aligned with the web UI.
+
+Delete `data/app_state.sqlite3*` for a fresh boot cycle: the wizard reappears,
+defaults seed back into `app_config`, and the Control Center reflects updates in
+real time.
 
 ## Running the application
 

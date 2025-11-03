@@ -140,6 +140,7 @@ diagnostics/*
 !tests/api/test_reasoning_api.py
 !tests/api/test_utils.py
 !tests/e2e/test_agent_browser.py
+!tests/e2e/test_zero_touch.py
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
 !tests/backend/test_vector_index_retry.py

@@ -3,4 +3,5 @@ bandit
 mypy
 pip-audit
 pytest
+pytest-playwright
 ruff
