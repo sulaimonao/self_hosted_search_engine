@@ -11,7 +11,10 @@ from typing import Callable
 
 LOGGER = logging.getLogger(__name__)
 
-_MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+_DB_DIR = Path(__file__).resolve().parent
+_MIGRATIONS_DIR = _DB_DIR / "migrations"
+_APP_CONFIG_SCHEMA = _MIGRATIONS_DIR / "008_app_config.sql"
+_APP_CONFIG_DEFAULTS = _MIGRATIONS_DIR / "20251102_app_config.sql"
 
 MigrationFn = Callable[[sqlite3.Connection], None]
 
@@ -508,7 +511,7 @@ def _migration_007_domain_profiles(connection: sqlite3.Connection) -> None:
 
 
 def _migration_008_app_config(connection: sqlite3.Connection) -> None:
-    schema_path = Path(__file__).resolve().parent / "008_app_config.sql"
+    schema_path = _APP_CONFIG_SCHEMA
     try:
         sql = schema_path.read_text("utf-8")
     except OSError:
@@ -523,7 +526,7 @@ def _migration_008_app_config(connection: sqlite3.Connection) -> None:
 
 
 def _migration_20251102_app_config(connection: sqlite3.Connection) -> None:
-    schema_path = Path(__file__).resolve().parent / "20251102_app_config.sql"
+    schema_path = _APP_CONFIG_DEFAULTS
     try:
         sql = schema_path.read_text("utf-8")
     except OSError:
