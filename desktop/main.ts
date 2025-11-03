@@ -158,8 +158,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.setAppLogsPath();
 
 const MAIN_SESSION_KEY = 'persist:main';
-const DESKTOP_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.90 Safari/537.36';
+const DEFAULT_USER_AGENT =
+  process.env.DESKTOP_USER_AGENT ||
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DEFAULT_TAB_URL = 'https://wikipedia.org';
 const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
@@ -462,7 +463,7 @@ async function createBrowserTab(url?: string, options: { activate?: boolean } = 
     },
   });
 
-  view.webContents.setUserAgent(DESKTOP_USER_AGENT);
+  view.webContents.setUserAgent(DEFAULT_USER_AGENT);
 
   const tab: BrowserTabRecord = {
     id,
@@ -728,24 +729,31 @@ app.whenReady().then(async () => {
   const mainSession = session.fromPartition(MAIN_SESSION_KEY);
 
   mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const headers = { ...details.requestHeaders };
-    const originalUserAgent = headers['User-Agent'];
-    headers['User-Agent'] = DESKTOP_USER_AGENT;
+    const headers = {
+      ...details.requestHeaders,
+      'User-Agent': DEFAULT_USER_AGENT,
+    };
 
-    if (originalUserAgent) {
-      headers['sec-ch-ua'] =
-        headers['sec-ch-ua'] ?? details.requestHeaders['sec-ch-ua'] ??
-        '"Chromium";v="129", "Not A(Brand";v="99"';
-      headers['sec-ch-ua-mobile'] =
-        headers['sec-ch-ua-mobile'] ?? details.requestHeaders['sec-ch-ua-mobile'] ?? '?0';
-      headers['sec-ch-ua-platform'] =
-        headers['sec-ch-ua-platform'] ??
-        details.requestHeaders['sec-ch-ua-platform'] ??
-        '"macOS"';
+    if (details.requestHeaders['Accept-Language']) {
+      headers['Accept-Language'] = details.requestHeaders['Accept-Language'];
     }
 
+    for (const [key, value] of Object.entries(details.requestHeaders)) {
+      if (key.toLowerCase().startsWith('sec-ch-ua')) {
+        headers[key] = value;
+      }
+    }
+
+    headers['sec-ch-ua'] =
+      headers['sec-ch-ua'] ??
+      '"Chromium";v="120", "Not A(Brand";v="99"';
+    headers['sec-ch-ua-mobile'] =
+      headers['sec-ch-ua-mobile'] ?? '?0';
+    headers['sec-ch-ua-platform'] =
+      headers['sec-ch-ua-platform'] ?? '"macOS"';
+
     if (!headers['Accept-Language']) {
-      headers['Accept-Language'] = app.getLocale();
+      headers['Accept-Language'] = runtimeNetworkState.acceptLanguage || app.getLocale();
     }
 
     callback({ requestHeaders: headers });

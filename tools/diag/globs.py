@@ -65,11 +65,13 @@ FILE_GLOBS: Dict[str, Sequence[str]] = {
         "**/*.seg",
         "**/*.toc",
         "**/*.bin",
+        "**/*.tsbuildinfo",
         "*.log",
         "*.jsonl",
         "*.sqlite3",
         "*.sqlite3-shm",
         "*.sqlite3-wal",
+        "*.tsbuildinfo",
     ),
     "lockfiles": (
         "**/package-lock.json",
@@ -141,4 +143,3 @@ class DiscoveryResult:
     matched_suffixes: Set[str]
     unmatched_suffixes: Set[str]
     discovered_special: Set[str]
-

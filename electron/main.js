@@ -60,6 +60,9 @@ app.commandLine.appendSwitch(
 );
 
 const MAIN_SESSION_KEY = 'persist:main';
+const DEFAULT_USER_AGENT =
+  process.env.DESKTOP_USER_AGENT ||
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const DEFAULT_TAB_URL = 'https://wikipedia.org';
 const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS = { x: 0, y: 136, width: 1280, height: 720 };
@@ -1427,7 +1430,7 @@ if (!app.requestSingleInstanceLock()) {
         typeof app.getLocaleCountryCode === 'function' ? app.getLocaleCountryCode() : null;
       const preferredLocale = typeof app.getLocale === 'function' ? app.getLocale() : null;
 
-      runtimeNetworkState.userAgent = defaultUA;
+      runtimeNetworkState.userAgent = DEFAULT_USER_AGENT || defaultUA;
       runtimeNetworkState.localeCountryCode = localeCountryCode;
       runtimeNetworkState.locale = preferredLocale;
 
@@ -1454,20 +1457,29 @@ if (!app.requestSingleInstanceLock()) {
       registerPermissionHandlers(mainSession);
 
       mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
-        const headers = { ...details.requestHeaders };
-        const userAgent = headers['User-Agent'] || runtimeNetworkState.userAgent;
-        if (userAgent) {
-          headers['User-Agent'] = userAgent;
-          headers['sec-ch-ua'] =
-            headers['sec-ch-ua'] ?? details.requestHeaders['sec-ch-ua'] ??
-            '"Chromium";v="129", "Not A(Brand";v="99"';
-          headers['sec-ch-ua-mobile'] =
-            headers['sec-ch-ua-mobile'] ?? details.requestHeaders['sec-ch-ua-mobile'] ?? '?0';
-          headers['sec-ch-ua-platform'] =
-            headers['sec-ch-ua-platform'] ??
-            details.requestHeaders['sec-ch-ua-platform'] ??
-            '"macOS"';
+        const headers = {
+          ...details.requestHeaders,
+          'User-Agent': DEFAULT_USER_AGENT,
+        };
+
+        if (details.requestHeaders['Accept-Language']) {
+          headers['Accept-Language'] = details.requestHeaders['Accept-Language'];
         }
+
+        for (const [key, value] of Object.entries(details.requestHeaders)) {
+          if (key.toLowerCase().startsWith('sec-ch-ua')) {
+            headers[key] = value;
+          }
+        }
+
+        headers['sec-ch-ua'] =
+          headers['sec-ch-ua'] ??
+          '"Chromium";v="120", "Not A(Brand";v="99"';
+        headers['sec-ch-ua-mobile'] =
+          headers['sec-ch-ua-mobile'] ?? '?0';
+        headers['sec-ch-ua-platform'] =
+          headers['sec-ch-ua-platform'] ?? '"macOS"';
+
         if (!headers['Accept-Language']) {
           headers['Accept-Language'] =
             runtimeNetworkState.acceptLanguage || app.getLocale();
