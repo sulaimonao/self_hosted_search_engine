@@ -327,6 +327,8 @@ export async function getHealth(): Promise<HealthSnapshot> {
   return parseJson<HealthSnapshot>(response);
 }
 
+export const fetchHealth = getHealth;
+
 export async function getCapabilities(): Promise<Record<string, unknown>> {
   const response = await fetch(apiPath("/api/capabilities"), { credentials: "include" });
   return parseJson<Record<string, unknown>>(response);
