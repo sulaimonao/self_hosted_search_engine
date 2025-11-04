@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, Stethoscope } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, MessageSquare, Stethoscope } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
+import dynamic from "next/dynamic";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -36,13 +37,20 @@ import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
-import { ChatProvider, useChat } from "@/components/chat/ChatProvider";
-import ChatOverlay from "@/components/chat/ChatOverlay";
-import ChatLauncher from "@/components/chat/ChatLauncher";
 
-type SecondaryPanel = Exclude<Panel, "chat">;
+const ChatPanel = dynamic(
+  () =>
+    import("@/components/panels/ChatPanel").then((mod) => ({
+      default: mod.ChatPanel,
+    })),
+  {
+    ssr: false,
+    loading: () => null,
+  },
+);
 
-const PANEL_COMPONENT: Record<SecondaryPanel, JSX.Element> = {
+const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
+  chat: <ChatPanel />,
   localSearch: <LocalSearchPanel />,
   collections: <CollectionsPanel />,
   shadow: <ShadowPanel />,
@@ -50,13 +58,7 @@ const PANEL_COMPONENT: Record<SecondaryPanel, JSX.Element> = {
 };
 
 export function BrowserShell() {
-  return (
-    <ChatProvider>
-      <BrowserShellInner />
-      <ChatLauncher />
-      <ChatOverlay />
-    </ChatProvider>
-  );
+  return <BrowserShellInner />;
 }
 
 function BrowserShellInner() {
@@ -72,8 +74,7 @@ function BrowserShellInner() {
       panelOpen: state.panelOpen,
     })),
   );
-  const { setOpen: setChatOpen } = useChat();
-  const activePanel = panelOpen === "chat" ? undefined : (panelOpen as SecondaryPanel | undefined);
+  const activePanel = panelOpen;
 
   const { downloadOrder, downloads, setDownloadsOpen } = useBrowserRuntimeStore(
     useShallow((state) => ({
@@ -82,13 +83,6 @@ function BrowserShellInner() {
       setDownloadsOpen: state.setDownloadsOpen,
     })),
   );
-
-  useEffect(() => {
-    if (panelOpen === "chat") {
-      setChatOpen(true);
-      openPanel(undefined);
-    }
-  }, [panelOpen, openPanel, setChatOpen]);
 
   const panelIsOpen = Boolean(activePanel);
   const handlePanelOpenChange = useStableOnOpenChange(panelIsOpen, (next) => {
@@ -99,6 +93,8 @@ function BrowserShellInner() {
 
   const panelSize = useMemo<"sm" | "md" | "lg" | "xl" | "full">(() => {
     switch (activePanel) {
+      case "chat":
+        return "xl";
       case "shadow":
       case "agentLog":
         return "lg";
@@ -111,6 +107,8 @@ function BrowserShellInner() {
 
   const panelWidthClass = useMemo(() => {
     switch (activePanel) {
+      case "chat":
+        return "w-full max-w-[34rem] border-l bg-background";
       case "shadow":
       case "agentLog":
         return "w-full max-w-[30rem]";
@@ -544,6 +542,15 @@ function BrowserShellInner() {
             onClick={() => router.push("/control-center")}
           >
             <Cog size={16} />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            title="Chat"
+            aria-label="Open chat panel"
+            onClick={() => openPanel("chat")}
+          >
+            <MessageSquare size={16} />
           </Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("localSearch")}>🔍</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("collections")}>📁</Button>
