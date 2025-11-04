@@ -143,7 +143,10 @@ export default function ControlCenterPage() {
     navigate.push("/browser");
   }, [navigate]);
 
-  const schemaSections = schema?.sections ?? [];
+  const schemaSections = useMemo(
+    () => (Array.isArray(schema?.sections) ? schema.sections : []),
+    [schema],
+  );
   const sections = useMemo(() => {
     if (process.env.NODE_ENV === "production") {
       return schemaSections.filter((section) => section.id !== "developer");
