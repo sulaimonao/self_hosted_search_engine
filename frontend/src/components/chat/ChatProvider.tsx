@@ -41,7 +41,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setReady]);
 
   const toggle = useEvent(() => setOpen((value) => !value));
 

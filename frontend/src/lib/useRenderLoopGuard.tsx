@@ -24,16 +24,25 @@ function isGuardActive(
 
 export function useRenderLoopGuard(key: string, max = 30, windowMs = 1000) {
   const context = useRenderLoopGuardState();
-  if (!isGuardActive(context, typeof process !== "undefined" ? process.env : undefined)) {
-    return;
-  }
-  if (typeof window === "undefined") {
+  const environment = typeof process !== "undefined" ? process.env : undefined;
+  const guardActive = isGuardActive(context, environment);
+
+  const stampRef = useRef<number>(0);
+  const countRef = useRef<number>(0);
+  const warnedRef = useRef(false);
+
+  if (!guardActive || typeof window === "undefined") {
+    stampRef.current = 0;
+    countRef.current = 0;
+    warnedRef.current = false;
     return;
   }
 
-  const stampRef = useRef<number>(now());
-  const countRef = useRef<number>(0);
-  const warnedRef = useRef(false);
+  if (stampRef.current === 0) {
+    stampRef.current = now();
+    countRef.current = 0;
+    warnedRef.current = false;
+  }
 
   const current = now();
   if (current - stampRef.current > windowMs) {

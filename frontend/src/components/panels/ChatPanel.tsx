@@ -352,7 +352,7 @@ export function ChatPanel() {
     if (!usePageContext) {
       setContextSummary(null);
     }
-  }, [usePageContext]);
+  }, [setContextSummary, usePageContext]);
 
   useEffect(() => {
     const resolved = resolveChatModelSelection({
@@ -494,12 +494,15 @@ export function ChatPanel() {
     return "Ask the copilot";
   }, [installing, inventory, llmReachable]);
 
-  const handleContextToggle = useCallback((value: boolean) => {
-    setUsePageContext(value);
-    if (!value) {
-      setContextSummary(null);
-    }
-  }, []);
+  const handleContextToggle = useCallback(
+    (value: boolean) => {
+      setUsePageContext(value);
+      if (!value) {
+        setContextSummary(null);
+      }
+    },
+    [setContextSummary],
+  );
 
   const updateMessage = useCallback((id: string, updater: (message: ChatMessage) => ChatMessage) => {
     let autopilotSteps: Verb[] | null | undefined;
@@ -963,6 +966,7 @@ export function ChatPanel() {
     threadId,
     updateMessage,
     usePageContext,
+    setContextSummary,
   ]);
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {

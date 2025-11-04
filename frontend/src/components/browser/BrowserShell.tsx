@@ -149,7 +149,7 @@ function BrowserShellInner() {
     }
     const ua = window.navigator?.userAgent ?? "";
     setSupportsWebview(/Electron/i.test(ua));
-  }, []);
+  }, [setSupportsWebview]);
 
   const updateTabFromHistory = useEvent(
     (url: string, options?: { loading?: boolean; title?: string | null }) => {

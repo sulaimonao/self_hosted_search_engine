@@ -65,9 +65,9 @@ export function useStableMemo<T extends object>(factory: () => T, deps: Readonly
 }
 
 /** event pattern to avoid putting changing callbacks into deps */
-export function useEvent<T extends (...args: any[]) => any>(fn: T) {
+export function useEvent<T extends (...args: unknown[]) => unknown>(fn: T) {
   const ref = useRef(fn);
   ref.current = fn;
-  return useCallback((...args: Parameters<T>) => ref.current(...args), []);
+  return useCallback((...args: Parameters<T>): ReturnType<T> => ref.current(...args), []);
 }
 
