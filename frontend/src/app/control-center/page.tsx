@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { AlertTriangle, RefreshCcw } from "lucide-react";
@@ -113,6 +113,7 @@ export default function ControlCenterPage() {
   );
 
   const router = useRouter();
+  const hasNavigatedRef = useRef(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [repairing, setRepairing] = useState(false);
@@ -122,6 +123,13 @@ export default function ControlCenterPage() {
   const [installingModel, setInstallingModel] = useState<string | null>(null);
   const [modelsMessage, setModelsMessage] = useState<string | null>(null);
   const [runtimeDiagnosticsMessage, setRuntimeDiagnosticsMessage] = useState<string | null>(null);
+  const handleBackToBrowser = useCallback(() => {
+    if (hasNavigatedRef.current) {
+      return;
+    }
+    hasNavigatedRef.current = true;
+    router.push("/browser");
+  }, [router]);
 
   const sections = schema?.sections ?? [];
   const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? "models");
@@ -477,7 +485,7 @@ export default function ControlCenterPage() {
                 Configure runtime features, monitor model availability, and repair the local stack without editing files.
               </p>
             </div>
-            <Button variant="outline" onClick={() => router.push("/browser")}>
+            <Button variant="outline" onClick={handleBackToBrowser}>
               Back to Browser
             </Button>
           </div>

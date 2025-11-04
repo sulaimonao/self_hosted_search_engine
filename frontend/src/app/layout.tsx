@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
+import { SWRConfig } from "swr";
 
 import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { StatusRibbon } from "@/components/status/StatusRibbon";
@@ -30,11 +31,19 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} ${robotoMono.variable} antialiased`}>
-        <NavProgressProvider>
-          <StatusRibbon />
-          <FirstRunWizard />
-          {children}
-        </NavProgressProvider>
+        <SWRConfig
+          value={{
+            revalidateOnFocus: false,
+            revalidateOnReconnect: false,
+            dedupingInterval: 2000,
+          }}
+        >
+          <NavProgressProvider>
+            <StatusRibbon />
+            <FirstRunWizard />
+            {children}
+          </NavProgressProvider>
+        </SWRConfig>
       </body>
     </html>
   );

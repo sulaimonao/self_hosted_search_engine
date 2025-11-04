@@ -187,6 +187,7 @@ export function ChatPanel() {
   } = useLlmStream();
   const activeStreamRef = useRef<{ requestId: string; messageId: string } | null>(null);
   const streamCompletionRef = useRef<string | null>(null);
+  const streamSessionRef = useRef<string | null>(null);
 
   const messagesRef = useRef<ChatMessage[]>(messages);
   const abortRef = useRef<AbortController | null>(null);
@@ -637,6 +638,10 @@ export function ChatPanel() {
       return;
     }
 
+    if (llmStreamSupported && streamSessionRef.current) {
+      return;
+    }
+
     const controller = llmStreamSupported ? null : new AbortController();
     abortRef.current = controller;
     setIsBusy(true);
@@ -762,6 +767,7 @@ export function ChatPanel() {
       const requestId = createId();
       activeStreamRef.current = { requestId, messageId: assistantId };
       streamCompletionRef.current = null;
+      streamSessionRef.current = requestId;
       const streamBody: Record<string, unknown> = {
         model: selectedModel ?? undefined,
         messages: modelMessages,
@@ -789,6 +795,9 @@ export function ChatPanel() {
         setBanner({ intent: "error", text: messageText });
         setIsBusy(false);
         activeStreamRef.current = null;
+        if (streamSessionRef.current === requestId) {
+          streamSessionRef.current = null;
+        }
       }
       return;
     }
@@ -985,6 +994,9 @@ export function ChatPanel() {
             llmStream.final.answer || llmStream.final.reasoning || llmStream.text || "",
         }).catch((error) => console.warn("[chat] failed to persist assistant message", error));
       }
+      if (streamSessionRef.current === llmStream.requestId) {
+        streamSessionRef.current = null;
+      }
       activeStreamRef.current = null;
     }
   }, [llmStream, llmStreamSupported, setBanner, setIsBusy, threadId, updateMessage]);
@@ -994,6 +1006,9 @@ export function ChatPanel() {
       const active = activeStreamRef.current;
       if (active) {
         abortLlmStream(active.requestId);
+        if (streamSessionRef.current === active.requestId) {
+          streamSessionRef.current = null;
+        }
         setBanner({ intent: "info", text: "Cancelling request…" });
       }
       return;
@@ -1011,6 +1026,9 @@ export function ChatPanel() {
         const active = activeStreamRef.current;
         if (active) {
           abortLlmStream(active.requestId);
+          if (streamSessionRef.current === active.requestId) {
+            streamSessionRef.current = null;
+          }
         }
       }
     };
