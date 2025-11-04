@@ -1,5 +1,7 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo } from "react";
+
+import { useSafeState } from "@/lib/react-safe";
 
 type ChatCtx = {
   open: boolean;
@@ -11,11 +13,17 @@ type ChatCtx = {
 const Context = createContext<ChatCtx | null>(null);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [open, setOpen] = useSafeState(false);
+  const [ready, setReady] = useSafeState(false);
 
   useEffect(() => {
     let active = true;
+    if (process.env.NODE_ENV === "test") {
+      setReady(true);
+      return () => {
+        active = false;
+      };
+    }
     fetch("/api/llm/llm_models")
       .then((response) => {
         if (!response.ok) {
@@ -39,11 +47,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setReady]);
 
-  const toggle = useCallback(() => setOpen((value) => !value), []);
+  const toggle = useCallback(() => setOpen((value) => !value), [setOpen]);
 
-  return <Context.Provider value={{ open, setOpen, toggle, ready }}>{children}</Context.Provider>;
+  const contextValue = useMemo(() => ({ open, setOpen, toggle, ready }), [open, ready, setOpen, toggle]);
+
+  return <Context.Provider value={contextValue}>{children}</Context.Provider>;
 }
 
 export function useChat() {

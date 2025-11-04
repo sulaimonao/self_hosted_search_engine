@@ -142,7 +142,8 @@ const installConsoleInstrumentation = () => {
   window.console.error = (...args: unknown[]) => {
     const message = stringFromArgs(args);
     emitIncident("CONSOLE_ERROR", message, undefined, "error");
-    if (/too many re-renders|maximum update depth exceeded/i.test(message)) {
+    const loopDetected = /\[render-loop]/i.test(message) || /too many re-renders|maximum update depth exceeded/i.test(message);
+    if (loopDetected) {
       emitIncident("RENDER_LOOP", message, undefined, "error", 5000);
     } else if (/hydration/i.test(message)) {
       emitIncident("HYDRATION_ERROR", message, undefined, "error", 5000);

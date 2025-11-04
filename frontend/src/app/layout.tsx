@@ -5,6 +5,7 @@ import { SWRConfig } from "swr";
 import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { StatusRibbon } from "@/components/status/StatusRibbon";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
+import { ClientInstrumentation } from "@/components/layout/ClientInstrumentation";
 
 import "./globals.css";
 
@@ -39,9 +40,11 @@ export default function RootLayout({
           }}
         >
           <NavProgressProvider>
-            <StatusRibbon />
-            <FirstRunWizard />
-            {children}
+            <ClientInstrumentation>
+              <StatusRibbon />
+              <FirstRunWizard />
+              {children}
+            </ClientInstrumentation>
           </NavProgressProvider>
         </SWRConfig>
       </body>

@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { AlertTriangle, RefreshCcw } from "lucide-react";
 
@@ -12,6 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import ClientOnly from "@/components/layout/ClientOnly";
+import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
+import { useSafeNavigate } from "@/lib/useSafeNavigate";
+import { useRenderLoopIncidents } from "@/hooks/useRenderLoopIncidents";
+import { useDevSettingsStore } from "@/state/devSettings";
 import {
   Select,
   SelectContent,
@@ -61,6 +64,7 @@ function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigField
 }
 
 const RUNTIME_TAB_ID = "runtime-desktop";
+const DEV_TAB_ID = "dev-tools";
 
 const AGENT_BROWSER_DEFAULTS: AgentBrowserConfigPayload = {
   enabled: false,
@@ -93,6 +97,7 @@ function coerceNumber(value: unknown, fallback: number): number {
 }
 
 export default function ControlCenterPage() {
+  useRenderLoopGuard("ControlCenter");
   const { data: config, mutate: mutateConfig } = useSWR("runtime-config", fetchConfig);
   const { data: schema } = useSWR<ConfigSchema>("runtime-config-schema", fetchConfigSchema);
   const { data: health, mutate: mutateHealth } = useSWR<HealthSnapshot>("runtime-health", getHealth, {
@@ -107,12 +112,12 @@ export default function ControlCenterPage() {
     fetchAgentBrowserConfig,
   );
   const { data: desktopRuntime } = useSWR<DesktopRuntimeInfo>("desktop-runtime", fetchDesktopRuntime);
+  const navigate = useSafeNavigate();
   const { data: ollamaHealth, mutate: mutateModels } = useSWR<OllamaHealthResponse>(
     "ollama-model-health",
     fetchModels,
   );
 
-  const router = useRouter();
   const hasNavigatedRef = useRef(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -128,13 +133,21 @@ export default function ControlCenterPage() {
       return;
     }
     hasNavigatedRef.current = true;
-    router.push("/browser");
-  }, [router]);
+    navigate("/browser");
+  }, [navigate]);
 
   const sections = schema?.sections ?? [];
   const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? "models");
 
   const agentState = agentConfig ?? AGENT_BROWSER_DEFAULTS;
+  const isDev = process.env.NODE_ENV !== "production";
+  const devSettingsHydrate = useDevSettingsStore((state) => state.hydrate);
+  const devHydrated = useDevSettingsStore((state) => state.hydrated);
+  const renderLoopGuardEnabled = useDevSettingsStore((state) => state.renderLoopGuard);
+  const setRenderLoopGuard = useDevSettingsStore((state) => state.setRenderLoopGuard);
+  const renderLoopEvents = useDevSettingsStore((state) => state.events);
+  const clearRenderLoopEvents = useDevSettingsStore((state) => state.clearRenderLoopEvents);
+  const renderLoopIncidents = useRenderLoopIncidents(8);
   const agentSource =
     typeof agentState["_source"] === "string" ? (agentState["_source"] as string) : null;
   const agentConfigUnavailable = Boolean(agentSource && agentSource.startsWith("fallback"));
@@ -156,6 +169,10 @@ export default function ControlCenterPage() {
     agentState.nav_timeout_ms ??
     AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_NAV_TIMEOUT_MS ??
     "";
+
+  useEffect(() => {
+    devSettingsHydrate();
+  }, [devSettingsHydrate]);
 
   const desktopRuntimeSource =
     typeof desktopRuntime?.["_source"] === "string" ? (desktopRuntime["_source"] as string) : null;
@@ -514,6 +531,7 @@ export default function ControlCenterPage() {
               </TabsTrigger>
             ))}
             <TabsTrigger value={RUNTIME_TAB_ID}>Runtime & Desktop</TabsTrigger>
+            {isDev ? <TabsTrigger value={DEV_TAB_ID}>Dev</TabsTrigger> : null}
           </TabsList>
           {sections.map((section) => (
             <TabsContent key={section.id} value={section.id}>
@@ -787,6 +805,92 @@ export default function ControlCenterPage() {
               </Card>
             </div>
           </TabsContent>
+          {isDev ? (
+            <TabsContent value={DEV_TAB_ID}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card className="space-y-4 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold">Render Loop Guard</h3>
+                      <p className="text-xs text-muted-foreground">Prevent runaway React effects by short-circuiting duplicate commits.</p>
+                    </div>
+                    <Switch
+                      checked={renderLoopGuardEnabled}
+                      onCheckedChange={(next) => setRenderLoopGuard(next)}
+                      disabled={!devHydrated}
+                    />
+                  </div>
+                  <div className="space-y-2 text-xs text-muted-foreground">
+                    {renderLoopEvents.length ? (
+                      <div className="space-y-2">
+                        {renderLoopEvents.map((event) => (
+                          <div
+                            key={event.id}
+                            className="flex items-start justify-between gap-3 rounded border border-border/60 bg-muted/20 p-2 text-foreground"
+                          >
+                            <div>
+                              <span className="font-medium">{event.key}</span>
+                              <div className="text-xs text-muted-foreground">
+                                {event.count} renders / {event.windowMs}ms
+                              </div>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {new Date(event.timestamp).toLocaleTimeString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded border border-dashed p-3 text-muted-foreground">
+                        No render loop triggers captured this session.
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => clearRenderLoopEvents()}
+                      disabled={renderLoopEvents.length === 0}
+                    >
+                      Clear log
+                    </Button>
+                  </div>
+                </Card>
+                <Card className="space-y-3 p-4">
+                  <div>
+                    <h3 className="text-sm font-semibold">Diagnostics feed</h3>
+                    <p className="text-xs text-muted-foreground">Console and DOM observers emit render loop incidents in real time.</p>
+                  </div>
+                  <div className="space-y-2">
+                    {renderLoopIncidents.length ? (
+                      renderLoopIncidents.map((incident) => (
+                        <div
+                          key={incident.id}
+                          className="rounded border border-border/60 bg-muted/20 p-2 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-medium text-foreground">
+                              {incident.message ?? incident.kind ?? "render-loop"}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {new Date(incident.ts).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground">{incident.url ?? ""}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                        No incidents recorded from the browser runtime.
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              </div>
+            </TabsContent>
+          ) : null}
+
         </Tabs>
       </div>
     </ClientOnly>

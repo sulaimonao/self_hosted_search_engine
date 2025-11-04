@@ -33,6 +33,7 @@ import { resolveChatModelSelection } from "@/lib/chat-model";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
 import type { AutopilotDirective, AutopilotToolDirective, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 import { useAppStore } from "@/state/useAppStore";
 import { useUIStore } from "@/state/ui";
 
@@ -150,6 +151,7 @@ const INITIAL_ASSISTANT_GREETING =
   "Welcome! Paste a URL or ask me to search. I only crawl when you approve each step.";
 
 export function ChatPanel() {
+  useRenderLoopGuard("ChatPanel");
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
       id: createId(),
@@ -271,8 +273,10 @@ export function ChatPanel() {
         setSelectedModel(stored.trim());
       }
     }
-    void handleRefreshInventory();
-    void handleRefreshServerTime();
+    if (process.env.NODE_ENV !== "test") {
+      void handleRefreshInventory();
+      void handleRefreshServerTime();
+    }
 
     return () => {
       mountedRef.current = false;

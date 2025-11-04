@@ -28,6 +28,8 @@ import { ShadowPanel } from "@/components/panels/ShadowPanel";
 import { useEvents } from "@/state/useEvents";
 import { Panel, useAppStore } from "@/state/useAppStore";
 import { resolveBrowserAPI } from "@/lib/browser-ipc";
+import { useEvent } from "@/lib/react-safe";
+import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 import { useBrowserIpc } from "@/hooks/useBrowserIpc";
 import { SiteInfoPopover } from "@/components/browser/SiteInfoPopover";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
@@ -62,6 +64,7 @@ export function BrowserShell() {
 }
 
 function BrowserShellInner() {
+  useRenderLoopGuard("BrowserShell");
   useUrlBinding();
   useEvents();
   useBrowserIpc();
@@ -129,6 +132,13 @@ function BrowserShellInner() {
   const viewContainerRef = useRef<HTMLDivElement | null>(null);
 
   const historyRef = useRef(new NavHistory());
+  const activeTabIdRef = useRef<string | undefined>(activeTab?.id ?? undefined);
+  const activeTabTitleRef = useRef<string | undefined>(activeTab?.title ?? undefined);
+
+  useEffect(() => {
+    activeTabIdRef.current = activeTab?.id ?? undefined;
+    activeTabTitleRef.current = activeTab?.title ?? undefined;
+  }, [activeTab?.id, activeTab?.title]);
   const [fallbackUrl, setFallbackUrl] = useState<string>(() => activeTab?.url ?? "https://wikipedia.org");
 
   const [supportsWebview, setSupportsWebview] = useState(false);
@@ -147,9 +157,10 @@ function BrowserShellInner() {
     setSupportsWebview(/Electron/i.test(ua));
   }, []);
 
-  const updateTabFromHistory = useCallback(
+  const updateTabFromHistory = useEvent(
     (url: string, options?: { loading?: boolean; title?: string | null }) => {
-      if (!activeTab?.id) {
+      const tabId = activeTabIdRef.current;
+      if (!tabId) {
         return;
       }
       const history = historyRef.current;
@@ -157,14 +168,16 @@ function BrowserShellInner() {
       if (!normalized) {
         return;
       }
-      const nextTitle =
-        options?.title && options.title.trim()
-          ? options.title.trim()
-          : activeTab.title && activeTab.title.trim()
-            ? activeTab.title
-            : normalized;
+      const providedTitle = options?.title?.trim();
+      const currentTitle = activeTabTitleRef.current?.trim();
+      const nextTitle = providedTitle && providedTitle.length > 0
+        ? providedTitle
+        : currentTitle && currentTitle.length > 0
+          ? currentTitle
+          : normalized;
       setFallbackUrl((current) => (current === normalized ? current : normalized));
-      useAppStore.getState().updateTab(activeTab.id, {
+      const store = useAppStore.getState();
+      store.updateTab(tabId, {
         url: normalized,
         title: nextTitle,
         canGoBack: history.canBack(),
@@ -173,7 +186,6 @@ function BrowserShellInner() {
         error: null,
       });
     },
-    [activeTab?.id, activeTab?.title],
   );
 
   useEffect(() => {
