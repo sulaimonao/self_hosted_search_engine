@@ -21,6 +21,7 @@ _DB_TO_MODEL = {
     "chat.use_page_context_default": "chat_use_page_context_default",
     "browser.persist": "browser_persist",
     "browser.allow_cookies": "browser_allow_cookies",
+    "dev.render_loop_guard": "dev_render_loop_guard",
     "sources.seed": "sources_seed",
     "setup.completed": "setup_completed",
 }

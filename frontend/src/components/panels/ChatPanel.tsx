@@ -35,6 +35,8 @@ import type { AutopilotDirective, AutopilotToolDirective, ChatMessage } from "@/
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state/useAppStore";
 import { useUIStore } from "@/state/ui";
+import { useSafeState } from "@/lib/react-safe";
+import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 
 const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
@@ -150,6 +152,8 @@ const INITIAL_ASSISTANT_GREETING =
   "Welcome! Paste a URL or ask me to search. I only crawl when you approve each step.";
 
 export function ChatPanel() {
+  useRenderLoopGuard("ChatPanel");
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
       id: createId(),
@@ -171,9 +175,10 @@ export function ChatPanel() {
   const [serverTime, setServerTime] = useState<MetaTimeResponse | null>(null);
   const [serverTimeError, setServerTimeError] = useState<string | null>(null);
   const [usePageContext, setUsePageContext] = useState(false);
-  const [contextSummary, setContextSummary] = useState<{ url?: string | null; selectionWordCount?: number | null } | null>(
-    null,
-  );
+  const [contextSummary, setContextSummary] = useSafeState<{
+    url?: string | null;
+    selectionWordCount?: number | null;
+  } | null>(null);
   const [toolExecutions, setToolExecutions] = useState<Record<string, ToolExecutionState>>({});
   const [planExecutions, setPlanExecutions] = useState<
     Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }>

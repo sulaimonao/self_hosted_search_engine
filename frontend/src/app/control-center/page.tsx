@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { AlertTriangle, RefreshCcw } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import ClientOnly from "@/components/layout/ClientOnly";
 import {
   Select,
@@ -44,6 +45,9 @@ import {
   updateConfig,
 } from "@/lib/configClient";
 import type { ConfigFieldOption, ConfigSchema, RuntimeConfig, HealthSnapshot } from "@/lib/configClient";
+import { useSafeNavigate } from "@/lib/useSafeNavigate";
+import { useRenderLoopGuardState } from "@/lib/renderLoopContext";
+import { useRenderLoopDiagnostics } from "@/state/useRenderLoopDiagnostics";
 
 function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigFieldOption) {
   const raw = config?.[field.key];
@@ -112,7 +116,7 @@ export default function ControlCenterPage() {
     fetchModels,
   );
 
-  const router = useRouter();
+  const navigate = useSafeNavigate();
   const hasNavigatedRef = useRef(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -123,16 +127,42 @@ export default function ControlCenterPage() {
   const [installingModel, setInstallingModel] = useState<string | null>(null);
   const [modelsMessage, setModelsMessage] = useState<string | null>(null);
   const [runtimeDiagnosticsMessage, setRuntimeDiagnosticsMessage] = useState<string | null>(null);
+  const { events: renderLoopEvents, clear: clearRenderLoopEvents } = useRenderLoopDiagnostics(
+    (state) => ({
+      events: state.events,
+      clear: state.clear,
+    }),
+    useShallow,
+  );
+  const { enabled: renderLoopGuardEnabled } = useRenderLoopGuardState();
   const handleBackToBrowser = useCallback(() => {
     if (hasNavigatedRef.current) {
       return;
     }
     hasNavigatedRef.current = true;
-    router.push("/browser");
-  }, [router]);
+    navigate.push("/browser");
+  }, [navigate]);
 
-  const sections = schema?.sections ?? [];
-  const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? "models");
+  const schemaSections = schema?.sections ?? [];
+  const sections = useMemo(() => {
+    if (process.env.NODE_ENV === "production") {
+      return schemaSections.filter((section) => section.id !== "developer");
+    }
+    return schemaSections;
+  }, [schemaSections]);
+  const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? RUNTIME_TAB_ID);
+
+  useEffect(() => {
+    if (sections.length === 0) {
+      if (activeTab !== RUNTIME_TAB_ID) {
+        setActiveTab(RUNTIME_TAB_ID);
+      }
+      return;
+    }
+    if (!sections.some((section) => section.id === activeTab)) {
+      setActiveTab(sections[0]?.id ?? RUNTIME_TAB_ID);
+    }
+  }, [activeTab, sections]);
 
   const agentState = agentConfig ?? AGENT_BROWSER_DEFAULTS;
   const agentSource =
@@ -436,37 +466,86 @@ export default function ControlCenterPage() {
           </Card>
         ) : null}
         {section.id === "developer" ? (
-          <Card className="space-y-3 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold">Diagnostics</h3>
-                <p className="text-xs text-muted-foreground">
-                  Snapshot runtime links and trigger automatic repair routines.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => void mutateDiagnostics()}>
-                  Refresh snapshot
-                </Button>
-                <Button size="sm" onClick={() => void handleRepair()} disabled={repairing}>
-                  {repairing ? "Repairing…" : "Repair"}
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2 rounded border p-3 text-xs text-muted-foreground">
-              {diagnostics ? (
-                <>
-                  <p>Snapshot taken {diagnostics.captured_at ? new Date((diagnostics.captured_at as number) * 1000).toLocaleString() : "recently"}.</p>
-                  <pre className="whitespace-pre-wrap break-words">{JSON.stringify(diagnostics.links, null, 2)}</pre>
-                </>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-500" />
-                  <span>No diagnostics captured yet.</span>
+          <>
+            <Card className="space-y-3 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Render loop guard</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Detects components committing repeatedly in development mode.
+                  </p>
                 </div>
-              )}
-            </div>
-          </Card>
+                <div className="flex items-center gap-2">
+                  <Badge variant={renderLoopGuardEnabled ? "secondary" : "outline"}>
+                    {renderLoopGuardEnabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => clearRenderLoopEvents()}
+                    disabled={renderLoopEvents.length === 0}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2 text-xs">
+                {renderLoopEvents.length === 0 ? (
+                  <p className="text-muted-foreground">No render loops detected this session.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {renderLoopEvents
+                      .slice()
+                      .reverse()
+                      .map((event) => (
+                        <li key={`${event.key}:${event.timestamp}`} className="rounded border p-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{event.key}</span>
+                            <span className="text-muted-foreground">
+                              {new Date(event.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <p className="text-muted-foreground">
+                            {event.count} renders within {event.windowMs}ms window
+                          </p>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            </Card>
+            <Card className="space-y-3 p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Diagnostics</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Snapshot runtime links and trigger automatic repair routines.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => void mutateDiagnostics()}>
+                    Refresh snapshot
+                  </Button>
+                  <Button size="sm" onClick={() => void handleRepair()} disabled={repairing}>
+                    {repairing ? "Repairing…" : "Repair"}
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2 rounded border p-3 text-xs text-muted-foreground">
+                {diagnostics ? (
+                  <>
+                    <p>Snapshot taken {diagnostics.captured_at ? new Date((diagnostics.captured_at as number) * 1000).toLocaleString() : "recently"}.</p>
+                    <pre className="whitespace-pre-wrap break-words">{JSON.stringify(diagnostics.links, null, 2)}</pre>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                    <span>No diagnostics captured yet.</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </>
         ) : null}
       </div>
     );

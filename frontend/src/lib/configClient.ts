@@ -49,6 +49,7 @@ export type AppConfig = {
   browser_allow_cookies: boolean;
   sources_seed: SeedSources;
   setup_completed: boolean;
+  dev_render_loop_guard: boolean;
 };
 
 type FieldDefinition = {
@@ -57,7 +58,7 @@ type FieldDefinition = {
   type: "boolean" | "select";
   label: string;
   description?: string;
-  section: "models" | "features" | "browser" | "chat" | "setup";
+  section: "models" | "features" | "browser" | "chat" | "setup" | "developer";
   options?: string[];
   defaultBoolean?: boolean;
   defaultOption?: string;
@@ -184,6 +185,15 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
     section: "setup",
     defaultBoolean: false,
   },
+  {
+    legacyKey: "dev.render_loop_guard",
+    property: "dev_render_loop_guard",
+    type: "boolean",
+    label: "Render loop guard (dev)",
+    description: "Enable render loop detection and logging in development builds.",
+    section: "developer",
+    defaultBoolean: true,
+  },
 ];
 
 const SECTION_LABELS: Record<FieldDefinition["section"], string> = {
@@ -192,6 +202,7 @@ const SECTION_LABELS: Record<FieldDefinition["section"], string> = {
   browser: "Browser",
   chat: "Chat",
   setup: "Setup",
+  developer: "Developer",
 };
 
 function apiPath(path: string): string {

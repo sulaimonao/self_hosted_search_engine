@@ -30,6 +30,7 @@ from .probes import (  # noqa: F401
     electron_webprefs,
     headers_pass,
     index_health_widget,
+    render_loop_guard,
     sse_stream_integrity,
 )
 

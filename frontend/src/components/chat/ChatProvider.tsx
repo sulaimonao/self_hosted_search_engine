@@ -1,5 +1,7 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect } from "react";
+
+import { useEvent, useSafeState, useStableMemo } from "@/lib/react-safe";
 
 type ChatCtx = {
   open: boolean;
@@ -11,8 +13,8 @@ type ChatCtx = {
 const Context = createContext<ChatCtx | null>(null);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [open, setOpen] = useSafeState(false);
+  const [ready, setReady] = useSafeState(false);
 
   useEffect(() => {
     let active = true;
@@ -41,9 +43,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const toggle = useCallback(() => setOpen((value) => !value), []);
+  const toggle = useEvent(() => setOpen((value) => !value));
 
-  return <Context.Provider value={{ open, setOpen, toggle, ready }}>{children}</Context.Provider>;
+  const value = useStableMemo(
+    () => ({
+      open,
+      setOpen,
+      toggle,
+      ready,
+    }),
+    [open, ready, toggle],
+  );
+
+  return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 
 export function useChat() {

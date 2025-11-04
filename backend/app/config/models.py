@@ -46,6 +46,9 @@ class AppConfig(BaseModel):
     browser_persist: bool = True
     browser_allow_cookies: bool = True
 
+    # developer diagnostics
+    dev_render_loop_guard: bool = True
+
     # seed sources
     sources_seed: SeedSources = Field(default_factory=SeedSources)
 

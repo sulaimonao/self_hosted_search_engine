@@ -18,6 +18,7 @@ INSERT OR IGNORE INTO app_config(k, v) VALUES
 ('chat.use_page_context_default',          'true'),
 ('browser.persist',          'true'),
 ('browser.allow_cookies',          'true'),
+('dev.render_loop_guard',          'true'),
 ('sources.seed',          '{"news": [], "music": [], "tech": [], "art": [], "other": []}'),
 ('setup.completed',          'false'),
 ('DESKTOP_USER_AGENT',          '""'),

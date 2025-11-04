@@ -1,13 +1,13 @@
 "use client";
 
 import { Check, Edit3, ExternalLink, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ActionStatus, ProposedAction } from "@/lib/types";
+import { useSafeNavigate } from "@/lib/useSafeNavigate";
 
 interface ActionCardProps {
   action: ProposedAction;
@@ -28,7 +28,7 @@ const STATUS_LABEL: Record<ActionStatus, string> = {
 export function ActionCard({ action, onApprove, onEdit, onDismiss }: ActionCardProps) {
   const targetUrl = typeof action.metadata?.url === "string" ? action.metadata.url : null;
   const previewText = typeof action.metadata?.preview === "string" ? action.metadata.preview : null;
-  const router = useRouter();
+  const navigate = useSafeNavigate();
   return (
     <Card
       className={cn(
@@ -61,7 +61,7 @@ export function ActionCard({ action, onApprove, onEdit, onDismiss }: ActionCardP
               onClick={() => {
                 if (!targetUrl) return;
                 const params = new URLSearchParams({ url: targetUrl });
-                router.push(`/workspace?${params.toString()}`);
+                navigate.push(`/workspace?${params.toString()}`);
               }}
             >
               <ExternalLink className="h-4 w-4" />

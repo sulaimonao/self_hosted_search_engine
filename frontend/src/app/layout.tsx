@@ -3,6 +3,7 @@ import { Inter, Roboto_Mono } from "next/font/google";
 import { SWRConfig } from "swr";
 
 import { NavProgressProvider } from "@/app/nav-progress-provider";
+import { RenderLoopGuardProvider } from "@/components/providers/RenderLoopGuardProvider";
 import { StatusRibbon } from "@/components/status/StatusRibbon";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
 
@@ -38,11 +39,13 @@ export default function RootLayout({
             dedupingInterval: 4000,
           }}
         >
-          <NavProgressProvider>
-            <StatusRibbon />
-            <FirstRunWizard />
-            {children}
-          </NavProgressProvider>
+          <RenderLoopGuardProvider>
+            <NavProgressProvider>
+              <StatusRibbon />
+              <FirstRunWizard />
+              {children}
+            </NavProgressProvider>
+          </RenderLoopGuardProvider>
         </SWRConfig>
       </body>
     </html>

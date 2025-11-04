@@ -1,8 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, MessageSquare, Stethoscope } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import dynamic from "next/dynamic";
 
@@ -37,6 +36,9 @@ import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
+import { useSafeState, useEvent } from "@/lib/react-safe";
+import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
+import { useSafeNavigate } from "@/lib/useSafeNavigate";
 
 const ChatPanel = dynamic(
   () =>
@@ -62,11 +64,13 @@ export function BrowserShell() {
 }
 
 function BrowserShellInner() {
+  useRenderLoopGuard("BrowserShell");
+
   useUrlBinding();
   useEvents();
   useBrowserIpc();
 
-  const router = useRouter();
+  const navigate = useSafeNavigate();
   const { activeTab, openPanel, panelOpen } = useAppStore(
     useShallow((state) => ({
       activeTab: state.activeTab?.(),
@@ -129,10 +133,10 @@ function BrowserShellInner() {
   const viewContainerRef = useRef<HTMLDivElement | null>(null);
 
   const historyRef = useRef(new NavHistory());
-  const [fallbackUrl, setFallbackUrl] = useState<string>(() => activeTab?.url ?? "https://wikipedia.org");
+  const [fallbackUrl, setFallbackUrl] = useSafeState<string>(() => activeTab?.url ?? "https://wikipedia.org");
 
-  const [supportsWebview, setSupportsWebview] = useState(false);
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [supportsWebview, setSupportsWebview] = useSafeState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useSafeState(false);
 
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
   const hasBrowserAPI = Boolean(browserAPI);
@@ -147,7 +151,7 @@ function BrowserShellInner() {
     setSupportsWebview(/Electron/i.test(ua));
   }, []);
 
-  const updateTabFromHistory = useCallback(
+  const updateTabFromHistory = useEvent(
     (url: string, options?: { loading?: boolean; title?: string | null }) => {
       if (!activeTab?.id) {
         return;
@@ -163,7 +167,7 @@ function BrowserShellInner() {
           : activeTab.title && activeTab.title.trim()
             ? activeTab.title
             : normalized;
-      setFallbackUrl((current) => (current === normalized ? current : normalized));
+      setFallbackUrl(normalized);
       useAppStore.getState().updateTab(activeTab.id, {
         url: normalized,
         title: nextTitle,
@@ -173,7 +177,6 @@ function BrowserShellInner() {
         error: null,
       });
     },
-    [activeTab?.id, activeTab?.title],
   );
 
   useEffect(() => {
@@ -523,12 +526,12 @@ function BrowserShellInner() {
               <DropdownMenuItem onSelect={() => { setDownloadsOpen(true); }}>
                 Downloads
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => { router.push("/control-center"); }}>
+              <DropdownMenuItem onSelect={() => { navigate.push("/control-center"); }}>
                 Control Center
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
-                  router.push("/history");
+                  navigate.push("/history");
                 }}
               >
                 History
@@ -539,7 +542,7 @@ function BrowserShellInner() {
             variant="outline"
             size="icon"
             title="Control Center"
-            onClick={() => router.push("/control-center")}
+            onClick={() => navigate.push("/control-center")}
           >
             <Cog size={16} />
           </Button>
