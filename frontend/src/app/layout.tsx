@@ -35,7 +35,7 @@ export default function RootLayout({
           value={{
             revalidateOnFocus: false,
             revalidateOnReconnect: false,
-            dedupingInterval: 2000,
+            dedupingInterval: 4000,
           }}
         >
           <NavProgressProvider>

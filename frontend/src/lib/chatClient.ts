@@ -29,6 +29,8 @@ export interface ChatSendRequest {
   serverTime?: string | null;
   serverTimezone?: string | null;
   serverUtc?: string | null;
+  requestId?: string | null;
+  chatId?: string | null;
   signal?: AbortSignal;
   onEvent?: (event: ChatStreamEvent) => void;
 }
@@ -245,6 +247,8 @@ export class ChatClient {
       serverTime: request.serverTime ?? null,
       serverTimezone: request.serverTimezone ?? null,
       serverUtc: request.serverUtc ?? null,
+      requestId: request.requestId ?? null,
+      chatId: request.chatId ?? null,
       messages: request.messages,
     });
 

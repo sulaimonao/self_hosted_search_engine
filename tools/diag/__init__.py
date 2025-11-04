@@ -20,6 +20,9 @@ from . import (  # noqa: F401
 )
 from .rules import env_keys_example  # noqa: F401
 from .rules import pyproject_vs_requirements  # noqa: F401
+from .rules import r30_react_loops  # noqa: F401
+from .rules import r31_hydration_risks  # noqa: F401
+from .rules import r32_poll_storms  # noqa: F401
 from .probes import (  # noqa: F401
     agent_trace_toggle,
     auth_clearance_profiles,

@@ -39,6 +39,33 @@
       "method": "GET",
       "url": "http://localhost:3100/_next/static/chunks/webpack.js",
       "expect": 200
+    },
+    {
+      "label": "LLM health cadence",
+      "type": "http",
+      "method": "GET",
+      "url": "http://127.0.0.1:5050/api/llm/health",
+      "expect": 200,
+      "max_rate_hz": 0.2,
+      "overlap_group": "health"
+    },
+    {
+      "label": "Indexer health cadence",
+      "type": "http",
+      "method": "GET",
+      "url": "http://127.0.0.1:5050/api/index/health",
+      "expect": 200,
+      "max_rate_hz": 0.2,
+      "overlap_group": "health"
+    },
+    {
+      "label": "Meta time cadence",
+      "type": "http",
+      "method": "GET",
+      "url": "http://127.0.0.1:5050/api/meta/time",
+      "expect": 200,
+      "max_rate_hz": 0.2,
+      "overlap_group": "health"
     }
   ]
 }

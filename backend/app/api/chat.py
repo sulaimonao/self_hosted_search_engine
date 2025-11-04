@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Mapping, Optional, Union
@@ -21,6 +22,7 @@ from backend.app.io import (
     normalize_model_alias,
 )
 from backend.app.services.progress_bus import ProgressBus
+from backend.app.services.incident_log import IncidentLog
 
 from ..config import AppConfig
 from ..services import ollama_client
@@ -54,6 +56,54 @@ _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
 _TEXTUAL_CONTENT_PATTERN = re.compile(r"[A-Za-z]")
 _MISSING_TEXT_FALLBACK = "I’m here, but I didn’t receive usable text from the model."
+_INCIDENT_DUPLICATE_SSE = "DUPLICATE_SSE"
+
+
+class _SseRegistry:
+    """Track active SSE request identifiers to enforce single-flight semantics."""
+
+    def __init__(self, ttl_seconds: float = 120.0) -> None:
+        self._ttl = ttl_seconds
+        self._entries: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def _prune(self, now: float) -> None:
+        expired = [key for key, ts in self._entries.items() if now - ts > self._ttl]
+        for key in expired:
+            self._entries.pop(key, None)
+
+    def claim(self, key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            if key in self._entries:
+                return False
+            self._entries[key] = now
+            return True
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self._entries.pop(key, None)
+
+
+_SSE_REGISTRY = _SseRegistry(ttl_seconds=120.0)
+
+
+def _incident_log() -> IncidentLog | None:
+    try:
+        log = current_app.config.get("INCIDENT_LOG")
+    except RuntimeError:  # pragma: no cover - outside request context
+        return None
+    if isinstance(log, IncidentLog):
+        return log
+    return None
+
+
+def _record_incident(kind: str, *, message: str | None = None, detail: dict[str, Any] | None = None) -> None:
+    log = _incident_log()
+    if log is None:
+        return
+    log.record(kind, message=message, detail=detail or {})
 
 
 @bp.get("/chat/schema")
@@ -756,6 +806,7 @@ def _stream_chat_response(
     transport: Literal["ndjson", "sse"],
     request_id: str,
     json_mode: bool,
+    single_flight_key: str | None = None,
 ) -> Response:
     metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
     previews: list[str] = []
@@ -764,7 +815,7 @@ def _stream_chat_response(
     error_message: str | None = None
 
     def _events() -> Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]:
-        nonlocal frame_count, end_reason, error_message
+        nonlocal frame_count, end_reason, error_message, single_flight_key
         yield metadata
         accumulator: _StreamAccumulator | None = None
         try:
@@ -833,6 +884,9 @@ def _stream_chat_response(
                 trace_id=trace_id,
                 error=error_message,
             )
+            if single_flight_key:
+                _SSE_REGISTRY.release(single_flight_key)
+                single_flight_key = None
 
     if transport == "sse":
         body = stream_with_context(_sse_stream(_events()))
@@ -908,21 +962,61 @@ def _execute_chat_request(
     else:
         streaming_requested = "application/json" not in accept_header
 
-    trace_inputs = {
-        "message_count": len(sanitized_messages),
-        "requested_model": requested_model,
-        "has_context": bool(text_context or image_context),
-        "request_id": request_id,
-        "transport": stream_transport if streaming_requested else "json",
-    }
+    single_flight_key: str | None = None
+    try:
+        if streaming_requested and stream_transport == "sse":
+            if not _SSE_REGISTRY.claim(request_id):
+                g.chat_error_class = "DuplicateStream"
+                g.chat_error_message = "duplicate_stream"
+                detail = {
+                    "request_id": request_id,
+                    "model": requested_model,
+                    "transport": stream_transport,
+                }
+                _record_incident(
+                    _INCIDENT_DUPLICATE_SSE,
+                    message="Blocked duplicate chat stream for active request.",
+                    detail=detail,
+                )
+                log_event(
+                    "WARNING",
+                    "chat.duplicate_stream",
+                    trace=trace_id,
+                    request=request_id,
+                    model=requested_model,
+                )
+                response = jsonify(
+                    {
+                        "error": "duplicate_stream",
+                        "message": "A chat stream is already in progress for this request.",
+                        "trace_id": trace_id,
+                        "request_id": request_id,
+                        "incident": {
+                            "type": _INCIDENT_DUPLICATE_SSE,
+                            "detail": detail,
+                        },
+                    }
+                )
+                response.status_code = 409
+                response.headers["X-Request-Id"] = request_id
+                return response
+            single_flight_key = request_id
 
-    with start_span(
-        "http.chat",
-        attributes={"http.route": "/api/chat", "http.method": request.method},
-        inputs=trace_inputs,
-    ) as chat_span:
-        candidate_pairs: list[tuple[str | None, str]] = []
-        seen_models: set[str] = set()
+        trace_inputs = {
+            "message_count": len(sanitized_messages),
+            "requested_model": requested_model,
+            "has_context": bool(text_context or image_context),
+            "request_id": request_id,
+            "transport": stream_transport if streaming_requested else "json",
+        }
+
+        with start_span(
+            "http.chat",
+            attributes={"http.route": "/api/chat", "http.method": request.method},
+            inputs=trace_inputs,
+        ) as chat_span:
+            candidate_pairs: list[tuple[str | None, str]] = []
+            seen_models: set[str] = set()
 
         def _add_candidate(label: str | None, canonical: str | None) -> None:
             if not canonical:
@@ -1109,6 +1203,9 @@ def _execute_chat_request(
                 return error_response
 
             if streaming_requested:
+                release_key = single_flight_key if stream_transport == "sse" else None
+                if stream_transport == "sse":
+                    single_flight_key = None
                 return _stream_chat_response(
                     candidate=display_model,
                     attempt_index=attempt_index,
@@ -1121,6 +1218,7 @@ def _execute_chat_request(
                     transport=stream_transport,
                     request_id=request_id,
                     json_mode=json_mode,
+                    single_flight_key=release_key,
                 )
 
             try:
@@ -1268,6 +1366,9 @@ def _execute_chat_request(
             error=combined,
         )
         return error_response
+    finally:
+        if single_flight_key is not None:
+            _SSE_REGISTRY.release(single_flight_key)
 
 
 @bp.post("/chat")

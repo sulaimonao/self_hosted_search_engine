@@ -101,6 +101,7 @@ def create_app() -> Flask:
     from .db import domain_profiles as domain_profiles_db
     from .services.progress_bus import ProgressBus
     from .services.log_bus import AgentLogBus
+    from .services.incident_log import IncidentLog
     from .services.labeler import LabelWorker, MemoryAgingWorker
     from .routes.config import bp as config_bp
     from server.refresh_worker import RefreshWorker
@@ -183,6 +184,7 @@ def create_app() -> Flask:
     domain_profiles_db.configure(config.agent_data_dir / "domain_profiles.sqlite3")
     progress_bus = ProgressBus()
     agent_log_bus = AgentLogBus()
+    incident_log = IncidentLog()
 
     engine_config = EngineConfig.from_yaml(CONFIG_PATH)
     app.config.setdefault("RAG_ENGINE_CONFIG", engine_config)
@@ -415,6 +417,7 @@ def create_app() -> Flask:
         APP_STATE_DB=state_db,
         PROGRESS_BUS=progress_bus,
         AGENT_LOG_BUS=agent_log_bus,
+        INCIDENT_LOG=incident_log,
         AGENT_RUNTIME=agent_runtime,
         VECTOR_INDEX_SERVICE=vector_index_service,
         VECTOR_PENDING_WORKER=vector_pending_worker,

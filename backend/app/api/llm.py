@@ -173,6 +173,7 @@ def llm_models() -> Any:
     probe = _probe_ollama(engine_config.ollama.base_url, manager)
     available = probe["models"]
     chat_models = [model for model in available if not _is_embedding_model(model)]
+    families = _present(available)
     configured = {
         "primary": _coerce_name(engine_config.models.llm_primary),
         "fallback": _coerce_name(engine_config.models.llm_fallback),
@@ -189,6 +190,7 @@ def llm_models() -> Any:
         configured_primary=configured["primary"],
         configured_fallback=configured["fallback"],
         configured_embedder=embedder,
+        families=len(families),
     )
 
     payload = {
@@ -199,6 +201,8 @@ def llm_models() -> Any:
         "ollama_host": engine_config.ollama.base_url,
         "reachable": bool(probe["reachable"]),
     }
+    if families:
+        payload["families"] = families
     if probe.get("error"):
         payload["error"] = probe["error"]
     return jsonify(payload)

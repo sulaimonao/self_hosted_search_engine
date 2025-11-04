@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.diag import DiagnosticsEngine, ExitCode, Severity, parse_fail_on
+from tools.diag.autofix_env import apply_autofix as apply_env_autofix
 from tools.diag.globs import ALL_PATTERNS, EXCLUDE_DIRS
 
 
@@ -187,6 +188,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=parse_fail_on,
         help="Severity threshold that triggers a non-zero exit (high, medium, low)",
     )
+    parser.add_argument(
+        "--autofix",
+        action="store_true",
+        help="Apply safe autofixes before running diagnostics",
+    )
     parser.add_argument("--only", help="Comma separated list of rule IDs to run")
     parser.add_argument("--skip", help="Comma separated list of rule IDs to skip")
     parser.add_argument("--baseline", type=Path, help="Baseline JSON file to ignore historical findings")
@@ -215,6 +221,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not scope:
             print("[diag] No files changed since the provided reference; exiting early.")
             return 0
+
+    if args.autofix:
+        entries = apply_env_autofix(Path.cwd())
+        print("### Autofix: environment examples")
+        if entries:
+            for entry in entries:
+                target = entry.target.resolve()
+                try:
+                    target_relative = target.relative_to(Path.cwd())
+                except ValueError:
+                    target_relative = target
+                refs = ", ".join(entry.references) if entry.references else "unknown reference"
+                print(f"- `{entry.key}` → `{target_relative}` (refs: {refs})")
+        else:
+            print("- No missing environment keys detected.")
 
     engine = DiagnosticsEngine(Path.cwd())
 

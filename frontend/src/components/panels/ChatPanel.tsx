@@ -17,6 +17,7 @@ import { UsePageContextToggle } from "@/components/UsePageContextToggle";
 import { ReasoningToggle } from "@/components/ReasoningToggle";
 import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 import { useLlmStream } from "@/hooks/useLlmStream";
+import { incidentBus } from "@/diagnostics/incident-bus";
 import {
   autopullModels,
   fetchModelInventory,
@@ -763,8 +764,9 @@ export function ChatPanel() {
     }
     modelMessages.push({ role: "user", content: trimmed });
 
+    const requestId = createId();
+
     if (llmStreamSupported) {
-      const requestId = createId();
       activeStreamRef.current = { requestId, messageId: assistantId };
       streamCompletionRef.current = null;
       streamSessionRef.current = requestId;
@@ -779,12 +781,26 @@ export function ChatPanel() {
         server_timezone: serverTime?.server_timezone ?? undefined,
         server_time_utc: serverTime?.server_time_utc ?? undefined,
         request_id: requestId,
+        chat_id: requestId,
       };
       try {
         await startLlmStream({ requestId, body: streamBody });
       } catch (error) {
-        const messageText =
-          error instanceof Error ? error.message : String(error ?? "Stream failed");
+        let messageText = error instanceof Error ? error.message : String(error ?? "Stream failed");
+        if (messageText === "stream_http_409") {
+          messageText = "Another chat response is already streaming. Please wait for it to finish.";
+          incidentBus.record("DUPLICATE_SSE", {
+            message: "Blocked duplicate chat stream request.",
+            severity: "warn",
+            detail: { requestId, transport: "sse" },
+          });
+        } else {
+          incidentBus.record("STREAM_ERROR", {
+            message: messageText,
+            severity: "warn",
+            detail: { requestId, transport: "sse" },
+          });
+        }
         updateMessage(assistantId, (message) => ({
           ...message,
           streaming: false,
@@ -815,6 +831,8 @@ export function ChatPanel() {
         serverTimezone: serverTime?.server_timezone ?? undefined,
         serverUtc: serverTime?.server_time_utc ?? undefined,
         signal: activeController.signal,
+        requestId,
+        chatId: requestId,
         onEvent: (event) => {
           if (event.type === "metadata") {
             streamedModel = event.model ?? streamedModel;
@@ -876,7 +894,26 @@ export function ChatPanel() {
         }));
         setBanner({ intent: "info", text: "Generation cancelled." });
       } else if (error instanceof ChatRequestError) {
-        const messageText = error.hint ?? error.message;
+        let messageText = error.hint ?? error.message;
+        if (error.status === 409) {
+          messageText = "Another chat response is already streaming. Please wait for it to finish.";
+          incidentBus.record("DUPLICATE_SSE", {
+            message: error.message || "Duplicate chat request rejected.",
+            severity: "warn",
+            detail: { requestId, transport: "http", traceId: error.traceId },
+          });
+        } else {
+          incidentBus.record("CHAT_ERROR", {
+            message: error.message,
+            severity: "error",
+            detail: {
+              requestId,
+              status: error.status,
+              traceId: error.traceId,
+              code: error.code,
+            },
+          });
+        }
         updateMessage(assistantId, (message) => ({
           ...message,
           streaming: false,
@@ -986,6 +1023,14 @@ export function ChatPanel() {
       setIsBusy(false);
       if (llmStream.error) {
         setBanner({ intent: "error", text: llmStream.error });
+        incidentBus.record("STREAM_ERROR", {
+          message: llmStream.error,
+          severity: "warn",
+          detail: {
+            requestId: llmStream.requestId ?? active.requestId,
+            transport: "sse",
+          },
+        });
       } else if (llmStream.final) {
         void storeChatMessage(threadId, {
           id: active.messageId,

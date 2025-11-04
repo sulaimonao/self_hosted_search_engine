@@ -19,7 +19,7 @@ SOURCE_PATTERNS = ("**/*.py", "**/*.ts", "**/*.tsx", "**/*.js")
 DEFAULT_APP_STATE_DB = Path("data/app_state.sqlite3")
 
 
-def _load_app_config_keys(context: RuleContext) -> Set[str]:
+def load_app_config_keys(root: Path) -> Set[str]:
     """Read documented keys from the runtime app_config table when available."""
 
     candidates = []
@@ -29,7 +29,7 @@ def _load_app_config_keys(context: RuleContext) -> Set[str]:
             candidates.append(Path(configured))
     candidates.append(DEFAULT_APP_STATE_DB)
 
-    root = context.root
+    root = root.resolve()
     seen: Set[Path] = set()
     for candidate in candidates:
         path = candidate if candidate.is_absolute() else root / candidate
@@ -44,20 +44,21 @@ def _load_app_config_keys(context: RuleContext) -> Set[str]:
             continue
         try:
             cursor = connection.execute("SELECT k FROM app_config")
-            keys: Set[str] = set()
-            for raw_key, in cursor.fetchall():
-                if raw_key is None:
-                    continue
-                base = str(raw_key).strip()
-                if not base:
-                    continue
-                keys.add(base)
-                canonical = re.sub(r"[^A-Za-z0-9]+", "_", base).strip("_").upper()
-                if canonical:
-                    keys.add(canonical)
-            return keys
         except sqlite3.Error:
-            return set()
+            continue
+        keys: Set[str] = set()
+        for raw_key, in cursor.fetchall():
+            if raw_key is None:
+                continue
+            base = str(raw_key).strip()
+            if not base:
+                continue
+            keys.add(base)
+            canonical = re.sub(r"[^A-Za-z0-9]+", "_", base).strip("_").upper()
+            if canonical:
+                keys.add(canonical)
+        if keys:
+            return keys
         finally:
             connection.close()
     return set()
@@ -82,7 +83,7 @@ def rule_env_examples(context: RuleContext) -> Iterable[Finding]:
         text = context.read_text(relative)
         for key in ENV_ASSIGN_RE.findall(text):
             example_keys.add(key)
-    app_config_keys = _load_app_config_keys(context)
+    app_config_keys = load_app_config_keys(context.root)
     documented = example_keys | app_config_keys
     missing = sorted(key for key in referenced if key not in documented)
     if missing:

@@ -10,6 +10,7 @@ from flask import Blueprint, current_app, jsonify, request
 from ..config import AppConfig
 from ..jobs.diagnostics import run_diagnostics
 from ..jobs.runner import JobRunner
+from ..services.incident_log import IncidentLog
 
 bp = Blueprint("diagnostics_api", __name__, url_prefix="/api")
 
@@ -74,4 +75,8 @@ def diagnostics_run():
         "stdout": (result.stdout or "").strip(),
         "stderr": (result.stderr or "").strip(),
     }
+    incident_log = current_app.config.get("INCIDENT_LOG")
+    if isinstance(incident_log, IncidentLog):
+        payload["incidents"] = incident_log.list(limit=50)
+        payload["incident_snapshot"] = incident_log.snapshot()
     return jsonify(payload)

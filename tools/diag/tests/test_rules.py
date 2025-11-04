@@ -326,3 +326,66 @@ uvicorn[standard]==0.22
     ]
     findings = _run_rules(tmp_path, files, only={"R21_dependency_sync"})
     assert findings == []
+
+
+def test_react_loop_rule_detects_self_trigger(tmp_path: Path) -> None:
+    files = [
+        (
+            "frontend/src/hooks/useLoop.tsx",
+            """
+import React from 'react';
+export function useLoop() {
+  const [count, setCount] = React.useState(0);
+  React.useEffect(() => {
+    setCount(count + 1);
+  }, [count]);
+  return count;
+}
+            """,
+        )
+    ]
+    findings = _run_rules(tmp_path, files, only={"R30_react_loop"})
+    assert findings
+    assert findings[0].rule_id == "R30_react_loop"
+
+
+def test_hydration_risk_flags_window_access(tmp_path: Path) -> None:
+    files = [
+        (
+            "frontend/src/components/Layout.tsx",
+            """
+export function Layout() {
+  const width = window.innerWidth;
+  return <div>{width}</div>;
+}
+            """,
+        )
+    ]
+    findings = _run_rules(tmp_path, files, only={"R31_hydration_risk"})
+    assert findings
+    assert findings[0].rule_id == "R31_hydration_risk"
+
+
+def test_poll_storm_flags_fast_interval(tmp_path: Path) -> None:
+    files = [
+        (
+            "frontend/src/components/Poller.ts",
+            """
+export function Poller() {
+  setInterval(() => fetch('/api/meta/health'), 1000);
+}
+            """,
+        ),
+        (
+            "frontend/src/hooks/useData.ts",
+            """
+export function useData() {
+  return useSWR('/api/data', fetcher, { refreshInterval: 500 });
+}
+            """,
+        ),
+    ]
+    findings = _run_rules(tmp_path, files, only={"R32_poll_storms"})
+    assert findings
+    rule_ids = {finding.rule_id for finding in findings}
+    assert "R32_poll_storms" in rule_ids

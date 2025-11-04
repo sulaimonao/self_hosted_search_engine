@@ -22,6 +22,8 @@ type ChatRequestInput = {
   serverTime?: string | null;
   serverTimezone?: string | null;
   serverUtc?: string | null;
+  requestId?: string | null;
+  chatId?: string | null;
   messages?: unknown;
 };
 
@@ -41,6 +43,8 @@ export type ChatRequestPayload = {
   server_time?: string;
   server_timezone?: string;
   server_time_utc?: string;
+  request_id?: string;
+  chat_id?: string;
 };
 
 function normalizeString(value: unknown): string | undefined {
@@ -123,6 +127,10 @@ export function toChatRequest(input: ChatRequestInput & { messages: unknown }): 
   if (serverTimezone) payload.server_timezone = serverTimezone;
   const serverUtc = normalizeString(input.serverUtc);
   if (serverUtc) payload.server_time_utc = serverUtc;
+  const requestId = normalizeString(input.requestId);
+  if (requestId) payload.request_id = requestId;
+  const chatId = normalizeString(input.chatId);
+  if (chatId) payload.chat_id = chatId;
 
   return payload;
 }

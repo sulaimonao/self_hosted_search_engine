@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { BrowserAPI, BrowserDiagnosticsReport } from "@/lib/browser-ipc";
 import type { Verb } from "@/autopilot/executor";
-import { IncidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
+import { incidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
 import { fromDirective, toIncident, type DirectivePayload } from "@/lib/io/self_heal";
 import { api } from "@/lib/api";
 
@@ -198,18 +198,11 @@ export function DiagnosticsDrawer({
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [promoteDiff, setPromoteDiff] = useState<string | null>(null);
   const [lastRuleHit, setLastRuleHit] = useState<string | null>(null);
-
-  const incidentBusRef = useRef<IncidentBus | null>(null);
-  if (!incidentBusRef.current) {
-    incidentBusRef.current = new IncidentBus();
-  }
+  const [incidents, setIncidents] = useState<BrowserIncident[]>(() => incidentBus.getIncidents());
+  const lastLoggedIncidentRef = useRef<string | null>(null);
 
   const autoPlanKeyRef = useRef<string | null>(null);
   const episodesRequestRef = useRef<Promise<void> | null>(null);
-
-  useEffect(() => {
-    incidentBusRef.current?.start();
-  }, []);
 
   const appendLog = useCallback((entry: string) => {
     setLogEntries((prev) => {
@@ -218,6 +211,25 @@ export function DiagnosticsDrawer({
       return next.slice(-400);
     });
   }, []);
+
+  useEffect(() => {
+    incidentBus.start();
+    return incidentBus.subscribe(setIncidents);
+  }, []);
+
+  useEffect(() => {
+    if (incidents.length === 0) {
+      return;
+    }
+    const latest = incidents[incidents.length - 1];
+    if (!latest || lastLoggedIncidentRef.current === latest.id) {
+      return;
+    }
+    lastLoggedIncidentRef.current = latest.id;
+    const prefix = latest.kind ?? "incident";
+    const message = latest.message ? `: ${latest.message}` : "";
+    appendLog(`[incident] ${prefix}${message}`);
+  }, [appendLog, incidents]);
 
   useEffect(() => {
     if (!open) {
@@ -284,7 +296,7 @@ export function DiagnosticsDrawer({
       },
     ): Promise<DirectivePayload | null> => {
       const label = options?.label ?? (apply ? "apply" : "plan");
-      const incident = options?.incident ?? incidentBusRef.current?.snapshot();
+      const incident = options?.incident ?? incidentBus.snapshot();
       if (!incident) {
         appendLog(`[self-heal] ${label}: unable to capture incident snapshot.`);
         return null;
@@ -480,6 +492,13 @@ export function DiagnosticsDrawer({
         }
         payload = await webview.executeJavaScript<BrowserDiagnosticsReport>(BROWSER_DIAGNOSTICS_SCRIPT, true);
       }
+      const rawIncidents =
+        payload && typeof payload === "object" && "incidents" in (payload as Record<string, unknown>)
+          ? (payload as Record<string, unknown>).incidents
+          : undefined;
+      if (Array.isArray(rawIncidents)) {
+        incidentBus.ingest(rawIncidents as Record<string, unknown>[]);
+      }
       setReport(payload ?? null);
       if (!payload) {
         setError("Diagnostics completed but returned no data.");
@@ -501,7 +520,7 @@ export function DiagnosticsDrawer({
     if (!key || autoPlanKeyRef.current === key) {
       return;
     }
-    const incident = incidentBusRef.current?.snapshot();
+    const incident = incidentBus.snapshot();
     if (!incident) {
       return;
     }
@@ -788,10 +807,11 @@ export function DiagnosticsDrawer({
           </SheetDescription>
         </SheetHeader>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4 flex flex-1 flex-col gap-4">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="snapshot">Snapshot</TabsTrigger>
-          <TabsTrigger value="self-heal">Self-Heal</TabsTrigger>
-        </TabsList>
+            <TabsTrigger value="incidents">Incidents</TabsTrigger>
+            <TabsTrigger value="self-heal">Self-Heal</TabsTrigger>
+          </TabsList>
         <TabsContent value="snapshot" className="flex flex-1 flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={runChecks} disabled={running} size="sm">
@@ -857,6 +877,75 @@ export function DiagnosticsDrawer({
               </div>
             )}
           </TabsContent>
+        <TabsContent value="incidents" className="flex flex-1 flex-col gap-4">
+          {incidents.length > 0 ? (
+            <ScrollArea className="flex-1 pr-3">
+              <div className="space-y-3">
+                {incidents
+                  .slice()
+                  .reverse()
+                  .map((incident) => (
+                    <div key={incident.id} className="rounded-md border p-3 text-xs">
+                      <div className="flex items-center justify-between gap-2 text-sm">
+                        <span className="font-semibold text-foreground">{incident.kind ?? "Incident"}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(incident.ts).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      {incident.message ? (
+                        <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{incident.message}</p>
+                      ) : null}
+                      <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                        <div>
+                          <span className="font-medium text-foreground">Severity:</span> {incident.severity ?? "warn"}
+                        </div>
+                        <div>
+                          <span className="font-medium text-foreground">URL:</span> {incident.url || "unknown"}
+                        </div>
+                        {incident.symptoms.bannerText ? (
+                          <div>
+                            <span className="font-medium text-foreground">Banner:</span>{" "}
+                            {incident.symptoms.bannerText}
+                          </div>
+                        ) : null}
+                        {incident.symptoms.consoleErrors?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">Console errors:</span>{" "}
+                            {incident.symptoms.consoleErrors.slice(-3).join(" · ")}
+                          </div>
+                        ) : null}
+                        {incident.symptoms.networkErrors?.length ? (
+                          <div>
+                            <span className="font-medium text-foreground">Network issues:</span>{" "}
+                            {incident.symptoms.networkErrors
+                              .slice(-3)
+                              .map((entry) =>
+                                entry.status
+                                  ? `${entry.url ?? "request"} (${entry.status})`
+                                  : entry.error ?? entry.url ?? "unknown",
+                              )
+                              .join(" · ")}
+                          </div>
+                        ) : null}
+                      </div>
+                      {incident.detail && Object.keys(incident.detail).length ? (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs font-medium text-foreground">Detail</summary>
+                          <pre className="mt-2 max-h-32 overflow-auto rounded bg-muted p-2 text-[11px] leading-tight">
+                            {JSON.stringify(incident.detail, null, 2)}
+                          </pre>
+                        </details>
+                      ) : null}
+                    </div>
+                  ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="flex flex-1 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+              No incidents captured yet. Interact with the browser to collect console and runtime events.
+            </div>
+          )}
+        </TabsContent>
         <TabsContent value="self-heal" className="flex flex-1 flex-col gap-4">
           <Tabs value={selfHealSubTab} onValueChange={setSelfHealSubTab} className="flex flex-1 flex-col gap-4">
             <TabsList className="grid w-full grid-cols-2">
