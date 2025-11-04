@@ -21,7 +21,6 @@ import { StatusBar } from "@/components/browser/StatusBar";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { ToastGate } from "@/components/notifications/ToastGate";
 import { AgentLogPanel } from "@/components/panels/AgentLogPanel";
-import { ChatPanel } from "@/components/panels/ChatPanel";
 import { CollectionsPanel } from "@/components/panels/CollectionsPanel";
 import { LocalSearchPanel } from "@/components/panels/LocalSearchPanel";
 import { ShadowPanel } from "@/components/panels/ShadowPanel";
@@ -37,16 +36,30 @@ import { useStableOnOpenChange } from "@/hooks/useStableOnOpenChange";
 import { useUrlBinding } from "@/hooks/useUrlBinding";
 import { cn } from "@/lib/utils";
 import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
+import { ChatProvider, useChat } from "@/components/chat/ChatProvider";
+import ChatOverlay from "@/components/chat/ChatOverlay";
+import ChatLauncher from "@/components/chat/ChatLauncher";
 
-const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
+type SecondaryPanel = Exclude<Panel, "chat">;
+
+const PANEL_COMPONENT: Record<SecondaryPanel, JSX.Element> = {
   localSearch: <LocalSearchPanel />,
   collections: <CollectionsPanel />,
-  chat: <ChatPanel />,
   shadow: <ShadowPanel />,
   agentLog: <AgentLogPanel />,
 };
 
 export function BrowserShell() {
+  return (
+    <ChatProvider>
+      <BrowserShellInner />
+      <ChatLauncher />
+      <ChatOverlay />
+    </ChatProvider>
+  );
+}
+
+function BrowserShellInner() {
   useUrlBinding();
   useEvents();
   useBrowserIpc();
@@ -59,6 +72,8 @@ export function BrowserShell() {
       panelOpen: state.panelOpen,
     })),
   );
+  const { setOpen: setChatOpen } = useChat();
+  const activePanel = panelOpen === "chat" ? undefined : (panelOpen as SecondaryPanel | undefined);
 
   const { downloadOrder, downloads, setDownloadsOpen } = useBrowserRuntimeStore(
     useShallow((state) => ({
@@ -68,7 +83,14 @@ export function BrowserShell() {
     })),
   );
 
-  const panelIsOpen = Boolean(panelOpen);
+  useEffect(() => {
+    if (panelOpen === "chat") {
+      setChatOpen(true);
+      openPanel(undefined);
+    }
+  }, [panelOpen, openPanel, setChatOpen]);
+
+  const panelIsOpen = Boolean(activePanel);
   const handlePanelOpenChange = useStableOnOpenChange(panelIsOpen, (next) => {
     if (!next) {
       openPanel(undefined);
@@ -76,9 +98,7 @@ export function BrowserShell() {
   });
 
   const panelSize = useMemo<"sm" | "md" | "lg" | "xl" | "full">(() => {
-    switch (panelOpen) {
-      case "chat":
-        return "xl";
+    switch (activePanel) {
       case "shadow":
       case "agentLog":
         return "lg";
@@ -87,12 +107,10 @@ export function BrowserShell() {
       default:
         return "md";
     }
-  }, [panelOpen]);
+  }, [activePanel]);
 
   const panelWidthClass = useMemo(() => {
-    switch (panelOpen) {
-      case "chat":
-        return "w-full max-w-[34rem]";
+    switch (activePanel) {
       case "shadow":
       case "agentLog":
         return "w-full max-w-[30rem]";
@@ -101,7 +119,7 @@ export function BrowserShell() {
       default:
         return "w-full max-w-[26rem]";
     }
-  }, [panelOpen]);
+  }, [activePanel]);
 
   const activeDownloads = useMemo(
     () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
@@ -529,7 +547,6 @@ export function BrowserShell() {
           </Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("localSearch")}>🔍</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("collections")}>📁</Button>
-          <Button variant="outline" size="icon" onClick={() => openPanel("chat")}>💬</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("shadow")}>🕶️</Button>
           <Button variant="outline" size="icon" onClick={() => openPanel("agentLog")}>🧠</Button>
           <Button
@@ -585,11 +602,11 @@ export function BrowserShell() {
 
         <Sheet open={panelIsOpen} onOpenChange={handlePanelOpenChange}>
           <SheetContent
-            side={panelOpen === "localSearch" || panelOpen === "collections" ? "left" : "right"}
+            side={activePanel === "localSearch" || activePanel === "collections" ? "left" : "right"}
             size={panelSize}
             className={cn("p-0", panelWidthClass)}
           >
-            {panelOpen ? PANEL_COMPONENT[panelOpen] : null}
+            {activePanel ? PANEL_COMPONENT[activePanel] : null}
           </SheetContent>
         </Sheet>
       </main>

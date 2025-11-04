@@ -44,7 +44,7 @@ During development the frontend proxies API calls via `NEXT_PUBLIC_API_BASE_URL`
 You can still run the frontend independently if needed:
 
 ```bash
-npm run dev -- --port 3100
+npm run dev -- --port=3100
 ```
 
 Remember to export `NEXT_PUBLIC_API_BASE_URL` when running standalone.
@@ -74,7 +74,7 @@ For a production bundle:
 
 ```bash
 npm run build
-npm run start -- --hostname 0.0.0.0 --port 3100
+npm run start -- --hostname=0.0.0.0 --port=3100
 ```
 
 Set `NEXT_PUBLIC_API_BASE_URL` to the live backend URL before building if the API lives on a different origin.

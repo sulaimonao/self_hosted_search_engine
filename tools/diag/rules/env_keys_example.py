@@ -45,6 +45,7 @@ def load_app_config_keys(root: Path) -> Set[str]:
         try:
             cursor = connection.execute("SELECT k FROM app_config")
         except sqlite3.Error:
+            connection.close()
             continue
         keys: Set[str] = set()
         for raw_key, in cursor.fetchall():
@@ -57,10 +58,9 @@ def load_app_config_keys(root: Path) -> Set[str]:
             canonical = re.sub(r"[^A-Za-z0-9]+", "_", base).strip("_").upper()
             if canonical:
                 keys.add(canonical)
+        connection.close()
         if keys:
             return keys
-        finally:
-            connection.close()
     return set()
 
 

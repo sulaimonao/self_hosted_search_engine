@@ -167,7 +167,7 @@ dev:
 			if [ -z "$$NEXT_PUBLIC_API_BASE_URL" ]; then \
 				export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:$(BACKEND_PORT); \
 			fi; \
-			nohup npm run dev -- --hostname localhost --port $(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
+			nohup npm run dev -- --hostname=localhost --port=$(FRONTEND_PORT) > ../logs/frontend.log 2>&1 & echo $$! > ../logs/frontend.pid \
 		); \
 	fi
 	@API_ORIGIN="$${NEXT_PUBLIC_API_BASE_URL}"; \
@@ -220,7 +220,7 @@ web:
 	  NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:$(BACKEND_PORT)"; \
 	fi; \
 	NEXT_PUBLIC_API_BASE_URL="$$NEXT_PUBLIC_API_BASE_URL" \
-		npm --prefix frontend run dev -- --hostname localhost --port $(FRONTEND_PORT)
+		npm --prefix frontend run dev -- --hostname=localhost --port=$(FRONTEND_PORT)
 
 logs:
 	@echo "— Flask —"; pgrep -fl "$(BACKEND_CMD_PATTERN)" || echo "(no backend process)"

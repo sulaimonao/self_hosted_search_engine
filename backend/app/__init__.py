@@ -18,6 +18,7 @@ from flask import Flask, Response, current_app, jsonify, request
 from flask_cors import CORS
 
 from observability import configure_tracing
+from .logging_setup import setup_logging
 
 
 LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def _as_bool(value: Optional[str], default: bool) -> bool:
 
 
 def create_app() -> Flask:
+    setup_logging()
     from backend.agent.document_store import DocumentStore
     from backend.agent.frontier_store import FrontierStore
     from backend.agent.runtime import AgentRuntime, CrawlFetcher
