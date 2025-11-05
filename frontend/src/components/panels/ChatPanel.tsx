@@ -169,7 +169,17 @@ export function ChatPanel() {
   const [inventory, setInventory] = useState<ModelInventory | null>(null);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  // selectedModel is derived from inventory/config and stored selection.
+  // Use a pure derivation to avoid effects that set state based on the same state
+  // which can cause a React render loop.
+  const selectedModel = useMemo(() => {
+    return resolveChatModelSelection({
+      available: inventory?.chatModels ?? [],
+      configured: inventory?.configured ?? { primary: null, fallback: null, embedder: null },
+  stored: storedModelRef.current,
+  previous: null,
+    });
+  }, [inventory?.chatModels, inventory?.configured]);
   const [installing, setInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState<string | null>(null);
   const [serverTime, setServerTime] = useState<MetaTimeResponse | null>(null);
@@ -273,7 +283,7 @@ export function ChatPanel() {
       const stored = window.localStorage.getItem(MODEL_STORAGE_KEY);
       if (stored && stored.trim()) {
         storedModelRef.current = stored.trim();
-        setSelectedModel(stored.trim());
+        // no setSelectedModel here; selectedModel is derived from storedModelRef
       }
     }
     void handleRefreshInventory();
@@ -354,30 +364,7 @@ export function ChatPanel() {
     }
   }, [setContextSummary, usePageContext]);
 
-  const lastResolvedModel = useRef<string | null>(null);
-  useEffect(() => {
-    const resolved = resolveChatModelSelection({
-      available: inventory?.chatModels ?? [],
-      configured: inventory?.configured ?? { primary: null, fallback: null, embedder: null },
-      stored: storedModelRef.current,
-    });
-    if (resolved !== lastResolvedModel.current) {
-      lastResolvedModel.current = resolved;
-      setSelectedModel(resolved);
-      storedModelRef.current = resolved;
-    }
-  }, [inventory?.chatModels, inventory?.configured]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    if (selectedModel) {
-      window.localStorage.setItem(MODEL_STORAGE_KEY, selectedModel);
-    } else {
-      window.localStorage.removeItem(MODEL_STORAGE_KEY);
-    }
-  }, [selectedModel]);
+  // persist selection when user changes via UI
 
   const statusBanner = useMemo((): Banner | null => {
     if (inventoryLoading) {
@@ -1091,8 +1078,15 @@ export function ChatPanel() {
 
   const handleModelChange = useCallback((model: string) => {
     const trimmed = model?.trim() ?? "";
-    setSelectedModel(trimmed ? trimmed : null);
     storedModelRef.current = trimmed ? trimmed : null;
+    if (typeof window !== "undefined") {
+      if (storedModelRef.current) {
+        window.localStorage.setItem(MODEL_STORAGE_KEY, storedModelRef.current);
+      } else {
+        window.localStorage.removeItem(MODEL_STORAGE_KEY);
+      }
+    }
+    // no setSelectedModel; UI reads derived `selectedModel` from inventory + storedModelRef
   }, []);
 
   const handleInstallModel = useCallback(async () => {

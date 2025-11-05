@@ -217,6 +217,8 @@ export default function BrowserPanel(): JSX.Element {
   // prevent repeated bootstrap writes by tracking if we've already created the initial tab
   const bootstrappedRef = useRef(false);
 
+  // We intentionally exclude `tabs` to avoid a self-triggering bootstrap loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (bootstrappedRef.current) return;
