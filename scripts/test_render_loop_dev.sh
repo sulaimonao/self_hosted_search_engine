@@ -29,7 +29,7 @@ trap cleanup EXIT
 # Wait for services to be ready: web on 3100 and api on 5050
 npx wait-on http://127.0.0.1:3100 tcp:5050
 
-# Run playwright smoke tests
-PLAYWRIGHT_APP_URL=http://127.0.0.1:3100 npm --prefix frontend run test:render-loop
+# Run playwright smoke tests (use the DEV playwright config which doesn't start webServer)
+PLAYWRIGHT_APP_URL=http://127.0.0.1:3100 npm --prefix frontend run test:render-loop:dev
 
 # If tests passed, exit successfully (cleanup will run)
