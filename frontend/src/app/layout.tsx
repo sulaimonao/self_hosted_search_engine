@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
 import { SWRConfig } from "swr";
 
+import ClientOnly from "@/components/ClientOnly";
 import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { RenderLoopGuardProvider } from "@/components/providers/RenderLoopGuardProvider";
 import { StatusRibbon } from "@/components/status/StatusRibbon";
@@ -39,13 +40,17 @@ export default function RootLayout({
             dedupingInterval: 4000,
           }}
         >
-          <RenderLoopGuardProvider>
-            <NavProgressProvider>
-              <StatusRibbon />
-              <FirstRunWizard />
-              {children}
-            </NavProgressProvider>
-          </RenderLoopGuardProvider>
+          {/* The ClientOnly wrapper prevents hydration mismatches and excessive render loops by waiting
+             until the component mounts on the client before rendering children. */}
+          <ClientOnly>
+            <RenderLoopGuardProvider>
+              <NavProgressProvider>
+                <StatusRibbon />
+                <FirstRunWizard />
+                {children}
+              </NavProgressProvider>
+            </RenderLoopGuardProvider>
+          </ClientOnly>
         </SWRConfig>
       </body>
     </html>
