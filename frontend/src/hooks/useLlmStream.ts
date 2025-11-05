@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { isClient } from "@/lib/is-client";
 
 import type { ChatResponsePayload, ChatStreamEvent } from "@/lib/types";
 import { readTextStream } from "@/lib/stream";
@@ -106,7 +107,7 @@ function getSnapshot() {
 }
 
 function resolveBridge(): LlmBridge | null {
-  if (typeof window === "undefined") {
+  if (!isClient()) {
     return null;
   }
   const candidate = (window as { llm?: LlmBridge }).llm;
@@ -422,8 +423,7 @@ export function useLlmStream(): LlmStreamHook {
     [],
   );
 
-  const supported = Boolean(resolveBridge()) ||
-    (typeof window !== "undefined" && typeof window.fetch === "function");
+  const supported = Boolean(resolveBridge()) || (isClient() && typeof window.fetch === "function");
 
   return {
     state: snapshot,

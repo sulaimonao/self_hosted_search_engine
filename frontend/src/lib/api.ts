@@ -38,6 +38,7 @@ import type {
 } from "@/lib/types";
 
 import { chatClient, type ChatPayloadMessage, type ChatSendRequest, type ChatSendResult } from "@/lib/chatClient";
+import { isClient } from "@/lib/is-client";
 
 export { ChatClient, ChatRequestError, chatClient, type ChatSendResult, type ChatSendRequest } from "@/lib/chatClient";
 
@@ -637,7 +638,7 @@ export function subscribeDiscoveryEvents(
   onEvent: (event: DiscoveryPreview) => void,
   onError?: (error: unknown) => void,
 ): DiscoverySubscription | null {
-  if (typeof window === "undefined" || typeof EventSource === "undefined") {
+  if (!isClient() || typeof EventSource === "undefined") {
     return null;
   }
 

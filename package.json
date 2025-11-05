@@ -16,7 +16,8 @@
     "diagnose:browser": "electron scripts/diagnoseBrowser.js",
     "diagnose:browser:fast": "DIAG_TIMEOUT=10000 electron scripts/diagnoseBrowser.js",
     "lint": "npm --prefix frontend run lint",
-    "postinstall": "node scripts/ensure_frontend_deps.mjs"
+    "postinstall": "node scripts/ensure_frontend_deps.mjs",
+    "test:render-loop:dev": "bash scripts/test_render_loop_dev.sh"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

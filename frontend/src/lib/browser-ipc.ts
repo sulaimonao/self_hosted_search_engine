@@ -140,10 +140,12 @@ declare global {
   }
 }
 
+import { isClient } from "@/lib/is-client";
+
 const noop: Unsubscribe = () => undefined;
 
 export function resolveBrowserAPI(): BrowserAPI | undefined {
-  if (typeof window === "undefined") {
+  if (!isClient()) {
     return undefined;
   }
   const candidate = (window as { browserAPI?: BrowserAPI }).browserAPI;

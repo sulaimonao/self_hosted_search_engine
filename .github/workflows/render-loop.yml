@@ -1,0 +1,61 @@
+name: Render Loop smoke test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install frontend deps
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          npx playwright install --with-deps
+
+      - name: Start backend
+        run: |
+          nohup bash -c './scripts/dev_api_fallback.sh' &
+        shell: bash
+
+      - name: Start frontend
+        run: |
+          cd frontend
+          npm run dev:web &
+        shell: bash
+
+      - name: Wait for services
+        run: npx wait-on http://127.0.0.1:3100 tcp:5050
+
+      - name: Run Playwright smoke tests
+        env:
+          PLAYWRIGHT_APP_URL: http://127.0.0.1:3100
+        run: |
+          cd frontend
+          npm run test:render-loop

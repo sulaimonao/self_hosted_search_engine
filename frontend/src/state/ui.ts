@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { isClient } from "@/lib/is-client";
 
 const STORAGE_KEY = "ui.showReasoning";
 
@@ -15,14 +16,14 @@ export const useUIStore = create<UIState>((set) => ({
   showReasoning: false,
   hydrated: false,
   hydrate: () => {
-    if (typeof window === "undefined") {
+    if (!isClient()) {
       return;
     }
     const stored = window.localStorage.getItem(STORAGE_KEY);
     set({ showReasoning: stored === "true", hydrated: true });
   },
   setShowReasoning: (value: boolean) => {
-    if (typeof window !== "undefined") {
+    if (isClient()) {
       window.localStorage.setItem(STORAGE_KEY, value ? "true" : "false");
     }
     set({ showReasoning: value });
