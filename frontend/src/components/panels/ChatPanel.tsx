@@ -37,6 +37,7 @@ import { useAppStore } from "@/state/useAppStore";
 import { useUIStore } from "@/state/ui";
 import { useSafeState } from "@/lib/react-safe";
 import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 
 const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
@@ -154,6 +155,10 @@ const INITIAL_ASSISTANT_GREETING =
 export function ChatPanel() {
   useRenderLoopGuard("ChatPanel");
 
+  // Declare refs first to avoid TDZ when other hooks reference them.
+  const storedModelRef = useRef<string | null>(null);
+  const previousModelRef = useRef<string | null>(null);
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
       id: createId(),
@@ -176,8 +181,8 @@ export function ChatPanel() {
     return resolveChatModelSelection({
       available: inventory?.chatModels ?? [],
       configured: inventory?.configured ?? { primary: null, fallback: null, embedder: null },
-  stored: storedModelRef.current,
-  previous: null,
+      stored: storedModelRef.current,
+      previous: previousModelRef.current,
     });
   }, [inventory?.chatModels, inventory?.configured]);
   const [installing, setInstalling] = useState(false);
@@ -209,7 +214,6 @@ export function ChatPanel() {
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
-  const storedModelRef = useRef<string | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
 
   const navigate = useBrowserNavigation();
@@ -279,11 +283,12 @@ export function ChatPanel() {
 
   useEffect(() => {
     mountedRef.current = true;
+    // Initialize storedModelRef from storage on client only. Do not call setState here
+    // because selectedModel is a pure derivation from refs + inventory.
     if (typeof window !== "undefined") {
-      const stored = window.localStorage.getItem(MODEL_STORAGE_KEY);
+      const stored = safeLocalStorage.get(MODEL_STORAGE_KEY);
       if (stored && stored.trim()) {
         storedModelRef.current = stored.trim();
-        // no setSelectedModel here; selectedModel is derived from storedModelRef
       }
     }
     void handleRefreshInventory();
@@ -1085,12 +1090,17 @@ export function ChatPanel() {
 
   const handleModelChange = useCallback((model: string) => {
     const trimmed = model?.trim() ?? "";
-    storedModelRef.current = trimmed ? trimmed : null;
-    if (typeof window !== "undefined") {
-      if (storedModelRef.current) {
-        window.localStorage.setItem(MODEL_STORAGE_KEY, storedModelRef.current);
-      } else {
-        window.localStorage.removeItem(MODEL_STORAGE_KEY);
+    const next = trimmed ? trimmed : null;
+    // guard: only persist when changed to avoid write-bounce
+    if (next !== storedModelRef.current) {
+      previousModelRef.current = storedModelRef.current;
+      storedModelRef.current = next;
+      if (typeof window !== "undefined") {
+        if (storedModelRef.current) {
+          safeLocalStorage.set(MODEL_STORAGE_KEY, storedModelRef.current);
+        } else {
+          safeLocalStorage.remove(MODEL_STORAGE_KEY);
+        }
       }
     }
     // no setSelectedModel; UI reads derived `selectedModel` from inventory + storedModelRef
