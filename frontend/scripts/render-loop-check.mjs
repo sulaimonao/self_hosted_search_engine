@@ -1,4 +1,5 @@
-const { chromium } = require('playwright');
+import { chromium } from 'playwright';
+import http from 'node:http';
 
 function resolveBaseUrl() {
   const fromEnv = process.env.PLAYWRIGHT_APP_URL || process.env.RENDERER_URL;
@@ -6,15 +7,42 @@ function resolveBaseUrl() {
   return 'http://127.0.0.1:3100';
 }
 
+async function waitForServer(url, timeout = 30000, interval = 500) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    try {
+      await new Promise((res, rej) => {
+        const req = http.get(url, (r) => {
+          r.resume();
+          res();
+        });
+        req.on('error', rej);
+        req.setTimeout(3000, () => req.destroy(new Error('timeout')));
+      });
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, interval));
+    }
+  }
+  return false;
+}
+
 (async () => {
   const baseUrl = resolveBaseUrl();
+  const serverReady = await waitForServer(baseUrl);
+  if (!serverReady) {
+    console.error('Server not ready at', baseUrl);
+    process.exitCode = 4;
+    return;
+  }
+
   const browser = await chromium.launch();
   const page = await browser.newPage();
   const errors = [];
   page.on('console', (msg) => {
     try {
-      if (msg.type() === 'error') errors.push(msg.text());
-    } catch (e) {
+      if (msg.type && msg.type() === 'error') errors.push(msg.text());
+    } catch {
       // ignore
     }
   });
