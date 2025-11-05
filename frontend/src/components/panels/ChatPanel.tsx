@@ -155,8 +155,10 @@ const INITIAL_ASSISTANT_GREETING =
 export function ChatPanel() {
   useRenderLoopGuard("ChatPanel");
 
-  // Declare refs first to avoid TDZ when other hooks reference them.
-  const storedModelRef = useRef<string | null>(null);
+  // storedModel is kept in state so UI updates immediately when selection changes.
+  // previousModelRef remains a ref to avoid triggering re-renders when only used
+  // for selection resolution logic.
+  const [storedModel, setStoredModel] = useState<string | null>(null);
   const previousModelRef = useRef<string | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
@@ -181,9 +183,12 @@ export function ChatPanel() {
     return resolveChatModelSelection({
       available: inventory?.chatModels ?? [],
       configured: inventory?.configured ?? { primary: null, fallback: null, embedder: null },
-      stored: storedModelRef.current,
+      stored: storedModel,
       previous: previousModelRef.current,
     });
+    // intentionally omit storedModel from deps so selection only recalculates
+    // when inventory changes (storedModel is persisted via interactions)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inventory?.chatModels, inventory?.configured]);
   const [installing, setInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState<string | null>(null);
@@ -283,12 +288,12 @@ export function ChatPanel() {
 
   useEffect(() => {
     mountedRef.current = true;
-    // Initialize storedModelRef from storage on client only. Do not call setState here
-    // because selectedModel is a pure derivation from refs + inventory.
+    // Initialize storedModel from storage on client only. Read from safeLocalStorage
+    // and set into state only when available to avoid SSR/TDZ issues.
     if (typeof window !== "undefined") {
       const stored = safeLocalStorage.get(MODEL_STORAGE_KEY);
       if (stored && stored.trim()) {
-        storedModelRef.current = stored.trim();
+        setStoredModel(stored.trim());
       }
     }
     void handleRefreshInventory();
@@ -1092,19 +1097,19 @@ export function ChatPanel() {
     const trimmed = model?.trim() ?? "";
     const next = trimmed ? trimmed : null;
     // guard: only persist when changed to avoid write-bounce
-    if (next !== storedModelRef.current) {
-      previousModelRef.current = storedModelRef.current;
-      storedModelRef.current = next;
+    if (next !== storedModel) {
+      previousModelRef.current = storedModel;
+      setStoredModel(next);
       if (typeof window !== "undefined") {
-        if (storedModelRef.current) {
-          safeLocalStorage.set(MODEL_STORAGE_KEY, storedModelRef.current);
+        if (next) {
+          safeLocalStorage.set(MODEL_STORAGE_KEY, next);
         } else {
           safeLocalStorage.remove(MODEL_STORAGE_KEY);
         }
       }
     }
-    // no setSelectedModel; UI reads derived `selectedModel` from inventory + storedModelRef
-  }, []);
+    // no setSelectedModel; UI reads derived `selectedModel` from inventory + storedModel
+  }, [storedModel]);
 
   const handleInstallModel = useCallback(async () => {
     if (installing) {

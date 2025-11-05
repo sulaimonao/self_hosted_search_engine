@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Set
+from typing import Dict, Iterable, Optional, Set, Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -74,7 +74,37 @@ def run_once(
     if results.errors:
         for error in results.errors:
             print(f"[diag:error] {error}", file=sys.stderr)
-    return exit_code
+    # Extra runtime log checks: scan frontend logs for TDZ or React update-depth errors
+    def _scan_frontend_logs() -> ExitCode:
+        patterns = [
+            (r"Cannot access '[^']+' before initialization", "TDZ (Temporal Dead Zone) error"),
+            (r"Maximum update depth exceeded", "React maximum update depth error"),
+        ]
+        candidates = [
+            ROOT / "logs" / "frontend.log",
+            ROOT / "diagnostics" / "run_latest" / "frontend.log",
+            ROOT / "frontend" / ".next" / "trace.txt",
+        ]
+        found_any = False
+        for path in candidates:
+            try:
+                text = path.read_text(errors="ignore")
+            except Exception:
+                continue
+            if not text:
+                continue
+            for regex, desc in patterns:
+                import re
+
+                for m in re.finditer(regex, text):
+                    loc = m.start()
+                    snippet = text[max(0, loc - 80) : min(len(text), loc + 80)].strip()
+                    print(f"[diag:frontend-runtime] {desc} in {path}: {m.group(0)}", file=sys.stderr)
+                    print(snippet, file=sys.stderr)
+                    found_any = True
+        return ExitCode.ERROR if found_any else exit_code
+
+    return _scan_frontend_logs()
 
 
 def _exit_status(code: ExitCode) -> int:
@@ -90,7 +120,7 @@ class DiagnosticsTimeout(RuntimeError):
 
 
 @contextlib.contextmanager
-def _enforce_timeout(seconds: Optional[int]) -> None:
+def _enforce_timeout(seconds: Optional[int]) -> Iterator[None]:
     if not seconds:
         yield
         return
