@@ -218,7 +218,7 @@ export default function BrowserPanel(): JSX.Element {
   const bootstrappedRef = useRef(false);
 
   // We intentionally exclude `tabs` to avoid a self-triggering bootstrap loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (bootstrappedRef.current) return;
@@ -242,6 +242,7 @@ export default function BrowserPanel(): JSX.Element {
     }
     // intentionally do not include `tabs` in deps to avoid self-trigger; rely on the ref
   }, [globalShadowDefault, setTabs]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const setTabState = useCallback(
     (tabId: string, updater: (tab: BrowserTab) => BrowserTab) => {

@@ -158,7 +158,7 @@ export default function ControlCenterPage() {
   // replace existing effect that depended on `activeTab` and `sections` with a guarded auto-set
   const lastAutoTabRef = useRef<string | null>(null);
   // Driven by `sections` only; setting `activeTab` here would create a loop if included.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     // determine desired tab based on sections alone
     let target = activeTab;
@@ -174,6 +174,7 @@ export default function ControlCenterPage() {
     }
     // intentionally only depend on `sections` so that changes to sections drive this effect
   }, [sections]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const agentState = agentConfig ?? AGENT_BROWSER_DEFAULTS;
   const agentSource =
