@@ -354,18 +354,19 @@ export function ChatPanel() {
     }
   }, [setContextSummary, usePageContext]);
 
+  const lastResolvedModel = useRef<string | null>(null);
   useEffect(() => {
     const resolved = resolveChatModelSelection({
       available: inventory?.chatModels ?? [],
       configured: inventory?.configured ?? { primary: null, fallback: null, embedder: null },
       stored: storedModelRef.current,
-      previous: selectedModel,
     });
-    if (resolved !== selectedModel) {
+    if (resolved !== lastResolvedModel.current) {
+      lastResolvedModel.current = resolved;
       setSelectedModel(resolved);
       storedModelRef.current = resolved;
     }
-  }, [inventory, selectedModel]);
+  }, [inventory?.chatModels, inventory?.configured]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

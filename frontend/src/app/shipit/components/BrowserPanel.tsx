@@ -214,8 +214,14 @@ export default function BrowserPanel(): JSX.Element {
       });
   }, []);
 
+  // prevent repeated bootstrap writes by tracking if we've already created the initial tab
+  const bootstrappedRef = useRef(false);
+
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (bootstrappedRef.current) return;
     if (tabs.length === 0) {
+      bootstrappedRef.current = true;
       const tabId = createId();
       const initialTab: BrowserTab = {
         id: tabId,
@@ -232,7 +238,8 @@ export default function BrowserPanel(): JSX.Element {
       setTabs([initialTab]);
       setActiveTabId(tabId);
     }
-  }, [tabs.length, globalShadowDefault]);
+    // intentionally do not include `tabs` in deps to avoid self-trigger; rely on the ref
+  }, [globalShadowDefault, setTabs]);
 
   const setTabState = useCallback(
     (tabId: string, updater: (tab: BrowserTab) => BrowserTab) => {

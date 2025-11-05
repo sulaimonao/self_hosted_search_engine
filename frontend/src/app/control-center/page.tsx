@@ -155,17 +155,23 @@ export default function ControlCenterPage() {
   }, [schemaSections]);
   const [activeTab, setActiveTab] = useState(() => sections[0]?.id ?? RUNTIME_TAB_ID);
 
+  // replace existing effect that depended on `activeTab` and `sections` with a guarded auto-set
+  const lastAutoTabRef = useRef<string | null>(null);
   useEffect(() => {
+    // determine desired tab based on sections alone
+    let target = activeTab;
     if (sections.length === 0) {
-      if (activeTab !== RUNTIME_TAB_ID) {
-        setActiveTab(RUNTIME_TAB_ID);
-      }
-      return;
+      target = RUNTIME_TAB_ID;
+    } else if (!sections.some((section) => section.id === activeTab)) {
+      target = sections[0]?.id ?? RUNTIME_TAB_ID;
     }
-    if (!sections.some((section) => section.id === activeTab)) {
-      setActiveTab(sections[0]?.id ?? RUNTIME_TAB_ID);
+
+    if (target !== activeTab && target !== lastAutoTabRef.current) {
+      lastAutoTabRef.current = target;
+      setActiveTab(target);
     }
-  }, [activeTab, sections]);
+    // intentionally only depend on `sections` so that changes to sections drive this effect
+  }, [sections]);
 
   const agentState = agentConfig ?? AGENT_BROWSER_DEFAULTS;
   const agentSource =
