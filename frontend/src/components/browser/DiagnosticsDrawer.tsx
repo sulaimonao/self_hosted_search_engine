@@ -786,8 +786,10 @@ export function DiagnosticsDrawer({
       }
       await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
       setError(null);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  setCopied(true);
+  // one-shot UX timer: intentionally short to provide quick feedback to users
+  // eslint-disable-next-line unicorn/no-set-timeout
+  setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);

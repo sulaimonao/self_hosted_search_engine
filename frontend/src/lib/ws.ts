@@ -19,6 +19,7 @@ export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable
   let source: EventSource | null = null;
   let attempt = 0;
   let closed = false;
+  let backoffMs = 1000;
 
   const attach = (stream: EventSource) => {
     stream.onmessage = (event) => {
@@ -41,11 +42,13 @@ export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable
         connectNext();
       } else {
         attempt = 0;
+        // exponential backoff for reconnect attempts (1s,2s,4s,.. capped at 30s)
         setTimeout(() => {
           if (!closed) {
+            backoffMs = Math.min(30000, backoffMs * 2);
             connectNext();
           }
-        }, 1000);
+        }, backoffMs);
       }
     };
   };
@@ -70,9 +73,10 @@ export function connectEvents(onEvent: (event: CopilotEvent) => void): Closeable
         attempt = 0;
         setTimeout(() => {
           if (!closed) {
+            backoffMs = Math.min(30000, backoffMs * 2);
             connectNext();
           }
-        }, 1000);
+        }, backoffMs);
       }
     }
   };

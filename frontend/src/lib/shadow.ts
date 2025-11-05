@@ -63,5 +63,5 @@ export function requestShadowCrawl(
     }).catch((error) => {
       console.warn('shadow crawl request failed', error);
     });
-  }, 600);
+  }, 5000);
 }

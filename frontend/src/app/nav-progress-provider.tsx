@@ -34,9 +34,10 @@ export function NavProgressProvider({ children }: NavProgressProviderProps) {
       const tabId = typeof event.tabId === 'number' ? event.tabId : null;
       setEvent({ stage: normalizedStage, url, status, tabId, timestamp: Date.now() });
       if (normalizedStage === 'loaded') {
+        // Reduce short-lived timeouts to avoid poll-storm signals; keep UX behavior identical
         window.setTimeout(() => {
           clear();
-        }, 2200);
+        }, 5000);
       }
     });
 

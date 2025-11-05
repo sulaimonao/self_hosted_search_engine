@@ -57,9 +57,10 @@ export function useUrlBinding(): void {
     syncingRef.current = true;
     const href = normalizedDesired ? `${BROWSER_PATH}?url=${encodeURIComponent(normalizedDesired)}` : BROWSER_PATH;
     replace(href, { scroll: false });
+    // Debounce router->store sync work to avoid tight 100ms feedback loops during rapid updates
     const id = window.setTimeout(() => {
       syncingRef.current = false;
-    }, 100);
+    }, 500);
     return () => {
       window.clearTimeout(id);
     };
