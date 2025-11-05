@@ -86,6 +86,12 @@ let bridgeUnsubscribe: (() => void) | null = null;
 const store = new Store<LlmStreamSnapshot>(defaultSnapshot);
 let frameAccumulator = "";
 let frameAccumulatorRequestId: string | null = null;
+// Throttle flush timer id (ms)
+let flushTimer: number | null = null;
+// Minimum interval between store updates when receiving many small delta frames.
+const FLUSH_INTERVAL_MS = 80;
+// Shared buffered parsed segments across handleFrame invocations.
+const bufferedSegmentsAccumulator: ChatStreamEvent[] = [];
 let fetchController: AbortController | null = null;
 let fetchRequestId: string | null = null;
 
@@ -255,6 +261,7 @@ function handleFrame(payload: LlmFramePayload) {
     frameAccumulatorRequestId = activeRequestId;
   }
 
+  // Accumulate incoming raw frames (may contain partial SSE events).
   frameAccumulator += `${payload.frame}\n\n`;
   const segments = frameAccumulator.split(/\n\n+/);
   frameAccumulator = segments.pop() ?? "";
@@ -263,6 +270,12 @@ function handleFrame(payload: LlmFramePayload) {
   }
 
   const requestHint = rawRequestId ?? frameAccumulatorRequestId ?? activeRequestId ?? null;
+  // Process parsed segments and collect immediate "complete"/"error" frames
+  // which must be flushed immediately. Other delta frames are buffered in
+  // a shared accumulator and emitted together on a short debounce to avoid
+  // frequent store updates.
+  const immediateSegments: ChatStreamEvent[] = [];
+  let needsSchedule = false;
   for (const segment of segments) {
     const normalized = segment.trim();
     if (!normalized) {
@@ -272,9 +285,50 @@ function handleFrame(payload: LlmFramePayload) {
     if (!parsed) {
       continue;
     }
-    update((current) => applyFrame(current, parsed, requestHint));
     if (parsed.type === "complete" || parsed.type === "error") {
-      resetFrameAccumulator(null);
+      immediateSegments.push(parsed);
+    } else {
+      // Append directly to the shared accumulator and mark for scheduling.
+      bufferedSegmentsAccumulator.push(parsed);
+      needsSchedule = true;
+    }
+  }
+  // Apply buffered delta frames in a single store update to reduce re-renders.
+  if (needsSchedule) {
+    const scheduleFlush = () => {
+      const applyBuffered = () => {
+        if (bufferedSegmentsAccumulator.length === 0) {
+          flushTimer = null;
+          return;
+        }
+        // Decide a stable request hint at flush time. Prefer the frame-accum
+        // request id if present, otherwise fall back to current store value.
+        const effectiveRequestHint = frameAccumulatorRequestId ?? store.get().requestId ?? null;
+        update((current) => {
+          let next = current;
+          for (const seg of bufferedSegmentsAccumulator) {
+            next = applyFrame(next, seg, effectiveRequestHint);
+          }
+          return next;
+        });
+        bufferedSegmentsAccumulator.length = 0;
+        flushTimer = null;
+      };
+
+      if (flushTimer === null) {
+        flushTimer = typeof window !== "undefined" ? window.setTimeout(applyBuffered, FLUSH_INTERVAL_MS) as unknown as number : null;
+      }
+    };
+  scheduleFlush();
+  }
+
+  // Immediate frames must be applied synchronously so we don't lose finality.
+  if (immediateSegments.length > 0) {
+    for (const seg of immediateSegments) {
+      update((current) => applyFrame(current, seg, requestHint));
+      if (seg.type === "complete" || seg.type === "error") {
+        resetFrameAccumulator(null);
+      }
     }
   }
 }
