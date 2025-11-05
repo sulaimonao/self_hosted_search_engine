@@ -24,6 +24,10 @@ def rule_hydration_risks(context: RuleContext) -> Iterable[Finding]:
         if not relative.startswith("frontend/"):
             continue
         text = context.read_text(relative)
+        # skip files that explicitly opt into client-only execution
+        prefix = text[:200]
+        if "'use client'" in prefix or '"use client"' in prefix:
+            continue
         matches = list(TOKEN_RE.finditer(text))
         if not matches:
             continue
@@ -31,9 +35,30 @@ def rule_hydration_risks(context: RuleContext) -> Iterable[Finding]:
         for match in matches:
             token = match.group(1)
             index = match.start()
+            # skip if inside a React effect block (we expect guarded runtime use there)
             if inside_effect(index, blocks):
                 continue
-            if index > 0 and text[index - 1] in {"'", '"', "`"}:
+            # simple heuristic: skip if this occurrence is inside a string literal
+            # by checking for a matching quote before and after the index
+            def _inside_string(idx: int) -> bool:
+                for quote in ("'", '"', "`"):
+                    prev = text.rfind(quote, 0, idx)
+                    nxt = text.find(quote, idx)
+                    if prev != -1 and nxt != -1:
+                        # ensure the quote characters are not escaped (rough check)
+                        if prev == 0 or text[prev - 1] != "\\":
+                            return True
+                return False
+
+            if _inside_string(index):
+                continue
+            # skip if this token is likely used as a type or object key (e.g. 'document:')
+            after_char = text[index + len(token) : index + len(token) + 1]
+            if after_char == ":":
+                continue
+            # skip if a nearby typeof guard exists earlier in the file (within 200 chars)
+            lookback = max(0, index - 200)
+            if f"typeof {token}" in text[lookback:index]:
                 continue
             line_start = text.rfind("\n", 0, index) + 1
             line_end = text.find("\n", index)

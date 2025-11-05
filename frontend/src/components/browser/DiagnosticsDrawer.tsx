@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { BrowserAPI, BrowserDiagnosticsReport } from "@/lib/browser-ipc";
 import type { Verb } from "@/autopilot/executor";
+import type { DirectiveStep } from "@/lib/io/self_heal";
 import { incidentBus, type BrowserIncident } from "@/diagnostics/incident-bus";
 import { fromDirective, toIncident, type DirectivePayload } from "@/lib/io/self_heal";
 import { api } from "@/lib/api";
@@ -788,8 +789,8 @@ export function DiagnosticsDrawer({
       setError(null);
   setCopied(true);
   // one-shot UX timer: intentionally short to provide quick feedback to users
-  // eslint-disable-next-line unicorn/no-set-timeout
-  setTimeout(() => setCopied(false), 2000);
+  // one-shot UX timer: intentionally short to provide quick feedback to users
+  setTimeout(() => setCopied(false), 3000);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -988,10 +989,10 @@ export function DiagnosticsDrawer({
                       <span className="font-medium text-foreground">Banner:</span> {incidentSnapshot.symptoms.bannerText || "None"}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">Console errors:</span> {incidentSnapshot.symptoms.consoleErrors.length}
+                      <span className="font-medium text-foreground">Console errors:</span> {(incidentSnapshot.symptoms?.consoleErrors?.length) ?? 0}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">Network errors:</span> {incidentSnapshot.symptoms.networkErrors.length}
+                      <span className="font-medium text-foreground">Network errors:</span> {(incidentSnapshot.symptoms?.networkErrors?.length) ?? 0}
                     </div>
                   </div>
                   {incidentSnapshot.domSnippet ? (
@@ -1052,7 +1053,7 @@ export function DiagnosticsDrawer({
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button size="xs" variant="outline" onClick={() => loadRulepack()} disabled={rulesLoading}>
+                      <Button size="sm" variant="outline" onClick={() => loadRulepack()} disabled={rulesLoading}>
                         {rulesLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
                         Refresh
                       </Button>
@@ -1106,7 +1107,7 @@ export function DiagnosticsDrawer({
                                   id={`switch-${rule.id}`}
                                 />
                                 <Button
-                                  size="xs"
+                                  size="sm"
                                   variant="ghost"
                                   disabled={isFirst}
                                   onClick={() => reorderRule(rule.id, "up")}
@@ -1114,7 +1115,7 @@ export function DiagnosticsDrawer({
                                   Up
                                 </Button>
                                 <Button
-                                  size="xs"
+                                  size="sm"
                                   variant="ghost"
                                   disabled={isLast}
                                   onClick={() => reorderRule(rule.id, "down")}
@@ -1132,7 +1133,7 @@ export function DiagnosticsDrawer({
                 <div className="flex-1 space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold">Episodes</h3>
-                    <Button size="xs" variant="outline" onClick={loadEpisodes} disabled={episodesLoading}>
+                    <Button size="sm" variant="outline" onClick={loadEpisodes} disabled={episodesLoading}>
                       {episodesLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
                       Refresh
                     </Button>
@@ -1159,7 +1160,7 @@ export function DiagnosticsDrawer({
                               </p>
                             ) : null}
                             <div className="flex justify-end">
-                              <Button size="xs" onClick={() => promoteEpisode(episode.id)}>
+                              <Button size="sm" onClick={() => promoteEpisode(episode.id)}>
                                 Promote to rule
                               </Button>
                             </div>

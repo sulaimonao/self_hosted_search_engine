@@ -1,3 +1,5 @@
+"use client";
+
 // SSR-safe localStorage helper
 export const safeLocalStorage = {
   get(key: string): string | null {

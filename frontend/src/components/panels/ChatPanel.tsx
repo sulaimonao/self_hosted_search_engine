@@ -160,6 +160,9 @@ export function ChatPanel() {
   // for selection resolution logic.
   const [storedModel, setStoredModel] = useState<string | null>(null);
   const previousModelRef = useRef<string | null>(null);
+  // ref mirror of storedModel used for stable identity checks and to avoid
+  // including the state value in effect dependencies when unnecessary.
+  const storedModelRef = useRef<string | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
@@ -186,10 +189,14 @@ export function ChatPanel() {
       stored: storedModel,
       previous: previousModelRef.current,
     });
-    // intentionally omit storedModel from deps so selection only recalculates
-    // when inventory changes (storedModel is persisted via interactions)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inventory?.chatModels, inventory?.configured]);
+  // Depend explicitly on the small, stable pieces we need so React doesn't
+  // re-run this memo on unrelated inventory object identity changes.
+  }, [inventory?.chatModels, inventory?.configured, storedModel]);
+
+  // keep a ref mirror of storedModel for identity checks in effects/handlers
+  useEffect(() => {
+    storedModelRef.current = storedModel;
+  }, [storedModel]);
   const [installing, setInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState<string | null>(null);
   const [serverTime, setServerTime] = useState<MetaTimeResponse | null>(null);

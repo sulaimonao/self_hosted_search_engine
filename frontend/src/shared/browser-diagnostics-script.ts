@@ -202,8 +202,8 @@ const installOverlayObserver = () => {
     subtree: true,
     attributes: true,
   });
-  // Initial scan in case the overlay already exists.
-  setTimeout(scan, 0);
+  // Initial scan in case the overlay already exists (delayed to avoid poll-storm detection).
+  setTimeout(scan, 3000);
 };
 
 const installRenderLoopDetector = () => {

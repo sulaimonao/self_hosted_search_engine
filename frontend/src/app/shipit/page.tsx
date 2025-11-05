@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 
 import HeaderBar from "./components/HeaderBar";
 import FirstRunWizard from "./components/FirstRunWizard";
@@ -31,20 +32,14 @@ export default function Page(): JSX.Element {
   }, [setFeature]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const stored = window.localStorage.getItem("shipit:autopilot");
+    const stored = safeLocalStorage.get("shipit:autopilot");
     if (stored !== null) {
       setAutopilot(stored === "1");
     }
   }, [setAutopilot]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem("shipit:autopilot", autopilot ? "1" : "0");
+    safeLocalStorage.set("shipit:autopilot", autopilot ? "1" : "0");
   }, [autopilot]);
 
   return (

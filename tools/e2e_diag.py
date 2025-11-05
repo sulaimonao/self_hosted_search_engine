@@ -83,6 +83,8 @@ def run_once(
         candidates = [
             ROOT / "logs" / "frontend.log",
             ROOT / "diagnostics" / "run_latest" / "frontend.log",
+            # include any run_* diagnostics directories from prior runs
+            *sorted(ROOT.glob("diagnostics/run_*/frontend.log")),
             ROOT / "frontend" / ".next" / "trace.txt",
         ]
         found_any = False

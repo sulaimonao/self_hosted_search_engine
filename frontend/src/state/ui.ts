@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { isClient } from "@/lib/is-client";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 
 const STORAGE_KEY = "ui.showReasoning";
 
@@ -19,12 +20,12 @@ export const useUIStore = create<UIState>((set) => ({
     if (!isClient()) {
       return;
     }
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = safeLocalStorage.get(STORAGE_KEY);
     set({ showReasoning: stored === "true", hydrated: true });
   },
   setShowReasoning: (value: boolean) => {
     if (isClient()) {
-      window.localStorage.setItem(STORAGE_KEY, value ? "true" : "false");
+      safeLocalStorage.set(STORAGE_KEY, value ? "true" : "false");
     }
     set({ showReasoning: value });
   },

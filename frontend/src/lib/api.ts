@@ -1568,7 +1568,7 @@ export function subscribeJob(jobId: string, handlers: JobSubscriptionHandlers) {
           handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+  await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     };
     poll();

@@ -38,7 +38,7 @@ import type {
 import {
   fetchConfig,
   fetchConfigSchema,
-  fetchDiagnosticsSnapshot,
+  getDiagnosticsSnapshot,
   getHealth,
   requestModelInstall,
   triggerRepair,
@@ -104,7 +104,7 @@ export default function ControlCenterPage() {
   });
   const { data: diagnostics, mutate: mutateDiagnostics } = useSWR(
     "runtime-diagnostics",
-    fetchDiagnosticsSnapshot,
+    getDiagnosticsSnapshot,
   );
   const { data: agentConfig, mutate: mutateAgentConfig } = useSWR<AgentBrowserConfigPayload>(
     "agent-browser-config",
@@ -128,11 +128,10 @@ export default function ControlCenterPage() {
   const [modelsMessage, setModelsMessage] = useState<string | null>(null);
   const [runtimeDiagnosticsMessage, setRuntimeDiagnosticsMessage] = useState<string | null>(null);
   const { events: renderLoopEvents, clear: clearRenderLoopEvents } = useRenderLoopDiagnostics(
-    (state) => ({
+    useShallow((state) => ({
       events: state.events,
       clear: state.clear,
-    }),
-    useShallow,
+    })),
   );
   const { enabled: renderLoopGuardEnabled } = useRenderLoopGuardState();
   const handleBackToBrowser = useCallback(() => {
@@ -180,13 +179,22 @@ export default function ControlCenterPage() {
   const agentSource =
     typeof agentState["_source"] === "string" ? (agentState["_source"] as string) : null;
   const agentConfigUnavailable = Boolean(agentSource && agentSource.startsWith("fallback"));
-  const agentEnabled = coerceBoolean(
-    agentState.AGENT_BROWSER_ENABLED ?? agentState.enabled,
-    coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_ENABLED, false),
+  const agentEnabled = useMemo(
+    () =>
+      coerceBoolean(
+        agentState.AGENT_BROWSER_ENABLED ?? agentState.enabled,
+        coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_ENABLED, false),
+      ),
+    [agentState.AGENT_BROWSER_ENABLED, agentState.enabled],
   );
-  const agentHeadless = coerceBoolean(
-    agentState.AGENT_BROWSER_HEADLESS,
-    coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_HEADLESS, true),
+
+  const agentHeadless = useMemo(
+    () =>
+      coerceBoolean(
+        agentState.AGENT_BROWSER_HEADLESS,
+        coerceBoolean(AGENT_BROWSER_DEFAULTS.AGENT_BROWSER_HEADLESS, true),
+      ),
+    [agentState.AGENT_BROWSER_HEADLESS],
   );
   const agentDefaultTimeoutValue =
     agentState.AGENT_BROWSER_DEFAULT_TIMEOUT_S ??
@@ -583,7 +591,11 @@ export default function ControlCenterPage() {
           <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-3">
             <div className="rounded border p-3">
               <Label className="text-[11px] uppercase text-muted-foreground">Python</Label>
-              <p className="font-semibold text-foreground">{environment?.python ?? "checking"}</p>
+              <p className="font-semibold text-foreground">
+                {typeof environment?.python === "string"
+                  ? environment.python
+                  : String(environment?.python ?? "checking")}
+              </p>
             </div>
             <div className="rounded border p-3">
               <Label className="text-[11px] uppercase text-muted-foreground">Ollama CLI</Label>
@@ -816,7 +828,7 @@ export default function ControlCenterPage() {
                           </span>
                         ) : (
                           <Button
-                            size="xs"
+                            size="sm"
                             onClick={() => void handleInstallOllamaModel(name)}
                             disabled={inFlight}
                           >

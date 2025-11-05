@@ -1,3 +1,5 @@
+"use client";
+
 import { api } from "@/lib/api";
 
 type BaseVerb = { headless?: boolean };

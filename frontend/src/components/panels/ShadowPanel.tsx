@@ -40,7 +40,7 @@ export function ShadowPanel() {
     }
 
     poll();
-    const interval = setInterval(poll, 2000);
+  const interval = setInterval(poll, 3000);
     return () => {
       cancelled = true;
       clearInterval(interval);

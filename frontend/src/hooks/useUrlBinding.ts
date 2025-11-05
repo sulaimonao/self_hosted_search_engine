@@ -60,7 +60,7 @@ export function useUrlBinding(): void {
     // Debounce router->store sync work to avoid tight 100ms feedback loops during rapid updates
     const id = window.setTimeout(() => {
       syncingRef.current = false;
-    }, 500);
+    }, 3000);
     return () => {
       window.clearTimeout(id);
     };

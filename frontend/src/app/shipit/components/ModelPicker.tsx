@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 import useSWR from "swr";
 
 import { fetchLlmHealth, fetchLlmModels } from "@/app/shipit/lib/api";
@@ -23,10 +24,7 @@ export default function ModelPicker(): JSX.Element {
   const { data: models, error: modelsError } = useSWR("shipit:llm-models", () => fetchLlmModels());
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const stored = window.localStorage.getItem(MODEL_STORAGE_KEY);
+    const stored = safeLocalStorage.get(MODEL_STORAGE_KEY);
     if (stored && stored.trim()) {
       setSelectedModel(stored.trim());
     }
@@ -58,13 +56,10 @@ export default function ModelPicker(): JSX.Element {
   }, [health, healthError, modelsError, setFeature]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
     if (selectedModel) {
-      window.localStorage.setItem(MODEL_STORAGE_KEY, selectedModel);
+      safeLocalStorage.set(MODEL_STORAGE_KEY, selectedModel);
     } else {
-      window.localStorage.removeItem(MODEL_STORAGE_KEY);
+      safeLocalStorage.remove(MODEL_STORAGE_KEY);
     }
   }, [selectedModel]);
 

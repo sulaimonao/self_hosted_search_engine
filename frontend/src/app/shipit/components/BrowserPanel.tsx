@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 import {
   Download,
   Globe,
@@ -111,12 +112,12 @@ function loadSessionId(): string {
   if (typeof window === "undefined") {
     return createId();
   }
-  const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  const existing = safeLocalStorage.get(SESSION_STORAGE_KEY);
   if (existing && existing.trim()) {
     return existing.trim();
   }
   const created = createId();
-  window.localStorage.setItem(SESSION_STORAGE_KEY, created);
+  safeLocalStorage.set(SESSION_STORAGE_KEY, created);
   return created;
 }
 
@@ -154,9 +155,8 @@ export default function BrowserPanel(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
     try {
-      const stored = window.localStorage.getItem(TABS_STORAGE_KEY);
+      const stored = safeLocalStorage.get(TABS_STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as BrowserTab[];
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -168,7 +168,7 @@ export default function BrowserPanel(): JSX.Element {
       setTabs([]);
     }
     try {
-      const storedHistory = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+      const storedHistory = safeLocalStorage.get(HISTORY_STORAGE_KEY);
       if (storedHistory) {
         const parsed = JSON.parse(storedHistory) as HistoryEntry[];
         if (Array.isArray(parsed)) {
@@ -179,7 +179,7 @@ export default function BrowserPanel(): JSX.Element {
       setHistory([]);
     }
     try {
-      const storedBookmarks = window.localStorage.getItem(BOOKMARKS_STORAGE_KEY);
+      const storedBookmarks = safeLocalStorage.get(BOOKMARKS_STORAGE_KEY);
       if (storedBookmarks) {
         const parsed = JSON.parse(storedBookmarks) as BookmarkEntry[];
         if (Array.isArray(parsed)) {
@@ -192,18 +192,15 @@ export default function BrowserPanel(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(tabs));
+  safeLocalStorage.set(TABS_STORAGE_KEY, JSON.stringify(tabs));
   }, [tabs]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+  safeLocalStorage.set(HISTORY_STORAGE_KEY, JSON.stringify(history));
   }, [history]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(bookmarks));
+  safeLocalStorage.set(BOOKMARKS_STORAGE_KEY, JSON.stringify(bookmarks));
   }, [bookmarks]);
 
   useEffect(() => {

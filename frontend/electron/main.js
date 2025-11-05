@@ -246,13 +246,13 @@ function attachNavigationHandlers(window, view, initialUrl) {
       return;
     }
     const retry = typeof failingUrl === 'string' && failingUrl.trim().length > 0 ? failingUrl : fallbackUrl;
-    setTimeout(() => {
+  setTimeout(() => {
       if (!view.webContents.isDestroyed()) {
         view.webContents.loadURL(retry).catch(() => {
           // Ignore reload failures, the banner in renderer will surface state.
         });
       }
-    }, 800);
+  }, 3000);
   });
 
   view.webContents.on('did-navigate', (_event, url) => {
