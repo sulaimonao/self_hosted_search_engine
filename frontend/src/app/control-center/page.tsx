@@ -48,6 +48,7 @@ import type { ConfigFieldOption, ConfigSchema, RuntimeConfig, HealthSnapshot } f
 import { useSafeNavigate } from "@/lib/useSafeNavigate";
 import { useRenderLoopGuardState } from "@/lib/renderLoopContext";
 import { useRenderLoopDiagnostics } from "@/state/useRenderLoopDiagnostics";
+import { safeLocalStorage } from "@/utils/isomorphicStorage";
 
 function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigFieldOption) {
   const raw = config?.[field.key];
@@ -450,6 +451,67 @@ export default function ControlCenterPage() {
     }
     return (
       <div className="space-y-4">
+                <Card>
+                  <div className="p-4">
+                    <h3 className="text-sm font-semibold">Chat</h3>
+                    <p className="text-xs text-muted-foreground">Renderer and streaming throttle settings for the chat UI.</p>
+                    <div className="mt-3 space-y-2">
+                      <div>
+                        <Label>Renderer</Label>
+                        <div className="mt-2 flex items-center gap-4">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="chat-renderer"
+                              defaultChecked
+                              onChange={() => {
+                                // prefer server config when available
+                                if (typeof updateConfig === "function") {
+                                  void updateConfig({ "chat.renderer": "useChat" }).then(() => mutateConfig?.());
+                                } else {
+                                  safeLocalStorage.set("chat:renderer", "useChat");
+                                }
+                              }}
+                            />
+                            <span className="text-[13px]">useChat (recommended)</span>
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="chat-renderer"
+                              onChange={() => {
+                                if (typeof updateConfig === "function") {
+                                  void updateConfig({ "chat.renderer": "manual" }).then(() => mutateConfig?.());
+                                } else {
+                                  safeLocalStorage.set("chat:renderer", "manual");
+                                }
+                              }}
+                            />
+                            <span className="text-[13px]">Manual (buffered)</span>
+                          </label>
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Streaming throttle (ms)</Label>
+                        <div className="mt-2">
+                          <Input
+                            type="number"
+                            defaultValue={String((config && config["chat.throttleMs"]) ?? "50")}
+                            onBlur={(e) => {
+                              const v = Number.parseInt(e.currentTarget.value || "50", 10) || 50;
+                              if (typeof updateConfig === "function") {
+                                void updateConfig({ "chat.throttleMs": v }).then(() => mutateConfig?.());
+                              } else {
+                                safeLocalStorage.set("chat:throttleMs", String(v));
+                              }
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">Lower values update more frequently; recommended ≥ 50ms.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
         {section.fields.map((field) => (
           <div key={field.key}>{renderField(field)}</div>
         ))}

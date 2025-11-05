@@ -17,6 +17,7 @@ import { UsePageContextToggle } from "@/components/UsePageContextToggle";
 import { ReasoningToggle } from "@/components/ReasoningToggle";
 import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 import { useLlmStream } from "@/hooks/useLlmStream";
+import dynamic from "next/dynamic";
 import { incidentBus } from "@/diagnostics/incident-bus";
 import {
   autopullModels,
@@ -202,6 +203,15 @@ export function ChatPanel() {
   const [serverTime, setServerTime] = useState<MetaTimeResponse | null>(null);
   const [serverTimeError, setServerTimeError] = useState<string | null>(null);
   const [usePageContext, setUsePageContext] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [rendererMode, _setRendererMode] = useState<"useChat" | "manual">(() => {
+    try {
+      const stored = typeof window !== "undefined" ? safeLocalStorage.get("chat:renderer") : null;
+      return stored === "manual" ? "manual" : "useChat";
+    } catch {
+      return "useChat";
+    }
+  });
   const [contextSummary, setContextSummary] = useSafeState<{
     url?: string | null;
     selectionWordCount?: number | null;
@@ -482,6 +492,8 @@ export function ChatPanel() {
     AUTOPULL_FALLBACK_CANDIDATES.forEach((candidate) => unique.add(candidate));
     return Array.from(unique).filter((candidate) => candidate && candidate.trim().length > 0);
   }, [inventory]);
+
+  const ChatPanelUseChat = useMemo(() => dynamic(() => import("@/components/panels/ChatPanelUseChat"), { ssr: false }), []);
 
   // Local narrow type for rendering autopilot steps with optional props.
   type StepWithOptional = Verb & {
@@ -1166,6 +1178,10 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
+      {rendererMode === "useChat" ? (
+        // Render the useChat-backed panel (client-only dynamic import)
+        <ChatPanelUseChat inventory={inventory} selectedModel={selectedModel} threadId={threadId} />
+      ) : null}
       <CopilotHeader
         chatModels={inventory?.chatModels ?? []}
         modelOptions={modelOptions}

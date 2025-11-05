@@ -106,7 +106,38 @@ def run_once(
                     found_any = True
         return ExitCode.ERROR if found_any else exit_code
 
+    # If smoke checks requested, run a streaming probe to exercise the chat stack.
+    if smoke:
+        _run_stream_probe()
+        # give the app a moment to flush logs
+        time.sleep(1.0)
     return _scan_frontend_logs()
+
+
+def _run_stream_probe() -> None:
+    """Send a one-message streaming probe to the local chat API to surface runtime issues."""
+    try:
+        import requests
+
+        url = "http://127.0.0.1:3100/api/chat"
+        payload = {"model": "gpt-oss", "messages": [{"role": "user", "content": "Hello from diag probe"}], "stream": True}
+        # fire-and-forget: attempt to read a small portion then close
+        resp = requests.post(url, json=payload, stream=True, timeout=5)
+        try:
+            # read a short chunk to ensure streaming started
+            for i, chunk in enumerate(resp.iter_content(chunk_size=1024)):
+                if not chunk:
+                    break
+                if i >= 2:
+                    break
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    except Exception:
+        # best-effort; don't fail the diagnostics setup if probe can't run
+        return
 
 
 def _exit_status(code: ExitCode) -> int:
