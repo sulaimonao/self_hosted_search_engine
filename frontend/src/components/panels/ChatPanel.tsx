@@ -466,6 +466,13 @@ export function ChatPanel() {
     return Array.from(unique).filter((candidate) => candidate && candidate.trim().length > 0);
   }, [inventory]);
 
+  // Local narrow type for rendering autopilot steps with optional props.
+  type StepWithOptional = Verb & {
+    selector?: string;
+    text?: string;
+    url?: string;
+  };
+
   const llmReachable = inventory ? Boolean(inventory.reachable) : true;
   const chatModelsAvailable = inventory ? inventory.chatModels.length > 0 : true;
 
@@ -1311,10 +1318,14 @@ export function ChatPanel() {
                                       <li key={`${message.id}:directive:${index}`} className="leading-relaxed">
                                         <span className="font-medium text-foreground">{step.type}</span>
                                         {step.headless ? <span className="ml-1 text-muted-foreground">(headless)</span> : null}
-                                        {step.selector ? <span className="ml-1 text-muted-foreground">{step.selector}</span> : null}
-                                        {step.text ? <span className="ml-1 text-muted-foreground">“{step.text}”</span> : null}
-                                        {step.url ? (
-                                          <span className="ml-1 truncate text-muted-foreground">{step.url}</span>
+                                        {'selector' in step && step.selector ? (
+                                          <span className="ml-1 text-muted-foreground">{(step as StepWithOptional).selector}</span>
+                                        ) : null}
+                                        {'text' in step && step.text ? (
+                                          <span className="ml-1 text-muted-foreground">“{(step as StepWithOptional).text}”</span>
+                                        ) : null}
+                                        {'url' in step && step.url ? (
+                                          <span className="ml-1 truncate text-muted-foreground">{(step as StepWithOptional).url}</span>
                                         ) : null}
                                       </li>
                                     ))}

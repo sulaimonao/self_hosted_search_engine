@@ -4,7 +4,7 @@ interface ResolveOptions {
   available: string[];
   configured: ConfiguredModels;
   stored: string | null;
-  previous: string | null;
+  previous?: string | null;
 }
 
 export function resolveChatModelSelection({
