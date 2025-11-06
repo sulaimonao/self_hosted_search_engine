@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useHealth } from "@/lib/health";
 import { IndexHealthBadge } from "@/components/index-health/IndexHealthBadge";
 import { useAppStore } from "@/state/useAppStore";
+import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 
 function resolveHealthColor(status: string | undefined) {
   switch (status) {
@@ -34,6 +35,8 @@ export function StatusBar() {
       .reduce((total, item) => total + item.count, 0);
   }, [notifications]);
 
+  const navigate = useBrowserNavigation();
+
   return (
     <footer className="flex h-9 items-center justify-between border-t bg-background/80 px-4 text-xs backdrop-blur">
       <div className="truncate">
@@ -43,10 +46,15 @@ export function StatusBar() {
       </div>
       <div>Jobs queued: {queueCount}</div>
       <div className="flex items-center gap-3">
-        <span className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => navigate?.("/control-center")}
+          className="flex items-center gap-2 text-xs"
+          title="Open Control Center"
+        >
           <span className={`inline-flex h-2.5 w-2.5 rounded-full ${resolveHealthColor(health?.status)}`} />
           API
-        </span>
+        </button>
         <IndexHealthBadge />
       </div>
     </footer>

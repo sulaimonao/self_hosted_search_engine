@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
+import type { ModelInventory } from "@/lib/api";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { ChatMessageMarkdown } from "@/components/chat-message";
@@ -15,13 +16,14 @@ import { storeChatMessage } from "@/lib/api";
 const DEFAULT_THROTTLE = 50;
 
 type ChatPanelUseChatProps = {
-  inventory?: { chatModels?: string[] } | null;
+  inventory?: ModelInventory | null;
   selectedModel?: string | null;
   threadId: string;
   onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
+  onModelChange?: (model: string) => void;
 };
 
-export default function ChatPanelUseChat({ inventory, selectedModel, threadId, onLinkClick }: ChatPanelUseChatProps) {
+export default function ChatPanelUseChat({ inventory, selectedModel, threadId, onLinkClick, onModelChange }: ChatPanelUseChatProps) {
   const storedThrottle = typeof window !== "undefined" ? safeLocalStorage.get("chat:throttleMs") : null;
   const throttleMs = storedThrottle ? Number.parseInt(storedThrottle, 10) || DEFAULT_THROTTLE : DEFAULT_THROTTLE;
 
@@ -41,6 +43,14 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
 
   const [isBusy, setIsBusy] = useState(false);
 
+  const [error, setError] = useState<string | null>(null);
+  const [lastAttempt, setLastAttempt] = useState<{ text: string; model?: string | undefined } | null>(null);
+
+  useEffect(() => {
+    // clear local error when model selection or inventory changes
+    setError(null);
+  }, [selectedModel, inventory?.configured?.primary, inventory?.configured?.fallback]);
+
   const handleSend = async () => {
     const trimmed = (input ?? "").trim();
     if (!trimmed || isBusy) return;
@@ -54,8 +64,21 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       }).catch(() => undefined);
 
     // v5: send text as `{ text }` and pass additional body via options
+    // Ensure we always provide a model (fall back to configured primary/fallback)
+    const model =
+      selectedModel || inventory?.configured?.primary || inventory?.configured?.fallback || undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (sendMessage as any)({ text: trimmed }, { body: { model: selectedModel ?? undefined } });
+    try {
+      setLastAttempt({ text: trimmed, model });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sendMessage as any)({ text: trimmed }, { body: { model } });
+      setError(null);
+      setLastAttempt(null);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("Chat send failed", e);
+      setError(message);
+    }
     } finally {
       setIsBusy(false);
       setInput("");
@@ -66,7 +89,45 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
 
   return (
     <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
-  <CopilotHeader chatModels={inventory?.chatModels ?? []} selectedModel={selectedModel ?? null} onModelChange={() => {}} />
+  <CopilotHeader
+        chatModels={inventory?.chatModels ?? []}
+        selectedModel={selectedModel ?? null}
+        onModelChange={onModelChange ?? (() => {})}
+      />
+      {error || status === "error" ? (
+        <div className="flex items-center justify-between rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
+          <div>Error: {error ?? "Failed to send message."}</div>
+          <div className="flex items-center gap-2">
+            {lastAttempt ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  if (!lastAttempt) return;
+                  setError(null);
+                  setIsBusy(true);
+                  try {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    await (sendMessage as any)({ text: lastAttempt.text }, { body: { model: lastAttempt.model } });
+                    setError(null);
+                    setLastAttempt(null);
+                  } catch (e) {
+                    const message = e instanceof Error ? e.message : String(e);
+                    setError(message);
+                  } finally {
+                    setIsBusy(false);
+                  }
+                }}
+              >
+                Retry
+              </Button>
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={() => setError(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex-1 overflow-hidden rounded-lg border bg-background">
         <ScrollArea className="h-full pr-3">
           <div className="space-y-4 p-3 pr-1">

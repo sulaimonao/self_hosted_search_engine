@@ -1,3 +1,4 @@
+/* eslint-disable */
 (function(){
   if (global.__require_trace_installed) return;
   global.__require_trace_installed = true;

@@ -1,3 +1,4 @@
+/* eslint-disable */
 // Lightweight require tracer preloaded via NODE_OPTIONS="--require ./require-trace.js"
 // Logs module loads that mention vitest, @vitest, jest-dom, testing-library, or expect
 const fs = require('fs');
