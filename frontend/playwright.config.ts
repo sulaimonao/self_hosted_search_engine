@@ -3,6 +3,9 @@ import { defineConfig } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_APP_URL || 'http://127.0.0.1:3100';
 
 export default defineConfig({
+  // Only run E2E tests under the tests/e2e directory so Playwright
+  // doesn't accidentally pick up unit tests under `src` (vitest).
+  testDir: './tests/e2e',
   timeout: 90_000,
   use: { baseURL, trace: 'retain-on-failure' },
 

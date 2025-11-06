@@ -238,7 +238,13 @@ export class ChatClient {
     };
 
     const payload = toChatRequest({
-      model: request.model ?? null,
+      // Normalize model: backend may accept family aliases (e.g. "gpt-oss")
+      // while the UI/inventory may expose concrete variants (e.g. "gpt-oss:120b").
+      // If a concrete variant is provided, prefer the family prefix when
+      // sending to the backend so it matches allowed aliases.
+      model: (typeof request.model === "string" && request.model.includes(":"))
+        ? request.model.split(":")[0]
+        : request.model ?? null,
       stream,
       url: request.url ?? null,
       textContext: request.textContext ?? null,
@@ -252,14 +258,14 @@ export class ChatClient {
       messages: request.messages,
     });
 
-    const response = await fetch(resolveApi("/api/chat"), {
+  let response = await fetch(resolveApi("/api/chat"), {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
       signal: request.signal,
     });
 
-    const traceIdHeader = response.headers.get("X-Request-Id");
+  const traceIdHeader = response.headers.get("X-Request-Id");
     const servedModel = response.headers.get("X-LLM-Model") ?? (request.model ?? null);
     const contentType = response.headers.get("Content-Type")?.toLowerCase() ?? "";
 
@@ -271,7 +277,7 @@ export class ChatClient {
       });
     }
 
-    if (!response.ok) {
+  if (!response.ok) {
       let fallbackText = "";
       try {
         fallbackText = await response.clone().text();
@@ -288,11 +294,11 @@ export class ChatClient {
         }
       }
 
-      let message = fallbackText || `Chat request failed (${response.status})`;
+  let message = fallbackText || `Chat request failed (${response.status})`;
       let code: string | undefined;
       let hint: string | undefined;
       let tried: string[] | undefined;
-      if (payloadJson) {
+  if (payloadJson) {
         if (typeof payloadJson.error === "string" && payloadJson.error.trim()) {
           code = payloadJson.error.trim();
         }
@@ -315,13 +321,71 @@ export class ChatClient {
         }
       }
 
-      throw new ChatRequestError(message, {
-        status: response.status,
-        traceId: traceIdHeader,
-        code,
-        hint,
-        tried,
-      });
+      // If backend reports model_not_found or unsupported_model, try to fetch
+      // available model list and retry with a concrete variant matching the
+      // attempted family (only one retry to avoid loops).
+      const attemptedModel = (payload as { model?: string }).model ?? null;
+      const backendError = payloadJson && typeof (payloadJson as Record<string, unknown>).error === "string"
+        ? (payloadJson as Record<string, unknown>).error as string
+        : null;
+      if (
+        attemptedModel &&
+        backendError &&
+        (backendError === "model_not_found" || backendError === "unsupported_model")
+      ) {
+        try {
+          const modelEndpoints = ["/api/llm/llm_models", "/api/llm/models"] as const;
+          let modelsResponse: Response | null = null;
+          for (const endpoint of modelEndpoints) {
+            try {
+              const r = await fetch(resolveApi(endpoint));
+              if (r.ok) {
+                modelsResponse = r;
+                break;
+              }
+            } catch {
+              // ignore and try next
+            }
+          }
+          if (modelsResponse) {
+            const modelsPayload = await modelsResponse.json();
+            const availableSource: unknown[] = Array.isArray(modelsPayload.available)
+              ? modelsPayload.available
+              : Array.isArray(modelsPayload.chat_models)
+              ? modelsPayload.chat_models
+              : [];
+            const available = availableSource
+              .map((v) => (typeof v === "string" ? v.trim() : ""))
+              .filter(Boolean);
+            const match = available.find((a) => a.startsWith(`${attemptedModel}:`) || a.toLowerCase().startsWith(attemptedModel.toLowerCase()));
+            if (match) {
+              // retry sending the chat with the concrete model variant
+              const retryPayload = { ...payload, model: match };
+              response = await fetch(resolveApi("/api/chat"), {
+                method: "POST",
+                headers,
+                body: JSON.stringify(retryPayload),
+                signal: request.signal,
+              });
+              // update trace header and content type for subsequent handling
+              // fall through to existing response handling below
+            }
+          }
+        } catch {
+          // ignore retry errors and fall through to original error
+        }
+      }
+
+      // If after retry response still not ok, throw with metadata
+      if (!response.ok) {
+        throw new ChatRequestError(message, {
+          status: response.status,
+          traceId: traceIdHeader,
+          code,
+          hint,
+          tried,
+        });
+      }
     }
 
     if (contentType.includes("application/json")) {

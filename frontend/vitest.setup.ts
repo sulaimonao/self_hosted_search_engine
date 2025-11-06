@@ -1,4 +1,20 @@
-import "@testing-library/jest-dom/vitest";
+// Load testing helpers only when running under Vitest to avoid polluting
+// the Playwright test runtime (Playwright loads Node and shouldn't pick up
+// vitest/jest globals).
+if (process.env.VITEST) {
+	// load runtime matchers only when Vitest runs. Use a runtime require
+	// to avoid TypeScript attempting to treat the package's .d.ts as a
+	// module for static import resolution.
+		try {
+			// @ts-expect-error - runtime-only import for test environment
+			const jestDom = (await import("@testing-library/jest-dom")) as unknown;
+			type UnknownJestDom = { extend?: () => void };
+			const runtime = jestDom as unknown as UnknownJestDom;
+			if (runtime.extend) runtime.extend();
+		} catch {
+			// ignore; tests that need jest-dom will import it explicitly.
+		}
+}
 
 // Provide a default API base for tests so code that calls `fetch('/api/...')`
 // does not throw "Invalid URL" in node/JSDOM environment. Tests can override
