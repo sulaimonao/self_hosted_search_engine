@@ -370,6 +370,42 @@ function exposeBrowserAPI() {
   contextBridge.exposeInMainWorld('browserAPI', api);
 }
 
+// Simple client-side logger exposed to renderer: forwards to backend ingestion
+function exposeAppLogger() {
+  const send = async (payload: Record<string, unknown> | Record<string, unknown>[]) => {
+    try {
+      const base = process.env.API_URL || process.env.BACKEND_URL || 'http://127.0.0.1:5050';
+      const url = `${base.replace(/\/$/, '')}/api/logs`;
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      // swallow network errors silently; app should not break over logging
+      // eslint-disable-next-line no-console
+      console.warn('[appLogger] failed to send log', error);
+    }
+  };
+
+  contextBridge.exposeInMainWorld('appLogger', {
+    log: (obj: Record<string, unknown>) => {
+      try {
+        if (!obj || typeof obj !== 'object') return;
+        // best-effort lightweight sanitisation
+        const payload = { ...obj };
+        if (!payload.event) payload.event = 'ui.log';
+        if (!payload.level) payload.level = 'INFO';
+        void send(payload);
+      } catch (error) {
+        // ignore
+      }
+    },
+  });
+}
+
+exposeAppLogger();
+
 spoofNavigator();
 exposeBridge();
 exposeBrowserAPI();

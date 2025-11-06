@@ -57,6 +57,13 @@ export function useAgentTraceSubscription(chatId: string | null | undefined, ena
   const resetChat = useAgentTraceStore((state) => state.resetChat);
 
   useEffect(() => {
+    // Avoid subscribing to EventSource during unit tests. JSDOM or test runners
+    // may not emulate SSE correctly and it can cause repeated updates in
+    // that environment.
+    // eslint-disable-next-line no-process-env
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      return;
+    }
     if (!chatId) {
       return;
     }

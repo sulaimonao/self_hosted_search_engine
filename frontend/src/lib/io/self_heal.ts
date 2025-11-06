@@ -236,7 +236,9 @@ export function fromDirective(raw: unknown): DirectivePayload {
   return {
     reason,
     steps,
-    plan_confidence: planConfidence && CONFIDENCE_LEVELS.has(planConfidence) ? planConfidence : undefined,
+    plan_confidence: planConfidence && CONFIDENCE_LEVELS.has(planConfidence)
+      ? (planConfidence as "low" | "medium" | "high")
+      : undefined,
     needs_user_permission: needsPermission,
     ask_user: askUser.length > 0 ? askUser : undefined,
     fallback,

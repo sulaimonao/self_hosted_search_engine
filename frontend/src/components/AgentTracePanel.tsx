@@ -11,9 +11,12 @@ type AgentTracePanelProps = {
 };
 
 export function AgentTracePanel({ chatId, messageId }: AgentTracePanelProps) {
+
   const { showReasoning, hydrate, hydrated } = useUI();
   const steps = useAgentTrace(chatId, messageId ?? null);
 
+  // Always call the subscription hook; the hook will early-return during
+  // unit tests to avoid creating EventSource connections in JSDOM.
   useAgentTraceSubscription(chatId, showReasoning);
 
   useEffect(() => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -177,6 +178,100 @@ def create_app() -> Flask:
 
         print({"lvl": "DEBUG", "evt": "ui.devlog", "data": payload}, flush=True)
         return jsonify({"ok": True}), 200
+
+    @app.post("/api/logs")
+    def ingest_logs() -> Response:
+        """Ingest logs from frontend/electron and persist to the shared telemetry store.
+
+        This endpoint accepts a JSON payload (single object or array of objects).
+        It's intentionally permissive; values are redacted and normalized before
+        being written using the standard telemetry writer.
+        """
+
+        if not request.is_json:
+            return jsonify({"ok": False, "reason": "expected json"}), 400
+
+        try:
+            payload = request.get_json(silent=True)
+        except Exception:
+            return jsonify({"ok": False, "reason": "invalid json"}), 400
+
+        # Basic local rate-limiting to prevent noisy clients from spamming the
+        # telemetry store. This is intentionally lightweight and in-memory only.
+        try:
+            from .rate_limiter import allow_for_remote_addr
+
+            remote = request.remote_addr
+            if not allow_for_remote_addr(remote):
+                return jsonify({"ok": False, "reason": "rate_limited"}), 429
+        except Exception:
+            # best-effort: if the limiter fails, allow the request
+            pass
+
+        from backend import logging_utils as _logging_utils
+        from server.json_logger import log_event as _log_event
+
+        def _handle_one(obj: dict) -> None:
+            if not isinstance(obj, dict):
+                return
+            # Ensure known top-level fields
+            level = str(obj.get("level", obj.get("lvl", "INFO"))).upper()
+            event = str(obj.get("event", obj.get("evt", obj.get("type", "ui.log"))))
+            msg = obj.get("msg") or obj.get("message") or obj.get("m") or None
+            meta = obj.get("meta") or obj.get("data") or None
+            # Redact noisy/sensitive fields
+            if isinstance(meta, dict):
+                meta = _logging_utils.redact(meta)
+            # Funnel into existing server-side structured event writer
+            try:
+                _log_event(level, event, msg=msg, meta=meta, source="ui")
+            except Exception:
+                # best-effort, don't surface internal errors to the client
+                _logging_utils.write_event({"level": "ERROR", "event": "logs.ingest.error", "msg": "failed to write ui log"})
+
+        if isinstance(payload, list):
+            for item in payload:
+                _handle_one(item)
+        elif isinstance(payload, dict):
+            _handle_one(payload)
+        else:
+            return jsonify({"ok": False, "reason": "unexpected payload"}), 400
+
+        return jsonify({"ok": True}), 200
+
+    @app.get("/api/logs/recent")
+    def recent_logs() -> Response:
+        """Return the most recent telemetry events as JSON array.
+
+        Query params:
+        - n: number of entries (default 100)
+        """
+
+        try:
+            n = int(request.args.get("n", "100"))
+        except Exception:
+            n = 100
+
+        from backend import logging_utils as _logging_utils
+
+        log_dir = os.getenv("LOG_DIR", "data/telemetry")
+        path = os.path.join(log_dir, "events.ndjson")
+        out = []
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as handle:
+                    # read tail efficiently by reading last chunk
+                    data = handle.read()
+                    lines = [l for l in data.splitlines() if l.strip()]
+                    for line in lines[-n:]:
+                        try:
+                            out.append(json.loads(line))
+                        except Exception:
+                            out.append({"raw": line})
+        except Exception:
+            return jsonify({"ok": False, "reason": "read_error"}), 500
+
+        return jsonify({"ok": True, "entries": out}), 200
 
     config = AppConfig.from_env()
     config.ensure_dirs()

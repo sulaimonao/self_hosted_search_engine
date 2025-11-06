@@ -103,7 +103,7 @@ export function FirstRunWizard() {
           <section className="rounded border p-3">
             <h3 className="text-sm font-semibold">Environment checks</h3>
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-              <li>Python: {health?.environment?.python ?? "detecting"}</li>
+              <li>Python: {String(health?.environment?.python ?? "detecting")}</li>
               <li>Ollama CLI: {health?.environment?.ollama ? "available" : "missing"}</li>
               <li>API port: {health?.environment?.api_port_open ? "listening" : "unreachable"}</li>
             </ul>

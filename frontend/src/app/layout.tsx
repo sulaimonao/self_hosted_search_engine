@@ -7,6 +7,8 @@ import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { RenderLoopGuardProvider } from "@/components/providers/RenderLoopGuardProvider";
 import { StatusRibbon } from "@/components/status/StatusRibbon";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
+import ErrorBoundary from "@/components/ErrorBoundary";
+import ErrorClientSetup from "@/components/ErrorClientSetup";
 
 import "./globals.css";
 
@@ -45,9 +47,12 @@ export default function RootLayout({
           <ClientOnly>
             <RenderLoopGuardProvider>
               <NavProgressProvider>
-                <StatusRibbon />
-                <FirstRunWizard />
-                {children}
+                <ErrorBoundary>
+                  <ErrorClientSetup />
+                  <StatusRibbon />
+                  <FirstRunWizard />
+                  {children}
+                </ErrorBoundary>
               </NavProgressProvider>
             </RenderLoopGuardProvider>
           </ClientOnly>

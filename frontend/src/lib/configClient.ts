@@ -64,7 +64,7 @@ type FieldDefinition = {
   defaultOption?: string;
 };
 
-const FIELD_DEFINITIONS: FieldDefinition[] = [
+const FIELD_DEFINITIONS = [
   {
     legacyKey: "models.chat.primary",
     property: "models_primary",
@@ -194,7 +194,9 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
     section: "developer",
     defaultBoolean: true,
   },
-];
+] as const;
+
+// derived types are available above; use runtime typing below as FieldDefinition[]
 
 const SECTION_LABELS: Record<FieldDefinition["section"], string> = {
   models: "Models",
@@ -266,22 +268,68 @@ function normaliseBoolean(input: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function buildPatch(patch: Record<string, unknown>, current?: AppConfig): Partial<AppConfig> {
+export function buildPatch(patch: Record<string, unknown>, current?: AppConfig): Partial<AppConfig> {
   const partial: Partial<AppConfig> = {};
+  type SelectKey = "models_primary" | "models_fallback" | "models_embedder";
+  type BoolKey =
+    | "features_shadow_mode"
+    | "features_agent_mode"
+    | "features_local_discovery"
+    | "features_browsing_fallbacks"
+    | "features_index_auto_rebuild"
+    | "features_auth_clearance_detectors"
+    | "chat_use_page_context_default"
+    | "browser_persist"
+    | "browser_allow_cookies"
+    | "setup_completed"
+    | "dev_render_loop_guard";
+
+  function assignPartial(key: SelectKey, value: { name: string }): void;
+  function assignPartial(key: BoolKey, value: boolean): void;
+  function assignPartial<K extends keyof AppConfig>(key: K, value: AppConfig[K]) {
+    partial[key] = value;
+  }
+  const SELECT_PROPERTIES: Array<keyof AppConfig> = [
+    "models_primary",
+    "models_fallback",
+    "models_embedder",
+  ];
+  const BOOL_PROPERTIES: Array<keyof AppConfig> = [
+    "features_shadow_mode",
+    "features_agent_mode",
+    "features_local_discovery",
+    "features_browsing_fallbacks",
+    "features_index_auto_rebuild",
+    "features_auth_clearance_detectors",
+    "chat_use_page_context_default",
+    "browser_persist",
+    "browser_allow_cookies",
+    "setup_completed",
+    "dev_render_loop_guard",
+  ];
   for (const [key, value] of Object.entries(patch ?? {})) {
-    const definition = FIELD_DEFINITIONS.find((field) => field.legacyKey === key);
-    if (!definition) {
+    const definition = FIELD_DEFINITIONS.find((f) => f.legacyKey === key);
+    if (!definition) continue;
+
+    if (definition.type === "select") {
+      // apply only when patch explicitly provides a non-empty string
+      const selected = typeof value === "string" && value ? value : undefined;
+      if (!selected) continue;
+      // assign a ModelRef shape with a narrow cast based on known properties
+      if (SELECT_PROPERTIES.includes(definition.property)) {
+        assignPartial(definition.property as "models_primary", { name: selected });
+      }
       continue;
     }
-    if (definition.type === "select") {
-      const selected = typeof value === "string" && value ? value : (current?.[definition.property] as ModelRef | undefined)?.name;
-      if (selected) {
-        partial[definition.property] = { name: selected } as AppConfig[typeof definition.property];
-      }
-    } else {
+
+    if (definition.type === "boolean") {
       const currentValue = current?.[definition.property];
-      const fallback = typeof currentValue === "boolean" ? currentValue : false;
-      partial[definition.property] = normaliseBoolean(value, fallback) as AppConfig[typeof definition.property];
+      const fallback = typeof currentValue === "boolean" ? currentValue : Boolean(definition.defaultBoolean ?? false);
+      const normalized = normaliseBoolean(value, fallback);
+      if (BOOL_PROPERTIES.includes(definition.property)) {
+        assignPartial(definition.property as BoolKey, Boolean(normalized));
+      }
+      continue;
     }
   }
   return partial;
@@ -311,17 +359,29 @@ export async function fetchConfigSchema(): Promise<ConfigSchema> {
   const sections = Object.entries(SECTION_LABELS).map(([sectionId, label]) => ({
     id: sectionId,
     label,
-    fields: FIELD_DEFINITIONS.filter((field) => field.section === sectionId).map((field) => ({
-      key: field.legacyKey,
-      type: field.type,
-      label: field.label,
-      description: field.description,
-      default:
-        field.type === "select"
-          ? field.defaultOption ?? field.options?.[0] ?? null
-          : normaliseBoolean(undefined, field.defaultBoolean ?? false),
-      options: field.options ?? null,
-    })),
+  fields: (FIELD_DEFINITIONS as unknown as FieldDefinition[])
+      .filter((field) => field.section === sectionId)
+      .map((field) => {
+        if (field.type === "select") {
+        return {
+          key: field.legacyKey,
+          type: field.type,
+          label: field.label,
+          description: field.description,
+          default: field.defaultOption ?? (field.options && field.options[0]) ?? null,
+          options: field.options ? Array.from(field.options) : null,
+        };
+      }
+      // boolean field
+      return {
+        key: field.legacyKey,
+        type: field.type,
+        label: field.label,
+        description: field.description,
+        default: normaliseBoolean(undefined, field.defaultBoolean ?? false),
+        options: null,
+      };
+    }),
   }));
   return { version: 1, sections };
 }

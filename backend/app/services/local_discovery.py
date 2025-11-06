@@ -22,6 +22,32 @@ from watchdog.observers import Observer
 
 LOGGER = logging.getLogger(__name__)
 
+
+def _safe_log(level: str, msg: str, *args, **kwargs) -> None:
+    """Log safely from background threads. If the configured logging
+    handlers have been closed (pytest capture or shutdown), swallowing
+    the error is preferable to crashing worker threads.
+    """
+    # Attempt to emit the record but avoid logging internals printing
+    # exceptions to stderr (logging.raiseExceptions) which can trigger
+    # writes to closed streams. We temporarily disable raiseExceptions
+    # and then restore it.
+    try:
+        prev = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            getattr(LOGGER, level)(msg, *args, **kwargs)
+        except Exception:
+            # Swallow any exceptions from logging emitters to keep
+            # background threads alive.
+            return
+    finally:
+        try:
+            logging.raiseExceptions = prev
+        except Exception:
+            # Best-effort restore; ignore on failure.
+            pass
+
 SUPPORTED_EXTENSIONS = {
     ".pdf",
     ".txt",
@@ -88,13 +114,17 @@ class LocalDiscoveryService:
         self._executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="local-discovery"
         )
-        self._observer: Optional[Observer] = None
-        self._pending: Dict[str, DiscoveryRecord] = {}
-        self._archive: Dict[str, DiscoveryRecord] = {}
-        self._subscribers: Dict[str, queue.Queue[DiscoveryRecord | None]] = {}
-        self._confirmations: Dict[str, Dict[str, Any]] = {}
-        self._confirmed_ids: set[str] = set()
-        self._seen_mtimes: Dict[str, float] = {}
+        # typing the Observer here causes some linters/typecheckers to
+        # complain depending on environment; keep it unannotated.
+        self._observer = None
+        # Use plain assignments here to avoid environments that reject
+        # inline variable annotations inside methods.
+        self._pending = {}
+        self._archive = {}
+        self._subscribers = {}
+        self._confirmations = {}
+        self._confirmed_ids = set()
+        self._seen_mtimes = {}
         self._started = False
         self._load_confirmations()
 
@@ -136,7 +166,7 @@ class LocalDiscoveryService:
                 self._observer.stop()
                 self._observer.join(timeout=5)
             except Exception:  # pragma: no cover - defensive shutdown
-                LOGGER.exception("Failed to stop local discovery observer")
+                _safe_log("exception", "Failed to stop local discovery observer")
             finally:
                 self._observer = None
 
@@ -240,7 +270,7 @@ class LocalDiscoveryService:
             try:
                 processed = self._process_path(path)
             except Exception:  # pragma: no cover - logged
-                LOGGER.exception("Local discovery failed for %s", path)
+                _safe_log("exception", "Local discovery failed for %s", path)
                 return
             if processed:
                 return
@@ -305,7 +335,7 @@ class LocalDiscoveryService:
         for stream in subscribers:
             stream.put(record)
 
-        LOGGER.info("Discovered local file: %s", path_str)
+        _safe_log("info", "Discovered local file: %s", path_str)
         return True
 
     def _extract_text(self, path: Path, ext: str) -> str:
@@ -334,14 +364,16 @@ class LocalDiscoveryService:
         except FileNotFoundError:
             return
         except OSError:  # pragma: no cover - defensive
-            LOGGER.exception("Unable to read local discovery ledger")
+            _safe_log("exception", "Unable to read local discovery ledger")
             return
 
         try:
             payload = json.loads(raw)
         except ValueError:  # pragma: no cover - defensive
-            LOGGER.warning(
-                "Invalid JSON in local discovery ledger: %s", self._ledger_path
+            _safe_log(
+                "warning",
+                "Invalid JSON in local discovery ledger: %s",
+                self._ledger_path,
             )
             return
 

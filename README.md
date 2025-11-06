@@ -533,6 +533,8 @@ field length via `LOG_MAX_FIELD_BYTES`. Follow live events with:
 ./scripts/tail_telemetry.sh
 ```
 
+Client-side logging (frontend / Electron) is forwarded into the same telemetry store; see `docs/logging_frontend.md` for details and verification steps.
+
 The refresh pipeline now streams normalized documents to SQLite immediately, even
 when the embedding model is still warming up. Pending chunks land in the
 `pending_documents`, `pending_chunks`, and `pending_vectors_queue` tables inside

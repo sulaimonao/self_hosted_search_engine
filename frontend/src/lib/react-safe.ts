@@ -68,6 +68,9 @@ export function useStableMemo<T extends object>(factory: () => T, deps: Readonly
 export function useEvent<T extends (...args: unknown[]) => unknown>(fn: T) {
   const ref = useRef(fn);
   ref.current = fn;
-  return useCallback((...args: Parameters<T>): ReturnType<T> => ref.current(...args), []);
+  return useCallback((...args: Parameters<T>): ReturnType<T> => {
+    // ref.current may be a generic function; cast the invocation to ReturnType<T>
+    return (ref.current(...(args as unknown[])) as unknown) as ReturnType<T>;
+  }, []);
 }
 

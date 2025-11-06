@@ -1,30 +1,11 @@
-#!/usr/bin/env python3
-"""Return 'true' if system_check response contains critical failures, else 'false'."""
-from __future__ import annotations
+"""Archived: original scripts/system_check_has_critical.py moved to archive/removed-by-cleanup-2025-11-05/scripts/system_check_has_critical.py
 
-import json
-import sys
+This stub keeps the module importable; the full original file is in the archive.
+"""
 
-
-def load_payload() -> str:
-    if not sys.stdin.isatty():
-        data = sys.stdin.read()
-        if data:
-            return data
-    return sys.argv[1] if len(sys.argv) > 1 else "{}"
-
-
-def main() -> None:
-    raw = load_payload()
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        print("false")
-        return
-
-    summary = payload.get("summary") or {}
-    print("true" if summary.get("critical_failures") else "false")
+def _archived_note():
+    return "This file was archived. See archive/removed-by-cleanup-2025-11-05/scripts/system_check_has_critical.py"
 
 
 if __name__ == "__main__":
-    main()
+    print(_archived_note())

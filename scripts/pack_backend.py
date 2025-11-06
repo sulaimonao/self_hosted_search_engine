@@ -1,36 +1,11 @@
-"""Pack the backend Flask server into a single binary via PyInstaller."""
+"""Archived: original scripts/pack_backend.py moved to archive/removed-by-cleanup-2025-11-05/scripts/pack_backend.py
 
-from __future__ import annotations
+This stub keeps the module importable; the full original file is in the archive.
+"""
 
-import pathlib
-import subprocess
-import sys
-
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-ENTRYPOINT = ROOT / "backend" / "app" / "__main__.py"
-OUTPUT_DIR = ROOT / "dist-backend"
-
-
-def main() -> None:
-    if not ENTRYPOINT.exists():
-        raise SystemExit(f"Backend entrypoint not found: {ENTRYPOINT}")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        sys.executable,
-        "-m",
-        "PyInstaller",
-        "--onefile",
-        "--name",
-        "backend-server",
-        "--distpath",
-        str(OUTPUT_DIR),
-        str(ENTRYPOINT),
-    ]
-    print("Running:", " ".join(cmd))
-    subprocess.check_call(cmd)
-    print("Built:", OUTPUT_DIR / "backend-server")
+def _archived_note():
+    return "This file was archived. See archive/removed-by-cleanup-2025-11-05/scripts/pack_backend.py"
 
 
 if __name__ == "__main__":
-    main()
+    print(_archived_note())

@@ -18,9 +18,10 @@ type ChatPanelUseChatProps = {
   inventory?: { chatModels?: string[] } | null;
   selectedModel?: string | null;
   threadId: string;
+  onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
-export default function ChatPanelUseChat({ inventory, selectedModel, threadId }: ChatPanelUseChatProps) {
+export default function ChatPanelUseChat({ inventory, selectedModel, threadId, onLinkClick }: ChatPanelUseChatProps) {
   const storedThrottle = typeof window !== "undefined" ? safeLocalStorage.get("chat:throttleMs") : null;
   const throttleMs = storedThrottle ? Number.parseInt(storedThrottle, 10) || DEFAULT_THROTTLE : DEFAULT_THROTTLE;
 
@@ -76,7 +77,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId }:
                 <div key={m.id ?? `${role}-${idx}`} className={role === "assistant" ? "bg-card rounded-lg border px-3 py-2" : "bg-muted rounded-lg border px-3 py-2"}>
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">{role}</div>
                   <div className="mt-2">
-                    <ChatMessageMarkdown text={content} />
+                    <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} />
                     {role === "assistant" && isStreaming ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
