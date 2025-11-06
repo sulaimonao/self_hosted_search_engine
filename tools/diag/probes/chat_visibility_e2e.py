@@ -1,4 +1,4 @@
-"""Playwright parity probe for render loop guard diagnostics."""
+"""Playwright probe to ensure chat messages render in both renderers."""
 from __future__ import annotations
 
 import os
@@ -20,29 +20,26 @@ def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedPro
     "--",
         "playwright",
         "test",
-    "-c",
-    "frontend/playwright.config.ts",
-        "frontend/tests/e2e/render-loop.spec.ts",
+        "-c",
+        "frontend/playwright.config.ts",
+        "frontend/tests/e2e/chat-visibility.spec.ts",
         "--reporter",
         "line",
     ]
-    return subprocess.run(
-        command,
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=env,
-    )
+    return subprocess.run(command, cwd=root, text=True, capture_output=True, check=False, env=env)
 
 
 @register_probe(
-    "REACT_RENDER_LOOP",
-    description="Ensure render loop guard prevents runaway renders in web & desktop shells.",
+    "probe_chat_visibility_e2e",
+    description="E2E: Chat UI renders user and assistant messages (useChat + manual)",
     severity=Severity.HIGH,
 )
-def probe_render_loop_guard(context: RuleContext) -> Iterable[Finding]:
+def probe_chat_visibility_e2e(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []
+
+    # Only run this heavy E2E when smoke mode is enabled.
+    if not context.smoke:
+        return findings
 
     default_url = os.environ.get("PLAYWRIGHT_WEB_URL", "http://127.0.0.1:3100")
     desktop_url = os.environ.get("DESKTOP_RENDERER_URL") or os.environ.get("RENDERER_URL")
@@ -54,23 +51,18 @@ def probe_render_loop_guard(context: RuleContext) -> Iterable[Finding]:
     for label, url in targets:
         result = _run_playwright(context.root, url)
         if result.returncode != 0:
-            summary = f"Playwright render loop guard check failed for {label}."
-            suggestion = (
-                "Review console output for [render-loop] markers. Guard should suppress infinite rerenders "
-                "before shipping."
-            )
             findings.append(
                 Finding(
-                    id=f"render-loop:{label}",
-                    rule_id="REACT_RENDER_LOOP",
+                    id=f"chat-visibility:{label}",
+                    rule_id="probe_chat_visibility_e2e",
                     severity=Severity.HIGH,
-                    summary=summary,
-                    suggestion=suggestion,
+                    summary=f"Chat visibility e2e failed for {label}.",
+                    suggestion=(
+                        "Ensure ChatPanelUseChat concatenates UIMessage.parts[].text and the model selector is wired."
+                        " Verify servers running and PLAYWRIGHT_APP_URL is reachable."
+                    ),
                     evidence=(result.stdout or "") + "\n" + (result.stderr or ""),
                 )
             )
 
     return findings
-
-
-__all__ = ["probe_render_loop_guard"]

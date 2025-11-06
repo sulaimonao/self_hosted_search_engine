@@ -31,6 +31,8 @@ from .probes import (  # noqa: F401
     headers_pass,
     index_health_widget,
     render_loop_guard,
+    chat_visibility,
+    chat_visibility_e2e,
     sse_stream_integrity,
 )
 

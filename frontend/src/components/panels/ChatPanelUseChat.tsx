@@ -133,9 +133,21 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
           <div className="space-y-4 p-3 pr-1">
             {messages.map((m: IncomingMsg, idx: number) => {
               const role = m.role ?? "assistant";
-              const content = typeof m.content === "string" ? m.content : m.text ?? "";
+              // Support Vercel AI SDK v5 UIMessage shape: prefer concatenated parts[].text, then fallback to legacy content/text
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const parts = Array.isArray((m as any)?.parts) ? (m as any).parts : null;
+              const textFromParts = parts
+                ? parts
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    .map((p: any) => (p && typeof p === "object" && "text" in p ? String(p.text ?? "") : ""))
+                    .join("")
+                : "";
+              const content = textFromParts || (typeof m.content === "string" ? m.content : m.text ?? "");
               return (
-                <div key={m.id ?? `${role}-${idx}`} className={role === "assistant" ? "bg-card rounded-lg border px-3 py-2" : "bg-muted rounded-lg border px-3 py-2"}>
+                <div
+                  key={m.id ?? `${role}-${idx}`}
+                  className={role === "assistant" ? "bg-card rounded-lg border px-3 py-2" : "bg-muted rounded-lg border px-3 py-2"}
+                >
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">{role}</div>
                   <div className="mt-2">
                     <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} />

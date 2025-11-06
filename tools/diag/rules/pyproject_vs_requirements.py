@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Set
 
-import tomllib
+try:  # Python 3.11+
+    import tomllib  # type: ignore
+except ModuleNotFoundError:  # Python <3.11 fallback
+    import tomli as tomllib  # type: ignore
 
 from ..engine import Finding, RuleContext, Severity, register
 
