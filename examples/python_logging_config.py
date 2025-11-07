@@ -10,6 +10,9 @@ SERVICE = os.environ.get("SERVICE", "webapp")
 ENV = os.environ.get("ENV", "development")
 LOG_PATH = f"{LOG_DIR}/{SERVICE}/{ENV}/latest.log"
 
+# Ensure log directory exists
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -41,7 +44,11 @@ LOGGING_CONFIG = {
     }
 }
 
+_configured = False
+
 def get_logger(name=None):
-    logging.config.dictConfig(LOGGING_CONFIG)
-    logger = logging.getLogger(name)
-    return logger
+    global _configured
+    if not _configured:
+        logging.config.dictConfig(LOGGING_CONFIG)
+        _configured = True
+    return logging.getLogger(name)
