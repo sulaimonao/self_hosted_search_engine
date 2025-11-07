@@ -70,6 +70,7 @@ def create_app() -> Flask:
     from .api import chat_history as chat_history_api
     from .api import memory as memory_api
     from .api import llm as llm_api
+    from .api import health as health_api
     from .api import diagnostics as diagnostics_api
     from .api import diagnostics_self_heal as diagnostics_self_heal_api
     from .api import dev_diag as dev_diag_api
@@ -619,6 +620,7 @@ def create_app() -> Flask:
     app.register_blueprint(chat_api.bp)
     app.register_blueprint(reasoning_api.bp)
     app.register_blueprint(llm_api.bp)
+    app.register_blueprint(health_api.bp)
     app.register_blueprint(research_api.bp)
     app.register_blueprint(web_search_api.bp)
     app.register_blueprint(diagnostics_api.bp)
