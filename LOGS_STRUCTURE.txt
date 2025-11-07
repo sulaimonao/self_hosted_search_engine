@@ -1,0 +1,13 @@
+Recommended folder layout (example)
+
+logs/
+└─ webapp/
+   ├─ production/
+   │  ├─ 2025/
+   │  │  ├─ 11/
+   │  │  │  ├─ 07.log
+   │  │  │  └─ 08.log
+   │  │  └─ ...
+   │  └─ latest.log -> 2025/11/08.log
+   └─ staging/
+      └─ latest.log

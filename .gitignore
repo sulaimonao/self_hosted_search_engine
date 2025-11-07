@@ -181,3 +181,9 @@ codex_task_shadow_desktop.md
 !tools/e2e_diag.py
 !tools/__init__.py
 !engine/agents/repo_summary.py
+!examples/
+!examples/*.py
+
+# Runtime logs directory (added for log discoverability)
+# See README_LOGS.md for logging best practices
+logs/
