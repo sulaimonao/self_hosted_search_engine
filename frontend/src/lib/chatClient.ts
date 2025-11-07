@@ -420,7 +420,7 @@ export const chatClient = new ChatClient();
 
 // Simplified streaming utility for direct use with reducers
 export type StreamEvt =
-  | { type: "delta"; data: any }
+  | { type: "delta"; data: ChatStreamEvent }
   | { type: "complete" }
   | { type: "heartbeat" }
   | { type: "error"; error: string };

@@ -29,13 +29,20 @@ export default function ChatPanelReducer() {
             messages: toOllamaMessages([
               ...state.messages,
               { id: userId, role: "user", text },
-            ] as any),
+            ]),
           },
           (evt) => {
             if (evt.type === "delta") {
-              const chunk = evt.data?.message?.content || evt.data?.delta || "";
-              if (chunk) {
-                dispatch({ type: "assistant_delta", id: asstId, chunk });
+              // Type-safe access to delta data
+              const deltaData = evt.data;
+              if (deltaData.type === "delta") {
+                const chunk =
+                  (deltaData as { message?: { content?: string } }).message?.content ||
+                  deltaData.delta ||
+                  "";
+                if (chunk) {
+                  dispatch({ type: "assistant_delta", id: asstId, chunk });
+                }
               }
             } else if (evt.type === "complete") {
               dispatch({ type: "assistant_complete", id: asstId });
@@ -45,8 +52,9 @@ export default function ChatPanelReducer() {
           },
           ac.signal
         );
-      } catch (e: any) {
-        dispatch({ type: "error", note: String(e?.message || e) });
+      } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        dispatch({ type: "error", note: errorMessage });
       }
     },
     [state.messages]
