@@ -46,13 +46,24 @@ export default function FirstRunWizard(): JSX.Element {
     }
   }
 
-  const reachable = features.llm !== "unavailable";
-  const startDisabled = !reachable;
+  const llmStatus = features.llm;
+  const llmUnavailable = llmStatus === "unavailable";
+  const startDisabled = Boolean(jobId);
 
   return (
     <div className="p-4 border rounded-2xl space-y-3">
       <div className="font-semibold">First-Run Setup</div>
-      <div>LLM: {reachable ? "reachable" : "not reachable"}</div>
+      <div>LLM: {llmUnavailable ? "offline" : llmStatus === "available" ? "reachable" : "checking…"}</div>
+      {llmUnavailable ? (
+        <p className="text-sm text-amber-600">
+          Ollama is not running, so chat, planning, and autopilot features are disabled. You can still crawl and search locally.
+          Start <code>ollama serve</code> and install models from the Control Center when you are ready to enable LLM features.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Paste one URL per line. You can revisit the Control Center later to tweak model installs or discovery settings.
+        </p>
+      )}
       <textarea
         className="w-full border rounded p-2"
         value={seeds}

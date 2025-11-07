@@ -57,7 +57,9 @@ while the services are stopped; the next boot will recreate it as needed.
 - macOS or Linux capable of running Playwright's Chromium build
 - Node.js **18+** (Node 20+ recommended) for the frontend dev server
 - npm (bundled with Node.js)
-- Optional: [Ollama](https://ollama.com/) for LLM-assisted discovery and chat
+- Optional: [Ollama](https://ollama.com/) for LLM-assisted discovery and chat.
+  The stack now boots even if Ollama is missing; chat, planning, and autopilot
+  stay disabled until you start `ollama serve` and pull the configured models.
 
 Verify the interpreter that will back your virtual environment before running
 `make setup`:
@@ -115,8 +117,11 @@ editing `.env` files:
 
 - **First-Run Wizard.** Appears automatically until `setup_completed=true`. It
   runs environment checks, kicks off `POST /api/admin/install_models` for
-  Gemma-3/GPT-OSS/embeddinggemma, and dismisses itself after writing to
-  `/api/config`.
+  Gemma-3/GPT-OSS/embeddinggemma when Ollama is available, and dismisses itself
+  after writing to `/api/config`. When Ollama is offline the wizard now calls
+  out the limitation, but you can still seed crawls and use pure keyword
+  search; start `ollama serve` later to unlock chat, planning, reranking, and
+  autopilot.
 - **Control Center (`/control-center`).** Presents the config schema, toggles
   runtime features (shadow/agent/discovery/index rebuild, privacy controls), and
   exposes diagnostics + model install actions backed by `/api/dev/diag/*` and
