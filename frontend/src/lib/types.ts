@@ -270,6 +270,10 @@ export interface SearchIndexResponse {
   status: SearchResponseStatus;
   hits: SearchHit[];
   llmUsed: boolean;
+  // Which endpoint produced the results
+  source?: "hybrid" | "keyword" | "legacy";
+  // Correlation id from the backend (if provided)
+  traceId?: string | null;
   jobId?: string;
   lastIndexTime?: number;
   confidence?: number;

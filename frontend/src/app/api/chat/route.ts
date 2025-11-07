@@ -45,9 +45,13 @@ export async function POST(req: NextRequest) {
   const fromMsg = lastUser ? extractText((lastUser as AnyRecord).content ?? (lastUser as AnyRecord).parts) : '';
   const textCandidate = fromMsg || (typeof inc['text'] === 'string' ? (inc['text'] as string) : '');
   const text = textCandidate.trim();
-  const hasNonEmptyUser = Array.isArray(messages)
-    ? messages.some((m) => (m?.role || '').toLowerCase() === 'user' && extractText((m as AnyRecord).content ?? (m as AnyRecord).parts).length > 0)
-    : false;
+  // NEW: treat either a non-empty text field or a non-empty user message as valid
+  const hasNonEmptyUser = !!text || messages.some(
+    (m) =>
+      (m?.role || '').toLowerCase() === 'user' &&
+      typeof (m as AnyRecord).content !== 'undefined' &&
+      extractText((m as AnyRecord).content ?? (m as AnyRecord).parts).trim().length > 0,
+  );
 
   const accept = (req.headers.get('accept') || '').toLowerCase();
   const wantsNdjson = accept.includes('application/x-ndjson');
@@ -64,7 +68,8 @@ export async function POST(req: NextRequest) {
       : text
       ? [{ role: 'user', content: text }]
       : [];
-  if (messagesPayload.length === 0 || !hasNonEmptyUser) {
+  // Validation: reject only if neither text nor any user message is non-empty
+  if (!hasNonEmptyUser) {
       return new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -84,7 +89,8 @@ export async function POST(req: NextRequest) {
     });
   } else {
     // Backend SSE stream
-  if ((!text && !Array.isArray(inc.messages)) || !hasNonEmptyUser) {
+  // Validation: reject only if neither text nor any user message is non-empty
+  if (!hasNonEmptyUser) {
       return new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },

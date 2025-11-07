@@ -32,12 +32,36 @@ function resolveTestUrl(input: RequestInfo): RequestInfo {
 }
 
 // Patch global fetch once for the test environment. This keeps behavior
-// predictable for code that constructs relative fetch paths.
+// predictable for code that constructs relative fetch paths and avoids
+// accidental real network calls to the local dev API during unit tests.
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input: RequestInfo, init?: RequestInit) => {
-	// prefer the original fetch implementation but call via globalThis.fetch fallback
-	const fetchImpl = originalFetch ?? globalThis.fetch;
-	return fetchImpl(resolveTestUrl(input), init);
+	const resolved = resolveTestUrl(input);
+	try {
+		// If the resolved target is our local dev API, return a benign default
+		// response to prevent ECONNREFUSED when the backend isn't running.
+		const target = typeof resolved === "string" ? resolved : resolved.toString();
+		if (target.startsWith(DEFAULT_TEST_API_BASE)) {
+			// Allow tests to override by setting a symbol on globalThis
+			const g = globalThis as unknown as { __TEST_FETCH_STUB__?: (url: string, init?: RequestInit) => Promise<Response> };
+			if (typeof g.__TEST_FETCH_STUB__ === "function") {
+				return g.__TEST_FETCH_STUB__(target, init);
+			}
+			return new Response(JSON.stringify({ ok: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json", "X-Request-Id": `${Date.now()}_${Math.random().toString(16).slice(2)}` },
+			});
+		}
+		// Otherwise, use the original fetch implementation
+		const fetchImpl = originalFetch ?? globalThis.fetch;
+		return fetchImpl(resolved, init);
+	} catch (err) {
+		// As a last resort, return a 500 JSON error rather than throw unhandled
+		return new Response(JSON.stringify({ error: String(err) }), {
+			status: 500,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
 };
 
 // Simple ErrorBoundary component for tests to wrap components that intentionally

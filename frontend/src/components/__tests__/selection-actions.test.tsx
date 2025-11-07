@@ -8,7 +8,8 @@ import type {
   ReactNode,
   TextareaHTMLAttributes,
 } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi, beforeEach, afterEach, beforeAll } from "vitest";
+import "@testing-library/jest-dom";
 
 vi.mock("@/components/ui/scroll-area", () => ({
   ScrollArea: ({ children }: { children: ReactNode }) => (
@@ -58,6 +59,22 @@ beforeAll(() => {
     writable: true,
     value: vi.fn(),
   });
+});
+
+// Prevent accidental network calls in this test suite
+const originalFetch = globalThis.fetch;
+beforeEach(() => {
+  vi.spyOn(console, "debug").mockImplementation(() => {});
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  globalThis.fetch = originalFetch;
 });
 
 describe("selection action surfaces", () => {
@@ -140,23 +157,7 @@ describe("selection action surfaces", () => {
       },
     ];
 
-    render(
-      <ChatPanel
-        messages={messages}
-        input=""
-        onInputChange={() => undefined}
-        onSend={() => undefined}
-        onStopStreaming={() => undefined}
-        isStreaming={false}
-        onApproveAction={() => undefined}
-        onEditAction={() => undefined}
-        onDismissAction={() => undefined}
-        modelOptions={["gpt-oss"]}
-        selectedModel="gpt-oss"
-        onModelChange={() => undefined}
-        noModelsWarning={null}
-      />
-    );
+  render(<ChatPanel messages={messages} />);
 
     expect(screen.getByText("Summarizing selection…")).toBeInTheDocument();
     expect(screen.getByText("Result")).toBeInTheDocument();

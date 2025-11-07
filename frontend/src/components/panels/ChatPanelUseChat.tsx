@@ -45,6 +45,17 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
 
   const [error, setError] = useState<string | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{ text: string; model?: string | undefined } | null>(null);
+  const lastTraceId = useMemo(() => {
+    // try to find a trace id on the last assistant message if present
+    const reversed = [...messages].reverse();
+    for (const m of reversed) {
+      const meta = (m && typeof m === 'object')
+        ? ((m as Record<string, unknown>).traceId ?? (m as Record<string, unknown>).trace_id ?? null)
+        : null;
+      if (typeof meta === 'string' && meta) return meta;
+    }
+    return null;
+  }, [messages]);
 
   useEffect(() => {
     // clear local error when model selection or inventory changes
@@ -96,7 +107,12 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       />
       {error || status === "error" ? (
         <div className="flex items-center justify-between rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
-          <div>Error: {error ?? "Failed to send message."}</div>
+          <div className="flex items-center gap-2">
+            <div>Error: {error ?? "Failed to send message."}</div>
+            {lastTraceId ? (
+              <span className="opacity-80">(trace {lastTraceId})</span>
+            ) : null}
+          </div>
           <div className="flex items-center gap-2">
             {lastAttempt ? (
               <Button

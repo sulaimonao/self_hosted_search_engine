@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import "@testing-library/jest-dom";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { ChatPanel } from "@/components/chat-panel";
@@ -27,6 +28,22 @@ describe("Chat link handling", () => {
     if (typeof window !== "undefined" && !Element.prototype.scrollIntoView) {
       Element.prototype.scrollIntoView = () => {};
     }
+  });
+
+  // Prevent accidental network calls in this test suite
+  const originalFetch = globalThis.fetch;
+  beforeEach(() => {
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
   });
 
   const baseMessage: ChatMessage = {

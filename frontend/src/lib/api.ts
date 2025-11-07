@@ -47,6 +47,52 @@ const JSON_HEADERS = {
   Accept: "application/json",
 };
 
+type ApiMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS";
+
+type LoggedResponse = Response & { traceId?: string | null };
+
+function getTraceId(resp: Response): string | null {
+  const header = resp.headers.get("X-Request-Id") || resp.headers.get("x-request-id");
+  return header ?? null;
+}
+
+async function fetchLogged(input: string | URL, init: RequestInit = {}): Promise<LoggedResponse> {
+  const method = ((init.method || "GET") as ApiMethod).toUpperCase();
+  const traceId = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const start = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  const headers: Record<string, string> = {
+    ...(init.headers as Record<string, string> | undefined),
+    "X-Request-Id": traceId,
+  };
+  const url = typeof input === "string" ? input : input.toString();
+  try {
+    const resp = (await fetch(input, { ...init, headers })) as LoggedResponse;
+    const duration = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - start;
+    const respTrace = getTraceId(resp);
+    try {
+      console.debug?.("[API]", method, url, { traceId: respTrace ?? traceId, status: resp.status, duration });
+    } catch {
+      // no-op
+    }
+    resp.traceId = respTrace ?? traceId;
+    return resp;
+  } catch (error) {
+    const duration = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - start;
+    try {
+      console.debug?.("[API:ERROR]", method, url, {
+        traceId,
+        duration,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // ignore
+    }
+    throw error;
+  }
+}
+
 export interface MetaTimeResponse {
   server_time: string;
   server_time_utc: string;
@@ -60,7 +106,7 @@ export async function fetchServerTime(): Promise<MetaTimeResponse> {
 
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(api(endpoint));
+      const response = await fetchLogged(api(endpoint));
       if (!response.ok) {
         const detail = await response.text();
         throw new Error(detail || `Unable to fetch server time (${response.status})`);
@@ -75,7 +121,7 @@ export async function fetchServerTime(): Promise<MetaTimeResponse> {
 }
 
 export async function getHealth(): Promise<MetaHealthResponse> {
-  const response = await fetch(api("/api/meta/health"));
+  const response = await fetchLogged(api("/api/meta/health"));
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Health check failed (${response.status})`);
@@ -84,7 +130,7 @@ export async function getHealth(): Promise<MetaHealthResponse> {
 }
 
 export async function getCapabilities(): Promise<CapabilitySnapshot> {
-  const response = await fetch(api("/api/meta/capabilities"), {
+  const response = await fetchLogged(api("/api/meta/capabilities"), {
     headers: { Accept: "application/json" },
     cache: "no-store",
   });
@@ -96,7 +142,7 @@ export async function getCapabilities(): Promise<CapabilitySnapshot> {
 }
 
 export async function runSystemCheck(): Promise<SystemCheckResponse> {
-  const response = await fetch(api("/api/system_check"), {
+  const response = await fetchLogged(api("/api/system_check"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: "{}",
@@ -370,7 +416,7 @@ export async function queueShadowIndex(url: string, options: ShadowQueueOptions 
     body.reason = options.reason.trim();
   }
 
-  const response = await fetch(api('/api/shadow/crawl'), {
+  const response = await fetchLogged(api('/api/shadow/crawl'), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -401,7 +447,7 @@ export async function fetchShadowStatus(jobId: string): Promise<ShadowStatus> {
   }
 
   const params = new URLSearchParams({ jobId: trimmed });
-  const response = await fetch(api(`/api/shadow/status?${params.toString()}`));
+  const response = await fetchLogged(api(`/api/shadow/status?${params.toString()}`));
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `Shadow status failed (${response.status})`);
@@ -412,7 +458,7 @@ export async function fetchShadowStatus(jobId: string): Promise<ShadowStatus> {
 }
 
 export async function fetchShadowConfig(): Promise<ShadowConfig> {
-  const response = await fetch(api("/api/shadow/shadow_config"), { cache: "no-store" });
+  const response = await fetchLogged(api("/api/shadow/shadow_config"), { cache: "no-store" });
   const text = await response.text();
   if (!response.ok) {
     const payload = tryParseJson(text);
@@ -462,7 +508,7 @@ function normalizeShadowPolicy(payload: Record<string, unknown>): ShadowPolicy {
 }
 
 export async function fetchShadowGlobalPolicy(): Promise<ShadowPolicy> {
-  const response = await fetch(api("/api/shadow/policy"), { cache: "no-store" });
+  const response = await fetchLogged(api("/api/shadow/policy"), { cache: "no-store" });
   const text = await response.text();
   if (!response.ok) {
     const payload = tryParseJson(text);
@@ -474,7 +520,7 @@ export async function fetchShadowGlobalPolicy(): Promise<ShadowPolicy> {
 }
 
 export async function updateShadowGlobalPolicy(patch: Partial<ShadowPolicy>): Promise<ShadowPolicy> {
-  const response = await fetch(api("/api/shadow/policy"), {
+  const response = await fetchLogged(api("/api/shadow/policy"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(patch),
@@ -492,7 +538,7 @@ export async function fetchShadowDomainPolicy(domain: string): Promise<ShadowPol
   if (!trimmed) {
     throw new Error("domain is required");
   }
-  const response = await fetch(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
+  const response = await fetchLogged(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
     cache: "no-store",
   });
   const text = await response.text();
@@ -512,7 +558,7 @@ export async function updateShadowDomainPolicy(domain: string, patch: Partial<Sh
   if (!trimmed) {
     throw new Error("domain is required");
   }
-  const response = await fetch(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
+  const response = await fetchLogged(api(`/api/shadow/policy/${encodeURIComponent(trimmed)}`), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(patch),
@@ -529,7 +575,7 @@ export async function updateShadowDomainPolicy(domain: string, patch: Partial<Sh
 }
 
 export async function listShadowDomainPolicies(): Promise<Record<string, ShadowPolicy>> {
-  const response = await fetch(api("/api/shadow/policy/domains"), { cache: "no-store" });
+  const response = await fetchLogged(api("/api/shadow/policy/domains"), { cache: "no-store" });
   const text = await response.text();
   const payload = tryParseJson(text) ?? {};
   if (!response.ok) {
@@ -566,7 +612,7 @@ export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Pro
     }));
   }
 
-  const response = await fetch(api("/api/shadow/snapshot"), {
+  const response = await fetchLogged(api("/api/shadow/snapshot"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -614,7 +660,7 @@ export async function requestShadowSnapshot(request: ShadowSnapshotRequest): Pro
 }
 
 export async function updateShadowConfig(input: { enabled: boolean }): Promise<ShadowConfig> {
-  const response = await fetch(api("/api/shadow/toggle"), {
+  const response = await fetchLogged(api("/api/shadow/toggle"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ enabled: Boolean(input.enabled) }),
@@ -676,6 +722,7 @@ export function subscribeDiscoveryEvents(
       source?.close();
       if (source?.url !== fallbackEndpoint) {
         try {
+          try { console.debug?.('[SSE->poll] discovery stream fallback'); } catch {}
           source = buildSource(fallbackEndpoint);
           source.onmessage = (evt) => {
             try {
@@ -711,7 +758,7 @@ export async function fetchDiscoveryItem(id: string): Promise<DiscoveryItem> {
     throw new Error("id is required");
   }
 
-  const response = await fetch(api(`/api/discovery/item/${encodeURIComponent(trimmed)}`));
+  const response = await fetchLogged(api(`/api/discovery/item/${encodeURIComponent(trimmed)}`));
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `Discovery item fetch failed (${response.status})`);
@@ -727,7 +774,7 @@ export async function confirmDiscoveryItem(id: string, action: string = "include
     throw new Error("id is required");
   }
 
-  const response = await fetch(api("/api/discovery/confirm"), {
+  const response = await fetchLogged(api("/api/discovery/confirm"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ id: trimmed, action }),
@@ -759,7 +806,7 @@ export async function upsertIndexDocument(
     body.meta = options.meta;
   }
 
-  const response = await fetch(api("/api/index/upsert"), {
+  const response = await fetchLogged(api("/api/index/upsert"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -802,7 +849,7 @@ export async function searchIndex(
   const abortSignal = options.signal;
   const attemptHybrid = async () => {
     try {
-      const response = await fetch(api("/api/index/hybrid_search"), {
+      const response = await fetchLogged(api("/api/index/hybrid_search"), {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify(body),
@@ -813,15 +860,15 @@ export async function searchIndex(
           const detail = await response.text();
           throw new Error(detail || `Hybrid search failed (${response.status})`);
         }
-        return { payload: null, reason: await response.text() } as const;
+        return { payload: null, reason: await response.text(), traceId: response.traceId ?? null } as const;
       }
       const payload = (await response.json()) as Record<string, unknown>;
-      return { payload, reason: null } as const;
+      return { payload, reason: null, traceId: response.traceId ?? null } as const;
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw error;
       }
-      return { payload: null, reason: error instanceof Error ? error.message : String(error) } as const;
+      return { payload: null, reason: error instanceof Error ? error.message : String(error), traceId: null } as const;
     }
   };
 
@@ -834,7 +881,8 @@ export async function searchIndex(
         ? hybridResult.payload["keywordFallback"]
         : false,
     );
-    return normalizeSearchPayload(hybridResult.payload, fallbackFlag);
+    const normalized = normalizeSearchPayload(hybridResult.payload, fallbackFlag);
+    return { ...normalized, source: "hybrid", traceId: hybridResult.traceId ?? null };
   }
 
   if (abortSignal?.aborted) {
@@ -848,7 +896,7 @@ export async function searchIndex(
 
   for (const endpoint of fallbackEndpoints) {
     try {
-      const response = await fetch(api(endpoint), {
+      const response = await fetchLogged(api(endpoint), {
         method: endpoint === "/api/index/search" ? "POST" : "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify(body),
@@ -860,7 +908,8 @@ export async function searchIndex(
         continue;
       }
       const payload = (await response.json()) as Record<string, unknown>;
-      return normalizeSearchPayload(payload, true);
+      const normalized = normalizeSearchPayload(payload, true);
+      return { ...normalized, source: "keyword", traceId: response.traceId ?? null };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         throw error;
@@ -870,12 +919,13 @@ export async function searchIndex(
   }
 
   try {
-    const response = await fetch(api(`/api/search?${legacyParams.toString()}`), {
+    const response = await fetchLogged(api(`/api/search?${legacyParams.toString()}`), {
       signal: abortSignal,
     });
     if (response.ok) {
       const payload = (await response.json()) as Record<string, unknown>;
-      return normalizeSearchPayload(payload, true);
+      const normalized = normalizeSearchPayload(payload, true);
+      return { ...normalized, source: "legacy", traceId: response.traceId ?? null };
     }
     const detail = await response.text();
     lastError = new Error(detail || `Search request failed (${response.status})`);
@@ -1124,7 +1174,7 @@ export async function storeChatMessage(
   if (!normalizedThread) {
     throw new Error("threadId is required to store chat message");
   }
-  const response = await fetch(api(`/api/chat/${encodeURIComponent(normalizedThread)}/message`), {
+  const response = await fetchLogged(api(`/api/chat/${encodeURIComponent(normalizedThread)}/message`), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -1161,7 +1211,7 @@ export async function runAutopilotTool(
     Object.assign(headers, JSON_HEADERS);
     body = JSON.stringify(options.payload ?? {});
   }
-  const response = await fetch(api(trimmed), {
+  const response = await fetchLogged(api(trimmed), {
     method,
     headers,
     body,
@@ -1200,7 +1250,7 @@ export async function startCrawlJob(request: CrawlJobRequest): Promise<CrawlJobR
     budget: request.maxPages ?? 20,
     depth: request.maxDepth ?? 2,
   };
-  const response = await fetch(api("/api/refresh"), {
+  const response = await fetchLogged(api("/api/refresh"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -1232,7 +1282,7 @@ export async function runAgentTurn(query: string): Promise<AgentTurnResponse> {
   if (!trimmed) {
     throw new Error("Query is required for agent turn");
   }
-  const response = await fetch(api("/api/tools/agent/turn"), {
+  const response = await fetchLogged(api("/api/tools/agent/turn"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ query: trimmed }),
@@ -1347,7 +1397,7 @@ export async function triggerRefresh(
     body.depth = depth;
   }
 
-  const response = await fetch(api("/api/refresh"), {
+  const response = await fetchLogged(api("/api/refresh"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -1378,7 +1428,7 @@ export async function triggerRefresh(
   const status = typeof statusValue === "string" && statusValue.trim().length > 0 ? statusValue.trim() : null;
   const createdValue = payload.created;
   const created = typeof createdValue === "boolean" ? createdValue : Boolean(createdValue);
-  const dedupValue = payload.deduplicated;
+  const dedupValue = (payload as { deduplicated?: unknown }).deduplicated;
   const deduplicated = typeof dedupValue === "boolean" ? dedupValue : Boolean(dedupValue);
 
   return {
@@ -1391,7 +1441,7 @@ export async function triggerRefresh(
 }
 
 export async function reindexUrl(url: string): Promise<unknown> {
-  const response = await fetch(api("/api/tools/reindex"), {
+  const response = await fetchLogged(api("/api/tools/reindex"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ batch: [url] }),
@@ -1429,7 +1479,7 @@ export interface JobStatusPayload {
 }
 
 export async function fetchJobStatus(jobId: string): Promise<JobStatusPayload> {
-  const response = await fetch(api(`/api/jobs/${jobId}/status`));
+  const response = await fetchLogged(api(`/api/jobs/${jobId}/status`));
   if (!response.ok) {
     throw new Error(`Unable to fetch job status (${response.status})`);
   }
@@ -1437,7 +1487,7 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusPayload> {
 }
 
 export async function fetchJobProgress(jobId: string): Promise<JobStatusPayload> {
-  const response = await fetch(api(`/api/jobs/${jobId}/progress`));
+  const response = await fetchLogged(api(`/api/jobs/${jobId}/progress`));
   if (!response.ok) {
     throw new Error(`Unable to fetch job progress (${response.status})`);
   }
@@ -1664,7 +1714,7 @@ function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatus
     normalizedDocs: Number(statsPayload.normalized_docs ?? 0) || 0,
     docsIndexed: Number(statsPayload.docs_indexed ?? 0) || 0,
     skipped: Number(statsPayload.skipped ?? 0) || 0,
-    deduped: Number(statsPayload.deduped ?? 0) || 0,
+  deduped: Number(statsPayload.deduped ?? 0) || 0,
     embedded: Number(statsPayload.embedded ?? 0) || 0,
   };
   const stepsTotal = Number(payload.steps_total ?? 0) || 0;
@@ -1709,7 +1759,7 @@ function normalizeJobStatus(jobId: string, payload: JobStatusPayload): JobStatus
 }
 
 export async function fetchPendingDocuments(): Promise<PendingDocument[]> {
-  const response = await fetch(api("/api/docs/pending"));
+  const response = await fetchLogged(api("/api/docs/pending"));
   if (!response.ok) {
     throw new Error(`Unable to fetch pending documents (${response.status})`);
   }
@@ -1752,14 +1802,14 @@ function normalizeModelName(value: unknown): string | null {
 }
 
 export async function fetchModelInventory(): Promise<ModelInventory> {
-  const healthPromise = fetch(api("/api/llm/health"));
+  const healthPromise = fetchLogged(api("/api/llm/health"));
   const modelEndpoints = ["/api/llm/llm_models", "/api/llm/models"] as const;
   let modelsResponse: Response | null = null;
   let lastModelError: Error | null = null;
 
   for (const endpoint of modelEndpoints) {
     try {
-      const response = await fetch(api(endpoint));
+      const response = await fetchLogged(api(endpoint));
       if (!response.ok) {
         const detail = await response.text();
         const message = detail || `Unable to retrieve model list (${response.status})`;
@@ -1890,7 +1940,7 @@ export async function autopullModels(candidates: string[]): Promise<AutopullResp
   if (!Array.isArray(candidates) || candidates.length === 0) {
     throw new Error("At least one candidate model is required");
   }
-  const response = await fetch(api("/api/llm/autopull"), {
+  const response = await fetchLogged(api("/api/llm/autopull"), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ candidates }),
@@ -1919,7 +1969,7 @@ export async function extractPage(
     params.set("vision", "1");
   }
   const query = params.toString();
-  const response = await fetch(api(`/api/extract${query ? `?${query}` : ""}`), {
+  const response = await fetchLogged(api(`/api/extract${query ? `?${query}` : ""}`), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ url }),
@@ -1944,7 +1994,7 @@ export interface SaveSeedRequest {
 }
 
 export async function fetchSeeds(): Promise<SeedRegistryResponse> {
-  const response = await fetch(api("/api/seeds"));
+  const response = await fetchLogged(api("/api/seeds"));
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Unable to fetch seeds (${response.status})`);
@@ -1989,7 +2039,7 @@ export async function saveSeed(request: SaveSeedRequest): Promise<SeedRegistryRe
     body = { revision };
   }
 
-  const response = await fetch(api(path), {
+  const response = await fetchLogged(api(path), {
     method,
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -2079,11 +2129,12 @@ export async function createDomainSeed(url: string, scope: CrawlScope = "domain"
   const snapshot = await fetchSeeds();
   const revision = snapshot.revision;
 
+
   try {
     const registry = await saveSeed({
       action: "create",
-      revision,
-      seed: { url: normalized, scope },
+           revision,
+           seed: { url: normalized, scope },
     });
     const seed = findSeedForUrl(registry, normalized);
     return {
@@ -2100,8 +2151,8 @@ export async function createDomainSeed(url: string, scope: CrawlScope = "domain"
         registry = await fetchSeeds();
       } catch {
         registry = snapshot;
-      }
-      const seed = registry ? findSeedForUrl(registry, normalized) : null;
+           }
+           const seed = registry ? findSeedForUrl(registry, normalized) : null;
       return {
         registry,
         seed,
@@ -2123,7 +2174,7 @@ async function requestSelectionResult(
   body: Record<string, unknown>,
   errorMessage: string
 ): Promise<SelectionResult> {
-  const response = await fetch(api(path), {
+  const response = await fetchLogged(api(path), {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -2167,7 +2218,7 @@ async function requestSelectionResult(
     if (candidate) {
       return { text: candidate.trim(), raw: payload };
     }
-    return { text: JSON.stringify(payload, null, 2), raw: payload };
+    return { text: String(payload), raw: payload };
   }
 
   throw new Error(`${errorMessage}: Unsupported response shape`);
@@ -2218,7 +2269,7 @@ const DEFAULT_AGENT_BROWSER_CONFIG: AgentBrowserConfigPayload = {
 
 export async function fetchAgentBrowserConfig(): Promise<AgentBrowserConfigPayload> {
   try {
-    const response = await fetch(api("/api/agent/config"), { cache: "no-store" });
+    const response = await fetchLogged(api("/api/agent/config"), { cache: "no-store" });
     if (!response.ok) {
       if (response.status === 404) {
         return { ...DEFAULT_AGENT_BROWSER_CONFIG, _source: "fallback" };
@@ -2236,7 +2287,7 @@ export async function fetchAgentBrowserConfig(): Promise<AgentBrowserConfigPaylo
 export async function updateAgentBrowserConfig(
   payload: AgentBrowserConfigPayload
 ): Promise<AgentBrowserConfigPayload> {
-  const response = await fetch(api("/api/agent/config"), {
+  const response = await fetchLogged(api("/api/agent/config"), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -2262,7 +2313,7 @@ export type DesktopRuntimeInfo = {
 
 export async function fetchDesktopRuntime(): Promise<DesktopRuntimeInfo> {
   try {
-    const response = await fetch(api("/api/admin/runtime"), { cache: "no-store" });
+    const response = await fetchLogged(api("/api/admin/runtime"), { cache: "no-store" });
     if (!response.ok) {
       if (response.status !== 404) {
         const detail = await response.text();
@@ -2312,7 +2363,7 @@ export type OllamaHealthResponse = {
 };
 
 export async function fetchModels(): Promise<OllamaHealthResponse> {
-  const response = await fetch(api("/api/admin/ollama/health"), { cache: "no-store" });
+  const response = await fetchLogged(api("/api/admin/ollama/health"), { cache: "no-store" });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Failed to load model health (${response.status})`);
@@ -2321,7 +2372,7 @@ export async function fetchModels(): Promise<OllamaHealthResponse> {
 }
 
 export async function installModels(payload: { models: string[] }): Promise<OllamaHealthResponse> {
-  const response = await fetch(api("/api/admin/install_models"), {
+  const response = await fetchLogged(api("/api/admin/install_models"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -2345,7 +2396,7 @@ export type DiagnosticsRunResponse = {
 };
 
 export async function runDiagnostics(): Promise<DiagnosticsRunResponse> {
-  const response = await fetch(api("/api/diagnostics/run"), { method: "POST" });
+  const response = await fetchLogged(api("/api/diagnostics/run"), { method: "POST" });
   if (!response.ok) {
     if (response.status === 404) {
       return {
