@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify
 
-from backend.app.llm.ollama_client import OllamaClient, OllamaClientError
+from backend.app.llm.ollama_client import OllamaClient, OllamaClientError, DEFAULT_OLLAMA_HOST
 
 bp = Blueprint("health_api", __name__, url_prefix="/api/health")
 
@@ -16,14 +16,11 @@ def ollama_health():
     try:
         payload = client.health()
     except OllamaClientError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 503
+        return jsonify({"ok": False, "host": client.base_url, "error": str(exc)}), 503
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 503
+        return jsonify({"ok": False, "host": client.base_url, "error": str(exc)}), 503
 
-    # Extract host from client config
-    host = getattr(client, "base_url", "http://127.0.0.1:11434")
-    
-    return jsonify({"ok": True, "host": host, "tags": payload})
+    return jsonify({"ok": True, "host": client.base_url, "tags": payload})
 
 
 __all__ = ["bp"]

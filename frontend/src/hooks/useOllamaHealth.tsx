@@ -8,6 +8,18 @@ function resolveApi(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+interface OllamaModel {
+  name: string;
+}
+
+interface OllamaHealthResponse {
+  ok: boolean;
+  tags?: {
+    models?: OllamaModel[];
+  };
+  error?: string;
+}
+
 /**
  * Hook to check Ollama health and available models
  * 
@@ -42,12 +54,12 @@ export function useOllamaHealth() {
     async function check() {
       try {
         const res = await fetch(resolveApi("/api/health/ollama"));
-        const data = await res.json();
+        const data = (await res.json()) as OllamaHealthResponse;
 
         if (!mounted) return;
 
         if (data.ok) {
-          const models = data.tags?.models?.map((m: { name: string }) => m.name) || [];
+          const models = data.tags?.models?.map((m) => m.name) || [];
           setState({ ok: true, models, error: null, loading: false });
         } else {
           setState({ ok: false, models: [], error: data.error || "Unknown error", loading: false });

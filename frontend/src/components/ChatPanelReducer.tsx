@@ -1,10 +1,44 @@
-"use client";
 import React, { useCallback, useEffect, useReducer, useRef } from "react";
 import { reducer, State } from "@/state/chat";
-import { streamChat } from "@/lib/chatClient";
+import { streamChat, type StreamEvt } from "@/lib/chatClient";
 
 function toOllamaMessages(msgs: State["messages"]) {
   return msgs.map((m) => ({ role: m.role, content: m.text }));
+}
+
+/**
+ * Extract text chunk from various delta event formats
+ * Handles both direct delta and nested message.content formats
+ */
+function extractDeltaChunk(evt: StreamEvt): string {
+  if (evt.type !== "delta") {
+    return "";
+  }
+
+  const data = evt.data;
+  if (typeof data !== "object" || data === null || data.type !== "delta") {
+    return "";
+  }
+
+  // Check for direct delta field
+  if (typeof data.delta === "string" && data.delta) {
+    return data.delta;
+  }
+
+  // Check for nested message.content
+  if ("message" in data) {
+    const msg = data.message;
+    if (
+      typeof msg === "object" &&
+      msg !== null &&
+      "content" in msg &&
+      typeof msg.content === "string"
+    ) {
+      return msg.content;
+    }
+  }
+
+  return "";
 }
 
 export default function ChatPanelReducer() {
@@ -33,31 +67,9 @@ export default function ChatPanelReducer() {
           },
           (evt) => {
             if (evt.type === "delta") {
-              // Type-safe access to delta data
-              const deltaData = evt.data;
-              if (deltaData.type === "delta") {
-                // Extract chunk from various possible formats
-                let chunk = "";
-                if (typeof deltaData.delta === "string") {
-                  chunk = deltaData.delta;
-                } else if (
-                  typeof deltaData === "object" &&
-                  deltaData !== null &&
-                  "message" in deltaData
-                ) {
-                  const msg = deltaData.message;
-                  if (
-                    typeof msg === "object" &&
-                    msg !== null &&
-                    "content" in msg &&
-                    typeof msg.content === "string"
-                  ) {
-                    chunk = msg.content;
-                  }
-                }
-                if (chunk) {
-                  dispatch({ type: "assistant_delta", id: asstId, chunk });
-                }
+              const chunk = extractDeltaChunk(evt);
+              if (chunk) {
+                dispatch({ type: "assistant_delta", id: asstId, chunk });
               }
             } else if (evt.type === "complete") {
               dispatch({ type: "assistant_complete", id: asstId });
