@@ -15,6 +15,8 @@ interface SystemCheckPanelProps {
   browserReport: BrowserDiagnosticsReport | null;
   loading?: boolean;
   error?: string | null;
+  // Optional correlation id when the API call itself failed
+  errorTraceId?: string | null;
   blocking?: boolean;
   skipMessage?: string | null;
   onRetry?: () => void;
@@ -81,6 +83,7 @@ export function SystemCheckPanel({
   browserReport,
   loading = false,
   error = null,
+  errorTraceId = null,
   blocking = false,
   skipMessage = null,
   onRetry,
@@ -160,6 +163,11 @@ export function SystemCheckPanel({
             <div>
               <p className="font-semibold">System check error</p>
               <p>{error}</p>
+              {errorTraceId ? (
+                <p className="text-xs text-muted-foreground">
+                  Trace: <span className="font-mono">{errorTraceId}</span>
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -178,6 +186,11 @@ export function SystemCheckPanel({
                 <Badge variant={statusVariant(entry.status)}>{statusLabel(entry.status)}</Badge>
               </div>
               {entry.detail ? <p className="mt-2 text-xs text-muted-foreground">{entry.detail}</p> : null}
+              {entry.key === 'backend' && systemCheck?.traceId ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Trace: <span className="font-mono">{systemCheck.traceId}</span>
+                </p>
+              ) : null}
             </div>
           ))}
         </div>

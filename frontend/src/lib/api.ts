@@ -147,10 +147,14 @@ export async function runSystemCheck(): Promise<SystemCheckResponse> {
     headers: JSON_HEADERS,
     body: "{}",
   });
+  const traceId = response.traceId ?? response.headers.get?.("x-trace-id") ?? null;
   if (!response.ok) {
-    throw new Error(`System check failed (${response.status})`);
+    const err: Error & { traceId?: string | null } = new Error(`System check failed (${response.status})`);
+    err.traceId = typeof traceId === "string" ? traceId : null;
+    throw err;
   }
-  return response.json();
+  const payload = (await response.json()) as SystemCheckResponse;
+  return { ...payload, traceId: typeof traceId === "string" ? traceId : payload.traceId ?? null };
 }
 
 export interface SearchIndexOptions {

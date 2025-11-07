@@ -97,22 +97,30 @@ def create_app() -> Flask:
     from .api import sources as sources_api
     from .api import runtime as runtime_api
     from .config import AppConfig
+    from .embedding_manager import EmbeddingManager
     from .jobs.focused_crawl import FocusedCrawlManager
+    from .middleware.request_id import RequestIdMiddleware
+    from .middleware.session import SessionMiddleware
     from .jobs.runner import JobRunner
-    from .shadow import ShadowCaptureService, ShadowIndexer, ShadowPolicyStore
-    from .search.service import SearchService
-    from .db import AppStateDB
-    from .db import domain_profiles as domain_profiles_db
-    from .services.progress_bus import ProgressBus
-    from .services.log_bus import AgentLogBus
-    from .services.incident_log import IncidentLog
-    from .services.labeler import LabelWorker, MemoryAgingWorker
-    from .routes.config import bp as config_bp
-    from server.refresh_worker import RefreshWorker
-    from server.learned_web_db import get_db
-    from .middleware import request_id as request_id_middleware
-    from server import middleware_logging
+    from .middleware import logging as middleware_logging
+    from backend.app.db.store import AppStateDB
+    from backend.app.db.domain_profiles import db as domain_profiles_db
+    from backend.app.services.progress_bus import ProgressBus
+    from backend.app.services.log_bus import AgentLogBus
+    from backend.app.services.incident_log import IncidentLog
+    from backend.app.routes.util import get_db
+    from backend.app.services.search import SearchService
+    from backend.app.jobs.refresh import RefreshWorker
+    from backend.app.jobs.label import LabelWorker
+    from backend.app.jobs.memory import MemoryAgingWorker
+    from backend.app.shadow.policy_store import ShadowPolicyStore
+    from backend.app.shadow.capture import ShadowCaptureService
+    from backend.app.shadow.manager import ShadowIndexer
+    from .api.admin import bp as config_bp
 
+    # ==========================================================================
+    # App initialization
+    # ==========================================================================
 
     app = Flask(__name__)
 
@@ -136,11 +144,6 @@ def create_app() -> Flask:
         project_name=langsmith_project,
         service_name="self_hosted_search_engine.api",
     )
-
-    app.before_request(request_id_middleware.before_request)
-    app.after_request(request_id_middleware.after_request)
-    app.before_request(middleware_logging.before_request)
-    app.after_request(middleware_logging.after_request)
 
     CORS(
         app,
@@ -306,11 +309,84 @@ def create_app() -> Flask:
     config.ensure_dirs()
     config.log_summary()
 
+    # App state database
+    # --------------------------------------------------------------------------
     state_db = AppStateDB(config.app_state_db_path)
     domain_profiles_db.configure(config.agent_data_dir / "domain_profiles.sqlite3")
     progress_bus = ProgressBus()
     agent_log_bus = AgentLogBus()
     incident_log = IncidentLog()
+    app.config["APP_STATE_DB"] = state_db
+    app.config["DOMAIN_PROFILES_DB"] = domain_profiles_db
+    app.config["PROGRESS_BUS"] = progress_bus
+    app.config["AGENT_LOG_BUS"] = agent_log_bus
+    app.config["INCIDENT_LOG"] = incident_log
+
+    # --------------------------------------------------------------------------
+    # Learned web database
+    # --------------------------------------------------------------------------
+    db = get_db(config.learned_web_db_path)
+    app.config["DB"] = db
+
+    # --------------------------------------------------------------------------
+    # Focused crawl manager
+    # --------------------------------------------------------------------------
+    manager = FocusedCrawlManager(config)
+    app.config["FOCUSED_CRAWL_MANAGER"] = manager
+
+    # --------------------------------------------------------------------------
+    # Search service
+    # --------------------------------------------------------------------------
+    search_service = SearchService(config, manager)
+    refresh_worker = RefreshWorker(
+        search_service, interval=config.search_refresh_interval
+    )
+    app.config["SEARCH_SERVICE"] = search_service
+    app.config["REFRESH_WORKER"] = refresh_worker
+
+    # --------------------------------------------------------------------------
+    # Job runner
+    # --------------------------------------------------------------------------
+    runner = JobRunner(config.logs_dir, worker_count=3)
+    app.config["JOB_RUNNER"] = runner
+
+    # --------------------------------------------------------------------------
+    # Background workers
+    # --------------------------------------------------------------------------
+    if not config.disable_background_workers:
+        worker_interval = config.background_worker_interval
+        memory_interval = config.memory_aging_interval
+        if worker_interval > 0:
+            label_worker = LabelWorker(state_db, interval=worker_interval)
+            memory_worker = MemoryAgingWorker(state_db, interval=memory_interval)
+            app.config["LABEL_WORKER"] = label_worker
+            app.config["MEMORY_WORKER"] = memory_worker
+
+    # --------------------------------------------------------------------------
+    # Shadow browser state
+    # --------------------------------------------------------------------------
+    shadow_policy_store = ShadowPolicyStore(config.shadow_state_path)
+    app.config["SHADOW_POLICY_STORE"] = shadow_policy_store
+    shadow_capture_service = ShadowCaptureService(
+        config.shadow_state_path,
+        policy_store=shadow_policy_store,
+        logger=app.logger,
+    )
+    app.config["SHADOW_CAPTURE_SERVICE"] = shadow_capture_service
+    shadow_manager = ShadowIndexer(
+        config.shadow_state_path,
+        policy_store=shadow_policy_store,
+        logger=app.logger,
+    )
+    app.config["SHADOW_INDEXER"] = shadow_manager
+
+    # --------------------------------------------------------------------------
+    # RAG components
+    # --------------------------------------------------------------------------
+    rag_enabled = _as_bool(os.getenv("RAG_ENABLED"), default=False)
+    rag_model_primary = os.getenv("RAG_MODEL_PRIMARY", "gpt-oss").strip()
+    rag_model_fallback = os.getenv("RAG_MODEL_FALLBACK", "").strip() or None
+    rag_model_embed = os.getenv("RAG_MODEL_EMBED", "embeddinggemma").strip()
 
     engine_config = EngineConfig.from_yaml(CONFIG_PATH)
     app.config.setdefault("RAG_ENGINE_CONFIG", engine_config)
@@ -630,36 +706,17 @@ def create_app() -> Flask:
     app.register_blueprint(system_check_api.bp)
     app.register_blueprint(sources_api.bp)
     app.register_blueprint(runtime_api.bp)
-    if app.config.get("AGENT_BROWSER_ENABLED"):
-        app.register_blueprint(agent_browser_api.bp)
+    app.register_blueprint(config_bp)
 
-    @app.get("/api/healthz")
-    def healthz() -> tuple[dict[str, str], int]:
-        return {"status": "ok"}, 200
+    request_id_middleware = RequestIdMiddleware(app.wsgi_app)
+    app.before_request(request_id_middleware.before_request)
+    app.after_request(request_id_middleware.after_request)
+    app.before_request(middleware_logging.before_request)
+    app.after_request(middleware_logging.after_request)
 
-    @app.get("/")
-    def root() -> Response:
-        repo_root = Path(__file__).resolve().parents[2]
-        candidate_paths = [
-            repo_root / "frontend" / "dist" / "index.html",
-            repo_root / "frontend" / "build" / "index.html",
-        ]
-        for path in candidate_paths:
-            if path.exists():
-                try:
-                    html = path.read_text("utf-8")
-                except OSError:
-                    break
-                return current_app.response_class(html, mimetype="text/html")
-        fallback = """<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Self-Hosted Search</title></head>
-<body><main><h1>Self-Hosted Search API</h1><section id=\"diagnostics-panel\"><p>The frontend build is unavailable.</p>
-<button id=\"diagnostics-run\">Run diagnostics</button><a id=\"diagnostics-download\" href=\"/api/diagnostics/report\">Download report</a>
-<a id=\"diagnostics-log-download\" href=\"/api/diagnostics/logs\">Download logs</a></section></main></body></html>"""
-        return current_app.response_class(fallback, mimetype="text/html")
-
-    @app.errorhandler(404)
-    def _not_found(_):
-        return jsonify({"error": "Not Found"}), 404
+    @app.route("/api/health")
+    def health_check():
+        return jsonify({"status": "ok"})
 
     def _ollama_host() -> str:
         return config.ollama_url

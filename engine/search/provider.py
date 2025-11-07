@@ -8,6 +8,7 @@ import requests
 
 
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
 
 
 def _wiki_search(query: str, limit: int) -> list[str]:
@@ -21,6 +22,7 @@ def _wiki_search(query: str, limit: int) -> list[str]:
                 "search": query,
             },
             timeout=5,
+            headers={"User-Agent": USER_AGENT},
         )
         response.raise_for_status()
     except requests.RequestException:

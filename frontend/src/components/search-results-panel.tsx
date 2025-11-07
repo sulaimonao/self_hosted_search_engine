@@ -24,6 +24,8 @@ interface SearchResultsPanelProps {
   isLoading: boolean;
   error?: string | null;
   detail?: string | null;
+  // Optional backend correlation id to help debugging failed searches
+  traceId?: string | null;
   onOpenHit: (url: string) => void;
   onAskAgent?: (query: string) => void;
   onRefresh?: () => void;
@@ -62,6 +64,7 @@ export function SearchResultsPanel({
   isLoading,
   error,
   detail,
+  traceId,
   onOpenHit,
   onAskAgent,
   onRefresh,
@@ -231,6 +234,11 @@ export function SearchResultsPanel({
           <div className="space-y-1">
             <p>{error}</p>
             {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
+            {traceId ? (
+              <p className="text-[11px] text-muted-foreground">
+                Trace: <span className="font-mono">{traceId}</span>
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -29,6 +29,7 @@ export interface SystemCheckController {
   setOpen: (value: boolean) => void;
   loading: boolean;
   error: string | null;
+  errorTraceId: string | null;
   backendReport: SystemCheckResponse | null;
   browserReport: BrowserDiagnosticsReport | null;
   skipMessage: string | null;
@@ -43,6 +44,7 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
   const [open, setOpen] = useState(Boolean(options.openInitially));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorTraceId, setErrorTraceId] = useState<string | null>(null);
   const [backendReport, setBackendReport] = useState<SystemCheckResponse | null>(null);
   const [browserReport, setBrowserReport] = useState<BrowserDiagnosticsReport | null>(null);
   const [skipMessage, setSkipMessage] = useState<string | null>(null);
@@ -98,14 +100,17 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
           fetchBrowserReport(Boolean(runOptions.forceBrowser)),
         ]);
         setBackendReport(backend);
+  setErrorTraceId(null);
         if (browser) {
           setBrowserReport(browser);
         } else if (runOptions.forceBrowser) {
           setBrowserReport(null);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err ?? 'System check failed');
+  const message = err instanceof Error ? err.message : String(err ?? 'System check failed');
+  const traceId = (err as { traceId?: string | null })?.traceId ?? null;
         setError(message);
+  setErrorTraceId(typeof traceId === 'string' ? traceId : null);
         throw err;
       } finally {
         setLoading(false);
@@ -290,6 +295,7 @@ export function useSystemCheck(options: UseSystemCheckOptions = {}): SystemCheck
     setOpen,
     loading,
     error,
+  errorTraceId,
     backendReport,
     browserReport,
     skipMessage,

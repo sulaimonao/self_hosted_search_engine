@@ -28,7 +28,7 @@ def get_history() -> Any:
         limit = int(limit_raw) if limit_raw is not None else 50
     except (TypeError, ValueError):
         limit = 50
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(limit, 100))
 
     store, lock = _history_store()
     with lock:
@@ -47,10 +47,12 @@ def append_history(entry: dict[str, Any]) -> None:
         "ts": entry.get("ts")
         or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "query": entry.get("query", ""),
-        "filters": entry.get("filters"),
+        "filters": entry.get("filters") or {},
         "results_count": entry.get("results_count", 0),
     }
     with lock:
+        if store and store[-1].get("id") and store[-1].get("id") == enriched.get("id"):
+            return
         store.append(enriched)
 
 

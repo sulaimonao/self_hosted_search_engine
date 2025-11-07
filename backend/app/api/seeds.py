@@ -82,6 +82,7 @@ def _serialize_seed(directory: str, raw: dict[str, Any]) -> dict[str, Any]:
     notes = raw.get("notes")
     if not isinstance(notes, str) or not notes.strip():
         title = raw.get("title")
+        # Fallback to title if notes are not provided
         notes = str(title).strip() if isinstance(title, str) and title.strip() else None
     payload = {
         "id": seed_id,
@@ -129,6 +130,31 @@ def _write_registry(registry: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _validate_entrypoints(
+    raw_urls: Iterable[Any],
+) -> tuple[list[str], list[dict[str, str]]]:
+    validated: list[str] = []
+    errors: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_url in raw_urls:
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            continue
+        url = raw_url.strip()
+        if url in seen:
+            continue
+        try:
+            parsed = parse_http_url(url)
+            normalized = urlunparse(
+                (parsed.scheme, parsed.netloc, parsed.path or "", "", parsed.query, "")
+            )
+            validated.append(normalized)
+            seen.add(url)
+            seen.add(normalized)
+        except ValueError as exc:
+            errors.append({"url": url, "error": str(exc)})
+    return validated, errors
+
+
 _HTTP_SCHEMES = {"http", "https"}
 
 
@@ -139,7 +165,7 @@ def parse_http_url(url: str):
     try:
         parsed = urlparse(candidate)
     except ValueError as exc:  # pragma: no cover - defensive
-        raise ValueError("URL is not valid") from exc
+        raise ValueError(f"URL is not valid: {exc}") from exc
     if parsed.scheme not in _HTTP_SCHEMES or not parsed.netloc:
         raise ValueError("Provide an absolute http(s) URL")
     if parsed.username or parsed.password or "@" in parsed.netloc:
@@ -228,86 +254,86 @@ def _success_payload(registry: dict[str, Any], revision: str) -> Response:
 
 
 @bp.get("")
-def list_seeds() -> Response:
-    with _LOCK:
-        registry, revision = _read_registry()
-        return _success_payload(registry, revision)
+def get_seeds():
+    """Return all seeds from the registry."""
+    try:
+        registry, _ = _read_registry()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 500
+    results = _collect_seeds(registry)
+    return jsonify({"ok": True, "data": results})
 
 
 @bp.post("")
-def create_seed() -> Response:
+def create_seed():
+    """Create a new seed."""
     payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        return _error_response("Request body must be a JSON object")
-    revision = payload.get("revision")
-    if not isinstance(revision, str):
-        return _error_response("revision is required")
+    raw_entrypoints = payload.get("entrypoints")
+    if not isinstance(raw_entrypoints, list):
+        url = payload.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return jsonify({"error": "entrypoints or url is required"}), 400
+        raw_entrypoints = [url]
+
+    entrypoints, errors = _validate_entrypoints(raw_entrypoints)
+    if not entrypoints:
+        return (
+            jsonify(
+                {
+                    "error": "at least one valid entrypoint is required",
+                    "detail": errors,
+                }
+            ),
+            400,
+        )
+
     scope = payload.get("scope") or DEFAULT_SCOPE
     if scope not in ALLOWED_SCOPES:
-        return _error_response("scope must be one of: " + ", ".join(sorted(ALLOWED_SCOPES)))
-    url_value = payload.get("url")
-    if not isinstance(url_value, str):
-        return _error_response("url is required")
+        scope = DEFAULT_SCOPE
     notes = payload.get("notes")
-    if notes is not None and not isinstance(notes, str):
-        return _error_response("notes must be a string when provided")
+
     with _LOCK:
-        registry, current_revision = _read_registry()
-        if revision != current_revision:
-            return _conflict_response("Seed registry has been modified", current_revision)
-        try:
-            normalized_url = _normalize_url(url_value)
-        except ValueError as exc:
-            return _error_response(str(exc))
-        sources = _ensure_workspace(registry)
-        existing_ids = _existing_ids(sources)
-        for source in sources:
-            entrypoints = source.get("entrypoints")
-            if isinstance(entrypoints, str):
-                candidates = [entrypoints]
-            elif isinstance(entrypoints, list):
-                candidates = [str(item) for item in entrypoints if isinstance(item, str)]
-            else:
-                candidates = []
-            if any(_urls_equal(normalized_url, str(candidate)) for candidate in candidates):
-                return _conflict_response("Seed already exists for that URL", current_revision)
-        seed_id = payload.get("id")
-        if isinstance(seed_id, str) and seed_id.strip():
-            identifier = seed_id.strip()
-            if identifier in existing_ids:
-                return _conflict_response("Seed id already exists", current_revision)
-        else:
-            identifier = _generate_id(normalized_url, existing_ids)
-        timestamp = datetime.now(timezone.utc).isoformat()
-        record = {
-            "id": identifier,
-            "entrypoints": [normalized_url],
-            "scope": scope,
-            "notes": notes.strip() if isinstance(notes, str) and notes.strip() else None,
-            "created_at": timestamp,
-            "updated_at": timestamp,
-        }
-        sources.insert(0, record)
-        new_revision = _write_registry(registry)
-        LOGGER.info("seed %s added to registry", identifier)
-        return _success_payload(registry, new_revision), 201
+        registry, _ = _read_registry()
+        workspace = _workspace_directory()
+        if workspace not in registry["directories"]:
+            registry["directories"][workspace] = {"sources": []}
+        new_entry = _create_seed_entry(entrypoints, scope, notes)
+        registry["directories"][workspace]["sources"].insert(0, new_entry)
+        _write_registry(registry)
+
+    response_payload = {
+        "ok": True,
+        "data": _serialize_seed(workspace, new_entry),
+    }
+    if errors:
+        response_payload["errors"] = errors
+    return jsonify(response_payload), 201
+
+
+def _create_seed_entry(
+    entrypoints: list[str], scope: str, notes: str | None
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "id": _generate_seed_id(entrypoints[0]),
+        "entrypoints": entrypoints,
+        "scope": scope,
+        "notes": notes.strip() if notes else None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _generate_seed_id(url: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, url))
 
 
 @bp.put("/<seed_id>")
 def update_seed(seed_id: str) -> Response:
     payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        return _error_response("Request body must be a JSON object")
     revision = payload.get("revision")
     if not isinstance(revision, str):
         return _error_response("revision is required")
-    scope = payload.get("scope")
-    notes = payload.get("notes")
-    url_value = payload.get("url")
-    if notes is not None and not isinstance(notes, str):
-        return _error_response("notes must be a string when provided")
-    if scope is not None and scope not in ALLOWED_SCOPES:
-        return _error_response("scope must be one of: " + ", ".join(sorted(ALLOWED_SCOPES)))
     with _LOCK:
         registry, current_revision = _read_registry()
         if revision != current_revision:
@@ -320,42 +346,54 @@ def update_seed(seed_id: str) -> Response:
                 break
         if target is None:
             return _error_response("Seed not found", 404)
-        if url_value is not None:
-            if not isinstance(url_value, str):
-                return _error_response("url must be a string")
-            try:
-                normalized_url = _normalize_url(url_value)
-            except ValueError as exc:
-                return _error_response(str(exc))
-            for source in sources:
-                if source is target:
-                    continue
-                entrypoints = source.get("entrypoints")
-                if isinstance(entrypoints, str):
-                    candidates = [entrypoints]
-                elif isinstance(entrypoints, list):
-                    candidates = [str(item) for item in entrypoints if isinstance(item, str)]
-                else:
-                    candidates = []
-                if any(_urls_equal(normalized_url, str(candidate)) for candidate in candidates):
-                    return _conflict_response("Seed already exists for that URL", current_revision)
-            target["entrypoints"] = [normalized_url]
-        if scope is not None:
-            target["scope"] = scope
-        if notes is not None:
-            target["notes"] = notes.strip() if notes.strip() else None
-        timestamp = datetime.now(timezone.utc).isoformat()
-        target["updated_at"] = timestamp
-        new_revision = _write_registry(registry)
-        LOGGER.info("seed %s updated", seed_id)
-        return _success_payload(registry, new_revision)
+        new_entrypoints = payload.get("entrypoints")
+        if isinstance(new_entrypoints, list):
+            validated_urls, validation_errors = _validate_entrypoints(new_entrypoints)
+            if validated_urls:
+                target["entrypoints"] = validated_urls
+                changed = True
+
+        new_scope = payload.get("scope")
+        if isinstance(new_scope, str) and new_scope in ALLOWED_SCOPES:
+            target["scope"] = new_scope
+            changed = True
+
+        new_notes = payload.get("notes")
+        if isinstance(new_notes, str):
+            target["notes"] = new_notes.strip()
+            changed = True
+
+        if changed:
+            target["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _write_registry(registry)
+
+        directory = next(
+            (
+                directory
+                for directory, dir_payload in registry.get("directories", {}).items()
+                if any(
+                    isinstance(s, dict) and s.get("id") == seed_id
+                    for s in (
+                        dir_payload.get("sources", [])
+                        if isinstance(dir_payload, dict)
+                        else []
+                    )
+                )
+            ),
+            "unknown",
+        )
+        response_payload = {
+            "ok": True,
+            "data": _serialize_seed(directory, target),
+        }
+        if "validation_errors" in locals() and validation_errors:
+            response_payload["errors"] = validation_errors
+        return jsonify(response_payload)
 
 
 @bp.delete("/<seed_id>")
-def delete_seed(seed_id: str) -> Response:
+def delete_seed(seed_id: str):
     payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        return _error_response("Request body must be a JSON object")
     revision = payload.get("revision")
     if not isinstance(revision, str):
         return _error_response("revision is required")

@@ -220,6 +220,15 @@ export class ChatClient {
       if (!streamPreferred || isAbortError(error)) {
         throw error;
       }
+      try {
+        // Surface a lightweight observability breadcrumb when we fall back
+        // from streaming (NDJSON) to non-stream JSON mode.
+        console.debug?.("[chat] streaming failed; retrying without stream", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // ignore console failures
+      }
       return this.#sendOnce(request, false);
     }
   }

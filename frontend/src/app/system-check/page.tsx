@@ -15,6 +15,7 @@ export default function SystemCheckPage() {
         browserReport={controller.browserReport}
         loading={controller.loading}
         error={controller.error}
+  errorTraceId={controller.errorTraceId}
         blocking={controller.blocking}
         skipMessage={controller.skipMessage}
         onRetry={controller.rerun}

@@ -79,7 +79,13 @@ export default function LocalHome() {
     <main className="p-4 grid gap-6 md:grid-cols-2">
       <section>
         <h2 className="font-semibold mb-2">Local search</h2>
-        <div className="flex gap-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            search();
+          }}
+          className="flex gap-2"
+        >
           <input
             className="border p-2 flex-1 rounded"
             value={q}
@@ -87,19 +93,25 @@ export default function LocalHome() {
             placeholder="Search local index..."
           />
           <button
-            type="button"
+            type="submit"
             className="border px-3 rounded disabled:opacity-50"
             onClick={search}
             disabled={searching}
           >
             {searching ? "Searching..." : "Search"}
           </button>
-        </div>
+        </form>
         <JsonBlock data={searchResult} />
       </section>
       <section>
         <h2 className="font-semibold mb-2">Domain profile</h2>
-        <div className="flex gap-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            scan();
+          }}
+          className="flex gap-2"
+        >
           <input
             className="border p-2 flex-1 rounded"
             value={host}
@@ -107,18 +119,22 @@ export default function LocalHome() {
             placeholder="example.com"
           />
           <button
-            type="button"
+            type="submit"
             className="border px-3 rounded disabled:opacity-50"
             onClick={scan}
             disabled={scanning}
           >
             {scanning ? "Scanning..." : "Scan"}
           </button>
-        </div>
+        </form>
         <JsonBlock data={profile} />
       </section>
       {error && (
-        <div className="md:col-span-2 text-sm text-red-600 border border-red-200 rounded p-3">
+        <div
+          className="md:col-span-2 text-sm text-red-600 border border-red-200 rounded p-3"
+          role="alert"
+          aria-live="assertive"
+        >
           {error}
         </div>
       )}

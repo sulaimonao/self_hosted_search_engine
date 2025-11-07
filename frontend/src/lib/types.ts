@@ -464,6 +464,8 @@ export interface SystemCheckResponse {
   diagnostics: SystemCheckDiagnostics;
   llm: SystemCheckLlm;
   summary: SystemCheckSummary;
+  // Correlation id from the backend (if provided)
+  traceId?: string | null;
 }
 
 export type BrowserDiagnosticsStatus = 'pass' | 'fail' | 'warn' | 'timeout' | string;

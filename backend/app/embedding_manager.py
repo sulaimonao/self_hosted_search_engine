@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import subprocess
@@ -28,6 +29,7 @@ class EmbeddingManager:
         embed_model: str | None = None,
         auto_install: bool | None = None,
         fallbacks: Optional[list[str]] = None,
+        logger: Optional[logging.Logger] = None,
     ) -> None:
         env_base = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_URL", "")) or "http://127.0.0.1:11434"
         env_model = os.getenv("EMBED_MODEL") or embed_model or "embeddinggemma"
@@ -43,6 +45,7 @@ class EmbeddingManager:
         else:
             self.fallbacks = list(fallbacks)
 
+        self.logger = logger or logging.getLogger(__name__)
         self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._installing = False
@@ -76,6 +79,8 @@ class EmbeddingManager:
             return False
 
         if result.returncode != 0:
+            if result.stderr and "command not found" in result.stderr.lower():
+                self.logger.warning("ollama command not found; auto-start disabled")
             return False
 
         output = (result.stdout or "").strip()
@@ -180,7 +185,7 @@ class EmbeddingManager:
 
         if errors:
             return "; ".join(errors)
-        return None
+        return "unable to start Ollama"
 
     def list_models(self) -> list[str]:
         try:
@@ -197,6 +202,8 @@ class EmbeddingManager:
             return []
 
         if result.returncode != 0:
+            if result.stderr and "command not found" in result.stderr.lower():
+                self.logger.warning("ollama command not found; auto-install disabled")
             return []
 
         output = result.stdout or ""
@@ -237,7 +244,12 @@ class EmbeddingManager:
                     if tag_name not in bucket:
                         bucket.append(tag_name)
         if not tags:
-            for name in self.list_models():
+            try:
+                model_list = self.list_models()
+            except Exception:  # pragma: no cover - defensive
+                self.logger.debug("list_models failed during tag collection", exc_info=True)
+                model_list = []
+            for name in model_list:
                 tag_name = (name or "").strip()
                 if not tag_name:
                     continue
@@ -311,6 +323,8 @@ class EmbeddingManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except Exception as exc:  # pragma: no cover - subprocess spawn failure
             raise RuntimeError(str(exc)) from exc

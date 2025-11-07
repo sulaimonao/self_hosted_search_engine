@@ -25,6 +25,7 @@ _CRAWL_PHASES = (
     SimulatedPhase("parsing", 1.0),
     SimulatedPhase("normalizing", 1.0),
     SimulatedPhase("indexing", 0.5),
+    SimulatedPhase("cleaning", 0.2),
 )
 
 
@@ -36,7 +37,7 @@ def _crawl_builder(phase: str, pct: float, elapsed: float, job: Any) -> dict[str
     if processed > 0:
         seed = (metadata.get("seeds") or ["https://example.com"])[0]
         last_url = f"{seed.rstrip('/')}/doc/{processed}"
-    eta = max(int(job.total_duration - elapsed), 0)
+    eta = max(int(job.total_duration - elapsed), 0) if job.total_duration else 0
     return {
         "urls_processed": processed,
         "last_url": last_url,
@@ -52,7 +53,10 @@ def crawl_status() -> Any:
         return jsonify({"ok": False, "error": "job_id_required"}), 400
 
     store = _job_store()
-    snapshot = store.snapshot(job_id)
+    try:
+        snapshot = store.snapshot(job_id)
+    except KeyError:
+        return jsonify({"ok": False, "error": "job_not_found"}), 404
     if snapshot is None:
         return jsonify({"ok": False, "error": "job_not_found"}), 404
 
@@ -62,7 +66,8 @@ def crawl_status() -> Any:
 
 def create_crawl_job(seeds: list[str], mode: str) -> str:
     store = _job_store()
-    metadata = {"seeds": seeds, "mode": mode, "estimated_urls": max(len(seeds) * 8, 25)}
+    estimated_urls = max(len(seeds) * 8, 25)
+    metadata = {"seeds": seeds, "mode": mode, "estimated_urls": estimated_urls}
     return store.create(_CRAWL_PHASES, _crawl_builder, metadata=metadata)
 
 

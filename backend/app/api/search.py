@@ -74,11 +74,12 @@ _EMBEDDING_ERROR_CODE = "embedding_unavailable"
 
 
 def _format_snippet(text: str, width: int = 320) -> str:
-    cleaned = " ".join((text or "").split())
+    escaped_text = escape(text or "")
+    cleaned = " ".join(escaped_text.split())
     if not cleaned:
         return ""
     snippet = textwrap.shorten(cleaned, width=width, placeholder="…")
-    return str(escape(snippet))
+    return snippet
 
 
 def _serialize_chunk(chunk: RetrievedChunk) -> dict:
@@ -429,7 +430,7 @@ def run_agent(
             }
             if model:
                 payload["llm_model_requested"] = model
-            return _finalize(payload, status="error", message="planner execution error")
+            return _finalize(payload, status="error", message="planner execution error"), 500
 
         response = dict(result)
         used_model = response.get("planner_model_used")
@@ -558,7 +559,7 @@ def crawl_validation_endpoint():
             "queued": False,
             "detail": "URL validated; queue long-running crawls via /api/seeds or the Crawl Manager UI.",
         }
-        return jsonify(response)
+        return jsonify(response), 204
 
 
 @bp.get("/search")
@@ -628,12 +629,22 @@ def search_endpoint():
             search_service = current_app.config.get("SEARCH_SERVICE")
             app_config = current_app.config.get("APP_CONFIG")
             if search_service and app_config:
-                results, job_id, context = search_service.run_query(
-                    query,
-                    limit=app_config.search_default_limit,
-                    use_llm=llm_enabled,
-                    model=llm_model,
-                )
+                try:
+                    results, job_id, context = search_service.run_query(
+                        query,
+                        limit=app_config.search_default_limit,
+                        use_llm=llm_enabled,
+                        model=llm_model,
+                    )
+                except Exception as exc:
+                    current_app.logger.debug("search_service query failed", exc_info=True)
+                    payload = _warming_payload(
+                        "Search service warming up.",
+                        code="search_service_unavailable",
+                        extra={"error": str(exc)},
+                    )
+                    return jsonify(payload)
+
                 payload = {
                     "status": "ok",
                     "results": results,
@@ -686,7 +697,24 @@ def search_endpoint():
                 return jsonify(payload)
 
             try:
+                if (
+                    len(
+                        store.query(
+                            vector=embedder.embed_query(query),
+                            k=1,
+                            similarity_threshold=engine_config.retrieval.similarity_threshold,
+                        )
+                    )
+                    < engine_config.retrieval.min_hits
+                ):
+                    coldstart.build_index(query, use_llm=llm_enabled, llm_model=llm_model)
+
                 query_vector = embedder.embed_query(query)
+                results = store.query(
+                    vector=query_vector,
+                    k=engine_config.retrieval.k,
+                    similarity_threshold=engine_config.retrieval.similarity_threshold,
+                )
             except EmbeddingError as exc:
                 message = (
                     "Unable to generate embeddings from Ollama. "
@@ -700,24 +728,6 @@ def search_endpoint():
                     payload["llm_model"] = llm_model
                 return jsonify(payload)
             except Exception as exc:  # pragma: no cover - defensive logging
-                current_app.logger.debug("unexpected embedding failure", exc_info=True)
-                payload = _warming_payload(
-                    "Unable to embed query.",
-                    code="embedding_failure",
-                    extra={"error": str(exc), "model": embed_model_name},
-                )
-                payload["llm_used"] = llm_enabled
-                if llm_model:
-                    payload["llm_model"] = llm_model
-                return jsonify(payload)
-
-            try:
-                results = store.query(
-                    vector=query_vector,
-                    k=engine_config.retrieval.k,
-                    similarity_threshold=engine_config.retrieval.similarity_threshold,
-                )
-            except Exception as exc:
                 current_app.logger.debug("vector store query failed", exc_info=True)
                 payload = _warming_payload(
                     "Vector store warming up.",
@@ -747,36 +757,12 @@ def search_endpoint():
                     return jsonify(payload)
                 try:
                     query_vector = embedder.embed_query(query)
-                except EmbeddingError as exc:
-                    message = (
-                        "Unable to generate embeddings from Ollama. "
-                        f"Ensure the model '{embed_model_name}' is installed and running."
-                    )
-                    payload = _embedding_unavailable_payload(
-                        f"{message} ({exc})", status=embed_status
-                    )
-                    payload["llm_used"] = llm_enabled
-                    if llm_model:
-                        payload["llm_model"] = llm_model
-                    return jsonify(payload)
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    current_app.logger.debug("unexpected embedding failure after coldstart", exc_info=True)
-                    payload = _warming_payload(
-                        "Unable to embed query after coldstart.",
-                        code="embedding_failure",
-                        extra={"error": str(exc), "model": embed_model_name},
-                    )
-                    payload["llm_used"] = llm_enabled
-                    if llm_model:
-                        payload["llm_model"] = llm_model
-                    return jsonify(payload)
-                try:
                     results = store.query(
                         vector=query_vector,
                         k=engine_config.retrieval.k,
                         similarity_threshold=engine_config.retrieval.similarity_threshold,
                     )
-                except Exception as exc:
+                except Exception as exc:  # pragma: no cover - defensive logging
                     current_app.logger.debug("vector store query failed after coldstart", exc_info=True)
                     payload = _warming_payload(
                         "Vector store warming up.",
