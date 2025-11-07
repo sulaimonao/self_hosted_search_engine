@@ -16,6 +16,9 @@ from typing import Any, Dict, Iterable, Optional
 LOG_DIR = os.getenv("LOG_DIR", "data/telemetry")
 LOG_PATH = os.path.join(LOG_DIR, "events.ndjson")
 MAX_FIELD_BYTES = int(os.getenv("LOG_MAX_FIELD_BYTES", "4096"))
+LOG_SPLIT_BY_FEATURE = os.getenv("LOG_SPLIT_BY_FEATURE", "1").lower() in {"1", "true", "yes", "on"}
+LOG_ROTATE_DAILY = os.getenv("LOG_ROTATE_DAILY", "1").lower() in {"1", "true", "yes", "on"}
+LOG_SAMPLE_PCT = float(os.getenv("LOG_SAMPLE_PCT", "1.0"))  # 0..1
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -153,6 +156,34 @@ def _emit_file(ev: Dict[str, Any]) -> None:
         with io.open(LOG_PATH, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
 
+    # Optionally mirror to a per-feature file to keep files smaller and easier to scan
+    if LOG_SPLIT_BY_FEATURE:
+        try:
+            event_name = str(ev.get("event") or "").strip()
+            feature = str(ev.get("feature") or ev.get("feat") or "").strip()
+            if not feature:
+                # derive from event prefix, e.g., "chat.stream_summary" -> "chat"
+                if "." in event_name:
+                    feature = event_name.split(".", 1)[0]
+                elif event_name:
+                    feature = event_name
+                else:
+                    feature = "app"
+            feature_dir = os.path.join(LOG_DIR, feature)
+            os.makedirs(feature_dir, exist_ok=True)
+            if LOG_ROTATE_DAILY:
+                # daily file naming: YYYY-MM-DD.ndjson
+                day = datetime.now(timezone.utc).date().isoformat()
+                per_path = os.path.join(feature_dir, f"{day}.ndjson")
+            else:
+                per_path = os.path.join(feature_dir, "events.ndjson")
+            with _lock:
+                with io.open(per_path, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+        except Exception:
+            # best-effort mirror; never raise
+            pass
+
 
 def _emit_otel(ev: Dict[str, Any]) -> None:
     if not _OTEL_TRACER:
@@ -184,6 +215,18 @@ def _emit_otel(ev: Dict[str, Any]) -> None:
 
 
 def write_event(ev: Dict[str, Any]) -> None:
+    # sampling (best-effort) to reduce growth under heavy load
+    try:
+        if LOG_SAMPLE_PCT < 1.0:
+            import random
+
+            pct = max(0.0, min(1.0, LOG_SAMPLE_PCT))
+            if pct <= 0.0 or random.random() >= pct:
+                return
+    except Exception:
+        # ignore sampling errors
+        pass
+
     ev.setdefault("ts", now_iso())
     if "duration_ms" in ev and isinstance(ev["duration_ms"], float):
         ev["duration_ms"] = int(ev["duration_ms"])

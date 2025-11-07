@@ -10,6 +10,7 @@ import subprocess
 import threading
 from collections import deque
 from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
 import yaml
@@ -219,12 +220,30 @@ def create_app() -> Flask:
             event = str(obj.get("event", obj.get("evt", obj.get("type", "ui.log"))))
             msg = obj.get("msg") or obj.get("message") or obj.get("m") or None
             meta = obj.get("meta") or obj.get("data") or None
+            # feature and component hints (top-level fields used by logger)
+            feature = obj.get("feature") or obj.get("feat") or None
+            component = obj.get("component") or obj.get("comp") or None
+            source = obj.get("source") or obj.get("src") or "ui"
+            test_run_id = (
+                obj.get("test_run_id")
+                or obj.get("tr")
+                or request.headers.get("x-test-run-id")
+            )
             # Redact noisy/sensitive fields
             if isinstance(meta, dict):
                 meta = _logging_utils.redact(meta)
             # Funnel into existing server-side structured event writer
             try:
-                _log_event(level, event, msg=msg, meta=meta, source="ui")
+                _log_event(
+                    level,
+                    event,
+                    msg=msg,
+                    meta=meta,
+                    source=source,
+                    feature=feature,
+                    component=component,
+                    test_run_id=test_run_id,
+                )
             except Exception:
                 # best-effort, don't surface internal errors to the client
                 _logging_utils.write_event({"level": "ERROR", "event": "logs.ingest.error", "msg": "failed to write ui log"})
@@ -255,7 +274,17 @@ def create_app() -> Flask:
         from backend import logging_utils as _logging_utils
 
         log_dir = os.getenv("LOG_DIR", "data/telemetry")
-        path = os.path.join(log_dir, "events.ndjson")
+        # Optional feature param to read from per-feature logs
+        feature = request.args.get("feature") or request.args.get("feat")
+        if feature:
+            path = os.path.join(log_dir, feature, "events.ndjson")
+            # if daily files are used, prefer today's date if exists
+            day = datetime.utcnow().date().isoformat()
+            alt = os.path.join(log_dir, feature, f"{day}.ndjson")
+            if os.path.exists(alt):
+                path = alt
+        else:
+            path = os.path.join(log_dir, "events.ndjson")
         out = []
         try:
             if os.path.exists(path):

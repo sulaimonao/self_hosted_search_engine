@@ -376,9 +376,11 @@ function exposeAppLogger() {
     try {
       const base = process.env.API_URL || process.env.BACKEND_URL || 'http://127.0.0.1:5050';
       const url = `${base.replace(/\/$/, '')}/api/logs`;
+      // support optional test run id header
+      const tr = (Array.isArray(payload) ? undefined : (payload as any)?.tr) || process.env.NEXT_PUBLIC_TEST_RUN_ID;
       await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(tr ? { 'x-test-run-id': String(tr) } : {}) },
         body: JSON.stringify(payload),
       });
     } catch (error) {
@@ -393,9 +395,9 @@ function exposeAppLogger() {
       try {
         if (!obj || typeof obj !== 'object') return;
         // best-effort lightweight sanitisation
-        const payload = { ...obj };
-        if (!payload.event) payload.event = 'ui.log';
-        if (!payload.level) payload.level = 'INFO';
+  const payload: Record<string, unknown> = { src: 'frontend', ...obj };
+  if (!('event' in payload) || payload['event'] == null) (payload as any)['event'] = 'ui.log';
+  if (!('level' in payload) || payload['level'] == null) (payload as any)['level'] = 'INFO';
         void send(payload);
       } catch (error) {
         // ignore

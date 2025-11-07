@@ -17,6 +17,7 @@ _TOP_LEVEL_FIELDS = {
     "request_id",
     "session_id",
     "user_id",
+    # HTTP-ish
     "method",
     "path",
     "status",
@@ -29,6 +30,11 @@ _TOP_LEVEL_FIELDS = {
     "fallback_used",
     "error",
     "error_msg",
+    # New standardized fields for feature-oriented logging
+    "feature",
+    "component",
+    "source",
+    "test_run_id",
 }
 
 # Input aliases translated to the canonical field names above.
@@ -36,6 +42,11 @@ _FIELD_ALIASES = {
     "trace": "trace_id",
     "session": "session_id",
     "user": "user_id",
+    # short aliases used by UI and helpers
+    "feat": "feature",
+    "comp": "component",
+    "src": "source",
+    "tr": "test_run_id",
 }
 
 
