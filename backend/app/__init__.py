@@ -99,24 +99,19 @@ def create_app() -> Flask:
     from .config import AppConfig
     from .embedding_manager import EmbeddingManager
     from .jobs.focused_crawl import FocusedCrawlManager
-    from .middleware.request_id import RequestIdMiddleware
-    from .middleware.session import SessionMiddleware
+    from .middleware import request_id as request_id_middleware
     from .jobs.runner import JobRunner
-    from .middleware import logging as middleware_logging
     from backend.app.db.store import AppStateDB
-    from backend.app.db.domain_profiles import db as domain_profiles_db
     from backend.app.services.progress_bus import ProgressBus
     from backend.app.services.log_bus import AgentLogBus
     from backend.app.services.incident_log import IncidentLog
-    from backend.app.routes.util import get_db
-    from backend.app.services.search import SearchService
-    from backend.app.jobs.refresh import RefreshWorker
-    from backend.app.jobs.label import LabelWorker
-    from backend.app.jobs.memory import MemoryAgingWorker
+    from backend.app.search.service import SearchService
+    from server.learned_web_db import get_db as get_learned_web_db
+    from server.refresh_worker import RefreshWorker
+    from backend.app.services.labeler import LabelWorker, MemoryAgingWorker
     from backend.app.shadow.policy_store import ShadowPolicyStore
     from backend.app.shadow.capture import ShadowCaptureService
     from backend.app.shadow.manager import ShadowIndexer
-    from .api.admin import bp as config_bp
 
     # ==========================================================================
     # App initialization
@@ -312,12 +307,10 @@ def create_app() -> Flask:
     # App state database
     # --------------------------------------------------------------------------
     state_db = AppStateDB(config.app_state_db_path)
-    domain_profiles_db.configure(config.agent_data_dir / "domain_profiles.sqlite3")
     progress_bus = ProgressBus()
     agent_log_bus = AgentLogBus()
     incident_log = IncidentLog()
     app.config["APP_STATE_DB"] = state_db
-    app.config["DOMAIN_PROFILES_DB"] = domain_profiles_db
     app.config["PROGRESS_BUS"] = progress_bus
     app.config["AGENT_LOG_BUS"] = agent_log_bus
     app.config["INCIDENT_LOG"] = incident_log
@@ -325,60 +318,8 @@ def create_app() -> Flask:
     # --------------------------------------------------------------------------
     # Learned web database
     # --------------------------------------------------------------------------
-    db = get_db(config.learned_web_db_path)
+    db = get_learned_web_db(config.learned_web_db_path)
     app.config["DB"] = db
-
-    # --------------------------------------------------------------------------
-    # Focused crawl manager
-    # --------------------------------------------------------------------------
-    manager = FocusedCrawlManager(config)
-    app.config["FOCUSED_CRAWL_MANAGER"] = manager
-
-    # --------------------------------------------------------------------------
-    # Search service
-    # --------------------------------------------------------------------------
-    search_service = SearchService(config, manager)
-    refresh_worker = RefreshWorker(
-        search_service, interval=config.search_refresh_interval
-    )
-    app.config["SEARCH_SERVICE"] = search_service
-    app.config["REFRESH_WORKER"] = refresh_worker
-
-    # --------------------------------------------------------------------------
-    # Job runner
-    # --------------------------------------------------------------------------
-    runner = JobRunner(config.logs_dir, worker_count=3)
-    app.config["JOB_RUNNER"] = runner
-
-    # --------------------------------------------------------------------------
-    # Background workers
-    # --------------------------------------------------------------------------
-    if not config.disable_background_workers:
-        worker_interval = config.background_worker_interval
-        memory_interval = config.memory_aging_interval
-        if worker_interval > 0:
-            label_worker = LabelWorker(state_db, interval=worker_interval)
-            memory_worker = MemoryAgingWorker(state_db, interval=memory_interval)
-            app.config["LABEL_WORKER"] = label_worker
-            app.config["MEMORY_WORKER"] = memory_worker
-
-    # --------------------------------------------------------------------------
-    # Shadow browser state
-    # --------------------------------------------------------------------------
-    shadow_policy_store = ShadowPolicyStore(config.shadow_state_path)
-    app.config["SHADOW_POLICY_STORE"] = shadow_policy_store
-    shadow_capture_service = ShadowCaptureService(
-        config.shadow_state_path,
-        policy_store=shadow_policy_store,
-        logger=app.logger,
-    )
-    app.config["SHADOW_CAPTURE_SERVICE"] = shadow_capture_service
-    shadow_manager = ShadowIndexer(
-        config.shadow_state_path,
-        policy_store=shadow_policy_store,
-        logger=app.logger,
-    )
-    app.config["SHADOW_INDEXER"] = shadow_manager
 
     # --------------------------------------------------------------------------
     # RAG components
@@ -396,7 +337,7 @@ def create_app() -> Flask:
     chat_logger.propagate = True
     app.config.setdefault("CHAT_LOGGER", chat_logger)
 
-    db = get_db(config.learned_web_db_path)
+    db = get_learned_web_db(config.learned_web_db_path)
     runner = JobRunner(config.logs_dir, worker_count=3)
     manager = FocusedCrawlManager(
         config,
@@ -688,7 +629,6 @@ def create_app() -> Flask:
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
     app.register_blueprint(meta_api.bp)
-    app.register_blueprint(config_bp)
     app.register_blueprint(admin_api.bp)
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
@@ -706,13 +646,9 @@ def create_app() -> Flask:
     app.register_blueprint(system_check_api.bp)
     app.register_blueprint(sources_api.bp)
     app.register_blueprint(runtime_api.bp)
-    app.register_blueprint(config_bp)
 
-    request_id_middleware = RequestIdMiddleware(app.wsgi_app)
     app.before_request(request_id_middleware.before_request)
     app.after_request(request_id_middleware.after_request)
-    app.before_request(middleware_logging.before_request)
-    app.after_request(middleware_logging.after_request)
 
     @app.route("/api/health")
     def health_check():
