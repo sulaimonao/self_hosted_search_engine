@@ -1375,6 +1375,24 @@ def _execute_chat_request(
 def chat_invoke() -> Response:
     start = time.perf_counter()
     raw_payload = request.get_json(silent=True) or {}
+    # Back-compat shim: allow minimal {"message": "...", "model": "..."}
+    # by converting to full ChatRequest shape expected by the validator.
+    try:
+        if isinstance(raw_payload, Mapping):
+            if "message" in raw_payload and "messages" not in raw_payload:
+                message_val = raw_payload.get("message")
+                model_val = raw_payload.get("model")
+                if isinstance(message_val, str) and message_val.strip():
+                    patched: dict[str, Any] = {"messages": [{"role": "user", "content": message_val.strip()}]}
+                    if isinstance(model_val, str) and model_val.strip():
+                        patched["model"] = model_val.strip()
+                    # Preserve explicit stream flag if provided
+                    stream_val = raw_payload.get("stream")
+                    if isinstance(stream_val, (bool, str, int)):
+                        patched["stream"] = stream_val  # validator will coerce
+                    raw_payload = patched
+    except Exception:  # pragma: no cover - defensive
+        pass
     try:
         chat_request = ChatRequest.model_validate(raw_payload)
     except ValidationError as exc:
@@ -1424,6 +1442,19 @@ def chat_invoke() -> Response:
 def chat_stream() -> Response:
     start = time.perf_counter()
     raw_payload = request.get_json(silent=True) or {}
+    # Back-compat shim mirroring chat_invoke: accept {message, model}
+    try:
+        if isinstance(raw_payload, Mapping):
+            if "message" in raw_payload and "messages" not in raw_payload:
+                message_val = raw_payload.get("message")
+                model_val = raw_payload.get("model")
+                if isinstance(message_val, str) and message_val.strip():
+                    patched: dict[str, Any] = {"messages": [{"role": "user", "content": message_val.strip()}], "stream": True}
+                    if isinstance(model_val, str) and model_val.strip():
+                        patched["model"] = model_val.strip()
+                    raw_payload = patched
+    except Exception:  # pragma: no cover - defensive
+        pass
     try:
         chat_request = ChatRequest.model_validate(raw_payload)
     except ValidationError as exc:

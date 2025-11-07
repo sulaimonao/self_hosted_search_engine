@@ -1,26 +1,26 @@
-import logging
-LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))
-LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
-try:
-    from concurrent_log_handler import ConcurrentRotatingFileHandler
-    _CONCURRENT_LOG_HANDLER_AVAILABLE = True
-except ImportError:
-    ConcurrentRotatingFileHandler = None
-    _CONCURRENT_LOG_HANDLER_AVAILABLE = False
 """Structured logging helpers for telemetry events and redaction."""
 
-from __future__ import annotations
-
+import os
+import logging
 import hashlib
 import io
 import json
-import os
 import sys
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
+
+try:
+    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    _CONCURRENT_LOG_HANDLER_AVAILABLE = True
+except ImportError:
+    ConcurrentRotatingFileHandler = None
+    _CONCURRENT_LOG_HANDLER_AVAILABLE = False
+
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
 
 LOG_DIR = os.getenv("LOG_DIR", "data/telemetry")
 LOG_PATH = os.path.join(LOG_DIR, "events.ndjson")
