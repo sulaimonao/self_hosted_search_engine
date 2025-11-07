@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 
+// API base URL resolution
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+
+function resolveApi(path: string): string {
+  if (!API_BASE) return path;
+  return `${API_BASE}${path}`;
+}
+
 /**
  * Hook to check Ollama health and available models
  * 
@@ -33,7 +41,7 @@ export function useOllamaHealth() {
 
     async function check() {
       try {
-        const res = await fetch("/api/health/ollama");
+        const res = await fetch(resolveApi("/api/health/ollama"));
         const data = await res.json();
 
         if (!mounted) return;

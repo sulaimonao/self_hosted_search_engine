@@ -36,10 +36,25 @@ export default function ChatPanelReducer() {
               // Type-safe access to delta data
               const deltaData = evt.data;
               if (deltaData.type === "delta") {
-                const chunk =
-                  (deltaData as { message?: { content?: string } }).message?.content ||
-                  deltaData.delta ||
-                  "";
+                // Extract chunk from various possible formats
+                let chunk = "";
+                if (typeof deltaData.delta === "string") {
+                  chunk = deltaData.delta;
+                } else if (
+                  typeof deltaData === "object" &&
+                  deltaData !== null &&
+                  "message" in deltaData
+                ) {
+                  const msg = deltaData.message;
+                  if (
+                    typeof msg === "object" &&
+                    msg !== null &&
+                    "content" in msg &&
+                    typeof msg.content === "string"
+                  ) {
+                    chunk = msg.content;
+                  }
+                }
                 if (chunk) {
                   dispatch({ type: "assistant_delta", id: asstId, chunk });
                 }
