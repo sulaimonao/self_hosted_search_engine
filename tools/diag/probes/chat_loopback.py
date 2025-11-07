@@ -40,6 +40,7 @@ def _has_stream_frames(text: str) -> bool:
     "probe_chat_loopback",
     description="POST /api/chat via Next streams frames (SSE + NDJSON)",
     severity=Severity.HIGH,
+    smoke_only=True,
 )
 def probe_chat_loopback(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []

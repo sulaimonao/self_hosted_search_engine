@@ -59,6 +59,12 @@ jobs:
           PYTHONPATH: .
         run: pytest -q tests/e2e/test_zero_touch.py
 
+      - name: Diagnostics (smoke probes)
+        env:
+          PYTHONPATH: .
+        run: |
+          python3 tools/e2e_diag.py --fail-on=high --smoke
+
       - name: Teardown
         if: always()
         run: |

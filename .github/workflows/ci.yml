@@ -92,7 +92,7 @@ jobs:
         run: npm run test
         working-directory: frontend
 
-      - name: Diagnostics
+      - name: Diagnostics (static)
         run: python3 tools/e2e_diag.py --fail-on=high
 
       - name: Upload diagnostics artifacts

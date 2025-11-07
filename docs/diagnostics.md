@@ -15,7 +15,9 @@ python3 tools/e2e_diag.py [--smoke] [--watch] [--fail-on=high|medium|low] \
 Key flags:
 
 - `--smoke`: enable optional runtime checks (Electron binary presence,
-  backend health probe).
+  backend health probe) and smoke-only probes. Notably, this enables the
+  chat loopback probe that posts to Next `/api/chat` and expects streaming
+  frames in both SSE and NDJSON modes.
 - `--watch`: rerun diagnostics when tracked files change.
 - `--fail-on`: control which severities cause exit code `1`.
 - `--only` / `--skip`: filter rule execution.
@@ -54,8 +56,8 @@ Exit codes:
   ```
 
 - **Desktop UI** – the chat panel exposes two toggles above the input:
-  - *Use current page*: sends the desktop window URL and document title with the prompt payload.
-  - *Reasoning*: surfaces the agent's reasoning stream inside collapsible sections for each answer.
+  - _Use current page_: sends the desktop window URL and document title with the prompt payload.
+  - _Reasoning_: surfaces the agent's reasoning stream inside collapsible sections for each answer.
 
   Assistant replies show Autopilot plans with a **Run plan** button. Client-side verbs execute in the browser tab immediately; headless verbs are batched to `/api/self_heal/execute_headless` without blocking client automation.
 

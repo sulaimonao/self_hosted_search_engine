@@ -4,7 +4,7 @@
 .PHONY: start bootstrap dev stop logs verify first-run preflight setup export-dataset
 .PHONY: desktop desktop-build dev-desktop
 .PHONY: api web
-.PHONY: lint-makefile diag
+.PHONY: lint-makefile diag diag-smoke
 .PHONY: ollama-pull-self-heal ollama-health index-health index-rebuild
 .PHONY: smoke-selfheal smoke
 .PHONY: deps-playwright
@@ -301,3 +301,6 @@ export-dataset: setup
 	@$(VENV_PY) scripts/export_dataset.py --out "$(OUT)" $(ARGS)
 diag: setup
 	@$(VENV_PY) tools/e2e_diag.py --fail-on=high
+
+diag-smoke: setup
+	@$(VENV_PY) tools/e2e_diag.py --fail-on=high --smoke

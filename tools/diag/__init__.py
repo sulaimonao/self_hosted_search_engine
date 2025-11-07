@@ -27,6 +27,7 @@ from .probes import (  # noqa: F401
     agent_trace_toggle,
     auth_clearance_profiles,
     browsing_fallbacks,
+    chat_loopback,  # ensure loopback probe is registered
     electron_webprefs,
     headers_pass,
     index_health_widget,
