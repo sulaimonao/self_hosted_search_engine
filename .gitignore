@@ -40,6 +40,7 @@ diagnostics/*
 !backend/app/api/agent_logs.py
 !backend/app/api/domain_profiles.py
 !backend/app/api/index_health.py
+!backend/app/api/health.py
 !backend/app/api/chat_history.py
 !backend/app/api/browser.py
 !backend/app/api/self_heal.py
