@@ -1429,6 +1429,34 @@ def chat_invoke() -> Response:
         )
         return error_response
 
+    # Reject requests that contain no non-empty user message content
+    try:
+        if not any(
+            (getattr(msg, "role", "").lower() == "user" and getattr(msg, "content", "").strip())
+            for msg in chat_request.messages
+        ):
+            request_id = _resolve_request_id(None)
+            g.chat_error_class = "EmptyMessage"
+            g.chat_error_message = "EMPTY_MESSAGE"
+            error_response = jsonify({"error": "EMPTY_MESSAGE"})
+            error_response.status_code = 400
+            error_response.headers["X-Request-Id"] = request_id
+            _publish_payload("io.chat.response", {"error": "EMPTY_MESSAGE", "trace_id": getattr(g, "trace_id", None)})
+            _log_stream_summary(
+                request_id=request_id,
+                model="unknown",
+                transport="json",
+                frames=0,
+                previews=[],
+                end="error",
+                trace_id=getattr(g, "trace_id", None),
+                error="EMPTY_MESSAGE",
+            )
+            return error_response
+    except Exception:
+        # best-effort guard; proceed to execution if validation above fails unexpectedly
+        pass
+
     _publish_payload("io.chat.request", chat_request.model_dump(exclude_none=True))
     return _execute_chat_request(
         chat_request,
@@ -1490,6 +1518,34 @@ def chat_stream() -> Response:
             error="validation_error",
         )
         return error_response
+
+    # Reject requests that contain no non-empty user message content (streaming path)
+    try:
+        if not any(
+            (getattr(msg, "role", "").lower() == "user" and getattr(msg, "content", "").strip())
+            for msg in chat_request.messages
+        ):
+            request_id = _resolve_request_id(None)
+            g.chat_error_class = "EmptyMessage"
+            g.chat_error_message = "EMPTY_MESSAGE"
+            error_response = jsonify({"error": "EMPTY_MESSAGE"})
+            error_response.status_code = 400
+            error_response.headers["X-Request-Id"] = request_id
+            _publish_payload("io.chat.response", {"error": "EMPTY_MESSAGE", "trace_id": getattr(g, "trace_id", None)})
+            _log_stream_summary(
+                request_id=request_id,
+                model="unknown",
+                transport="sse",
+                frames=0,
+                previews=[],
+                end="error",
+                trace_id=getattr(g, "trace_id", None),
+                error="EMPTY_MESSAGE",
+            )
+            return error_response
+    except Exception:
+        # best-effort guard
+        pass
 
     _publish_payload("io.chat.request", chat_request.model_dump(exclude_none=True))
     return _execute_chat_request(

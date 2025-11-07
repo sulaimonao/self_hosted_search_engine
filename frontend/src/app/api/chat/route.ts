@@ -25,6 +25,9 @@ export async function POST(req: NextRequest) {
   const lastUser = messages.filter((m) => (m?.role || '').toLowerCase() === 'user').pop();
   const textCandidate = typeof lastUser?.content === 'string' ? lastUser!.content : typeof inc['text'] === 'string' ? (inc['text'] as string) : '';
   const text = textCandidate.trim();
+  const hasNonEmptyUser = Array.isArray(messages)
+    ? messages.some((m) => (m?.role || '').toLowerCase() === 'user' && typeof m?.content === 'string' && (m.content as string).trim().length > 0)
+    : false;
 
   const accept = (req.headers.get('accept') || '').toLowerCase();
   const wantsNdjson = accept.includes('application/x-ndjson');
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
   let upstream: Response;
   if (wantsNdjson) {
     // Pass through ChatRequest if present; otherwise synthesize from text
-    const messagesPayload = Array.isArray(inc.messages)
+  const messagesPayload = Array.isArray(inc.messages)
       ? (inc.messages as Array<{ role?: unknown; content?: unknown }>).map((m) => ({
           role: typeof m.role === 'string' ? m.role : 'user',
           content: typeof m.content === 'string' ? m.content : '',
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest) {
       : text
       ? [{ role: 'user', content: text }]
       : [];
-    if (messagesPayload.length === 0) {
+  if (messagesPayload.length === 0 || !hasNonEmptyUser) {
       return new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -61,7 +64,7 @@ export async function POST(req: NextRequest) {
     });
   } else {
     // Backend SSE stream
-    if (!text && !Array.isArray(inc.messages)) {
+  if ((!text && !Array.isArray(inc.messages)) || !hasNonEmptyUser) {
       return new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -87,9 +90,19 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // If backend errored, bubble up JSON body if possible
+  // If backend errored, bubble up JSON body if possible, and normalize model-not-found shape
   if (!upstream.ok && (!upstream.body || (upstream.headers.get('content-type') || '').includes('application/json'))) {
-    return new Response(await upstream.text(), {
+    const text = await upstream.text();
+    try {
+      const json = JSON.parse(text) as Record<string, unknown>;
+      if ((upstream.status === 503 || upstream.status === 404) && (json?.error === 'model_not_found' || json?.error === 'MODEL_NOT_FOUND')) {
+        const resp = { error: 'MODEL_NOT_FOUND', model: (json.model as string | undefined) ?? (Array.isArray(json.tried) ? (json.tried as string[])[0] : undefined) };
+        return new Response(JSON.stringify(resp), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+    } catch {
+      // fall through to raw passthrough
+    }
+    return new Response(text, {
       status: upstream.status,
       headers: { 'Content-Type': upstream.headers.get('content-type') || 'application/json' },
     });
