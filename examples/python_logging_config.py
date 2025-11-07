@@ -1,5 +1,7 @@
 # Example: Python dictConfig for structured JSON logging
 # Usage: import logging.config; logging.config.dictConfig(LOGGING_CONFIG)
+# Note: To add custom fields like service, env, correlation_id to log records,
+#       use logging.LoggerAdapter or create a custom Filter that adds these fields.
 import logging
 import logging.config
 import os
@@ -19,7 +21,7 @@ LOGGING_CONFIG = {
     "formatters": {
         "json": {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s %(service)s %(env)s %(correlation_id)s"
+            "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s"
         }
     },
     "handlers": {
