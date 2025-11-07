@@ -1,3 +1,12 @@
+import logging
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
+try:
+    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    _CONCURRENT_LOG_HANDLER_AVAILABLE = True
+except ImportError:
+    ConcurrentRotatingFileHandler = None
+    _CONCURRENT_LOG_HANDLER_AVAILABLE = False
 """Structured logging helpers for telemetry events and redaction."""
 
 from __future__ import annotations
@@ -177,9 +186,29 @@ def _emit_file(ev: Dict[str, Any]) -> None:
                 per_path = os.path.join(feature_dir, f"{day}.ndjson")
             else:
                 per_path = os.path.join(feature_dir, "events.ndjson")
-            with _lock:
-                with io.open(per_path, "a", encoding="utf-8") as fh:
-                    fh.write(line + "\n")
+            if _CONCURRENT_LOG_HANDLER_AVAILABLE:
+                handler = ConcurrentRotatingFileHandler(
+                    per_path,
+                    maxBytes=LOG_MAX_BYTES if not LOG_ROTATE_DAILY else 0,
+                    backupCount=LOG_BACKUP_COUNT,
+                    encoding="utf-8"
+                )
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                record = logging.LogRecord(
+                    name=feature,
+                    level=logging.INFO,
+                    pathname=__file__,
+                    lineno=0,
+                    msg=line,
+                    args=(),
+                    exc_info=None
+                )
+                handler.emit(record)
+                handler.close()
+            else:
+                with _lock:
+                    with io.open(per_path, "a", encoding="utf-8") as fh:
+                        fh.write(line + "\n")
         except Exception:
             # best-effort mirror; never raise
             pass
