@@ -2,7 +2,26 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
-type VercelMessage = { role?: string; content?: string };
+type AnyRecord = Record<string, unknown>;
+type VercelMessage = { role?: string; content?: unknown; parts?: unknown };
+
+function extractText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => extractText(v))
+      .filter(Boolean)
+      .join('')
+      .trim();
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as AnyRecord;
+    if (typeof obj.text === 'string') return obj.text.trim();
+    if (obj.content !== undefined) return extractText(obj.content);
+    if (Array.isArray(obj.parts)) return extractText(obj.parts);
+  }
+  return '';
+}
 
 export async function POST(req: NextRequest) {
   // Translate Vercel AI SDK request into backend ChatRequest and proxy as SSE
@@ -23,10 +42,11 @@ export async function POST(req: NextRequest) {
   // Extract last user message from AI SDK shape
   const messages = Array.isArray(inc.messages) ? (inc.messages as VercelMessage[]) : [];
   const lastUser = messages.filter((m) => (m?.role || '').toLowerCase() === 'user').pop();
-  const textCandidate = typeof lastUser?.content === 'string' ? lastUser!.content : typeof inc['text'] === 'string' ? (inc['text'] as string) : '';
+  const fromMsg = lastUser ? extractText((lastUser as AnyRecord).content ?? (lastUser as AnyRecord).parts) : '';
+  const textCandidate = fromMsg || (typeof inc['text'] === 'string' ? (inc['text'] as string) : '');
   const text = textCandidate.trim();
   const hasNonEmptyUser = Array.isArray(messages)
-    ? messages.some((m) => (m?.role || '').toLowerCase() === 'user' && typeof m?.content === 'string' && (m.content as string).trim().length > 0)
+    ? messages.some((m) => (m?.role || '').toLowerCase() === 'user' && extractText((m as AnyRecord).content ?? (m as AnyRecord).parts).length > 0)
     : false;
 
   const accept = (req.headers.get('accept') || '').toLowerCase();
@@ -37,9 +57,9 @@ export async function POST(req: NextRequest) {
   if (wantsNdjson) {
     // Pass through ChatRequest if present; otherwise synthesize from text
   const messagesPayload = Array.isArray(inc.messages)
-      ? (inc.messages as Array<{ role?: unknown; content?: unknown }>).map((m) => ({
+      ? (inc.messages as Array<{ role?: unknown; content?: unknown; parts?: unknown }>).map((m) => ({
           role: typeof m.role === 'string' ? m.role : 'user',
-          content: typeof m.content === 'string' ? m.content : '',
+          content: extractText(m.content ?? m.parts),
         }))
       : text
       ? [{ role: 'user', content: text }]
@@ -71,9 +91,9 @@ export async function POST(req: NextRequest) {
       });
     }
     const messagesPayload = Array.isArray(inc.messages)
-      ? (inc.messages as Array<{ role?: unknown; content?: unknown }>).map((m) => ({
+      ? (inc.messages as Array<{ role?: unknown; content?: unknown; parts?: unknown }>).map((m) => ({
           role: typeof m.role === 'string' ? m.role : 'user',
-          content: typeof m.content === 'string' ? m.content : '',
+          content: extractText(m.content ?? m.parts),
         }))
       : [{ role: 'user', content: text }];
     upstream = await fetch(`${backend}/api/chat/stream`, {
