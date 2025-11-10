@@ -53,7 +53,7 @@ def stream_events() -> Response:
                     continue
                 if record is None:
                     break
-                payload = json.dumps(_serialize(record, include_text=False))
+                payload = json.dumps(service.to_dict(record, include_text=False))
                 yield f"data: {payload}\n\n"
         finally:
             service.unsubscribe(token)
