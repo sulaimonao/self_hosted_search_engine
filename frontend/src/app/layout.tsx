@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
 import { SWRConfig } from "swr";
+import "katex/dist/katex.min.css";
+import "highlight.js/styles/github.css";
 
 import ClientOnly from "@/components/ClientOnly";
 import { NavProgressProvider } from "@/app/nav-progress-provider";

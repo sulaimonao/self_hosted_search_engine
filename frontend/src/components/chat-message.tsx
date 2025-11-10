@@ -3,7 +3,12 @@ import type { ComponentPropsWithoutRef, MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import remarkMath from "remark-math";
+import rehypeRaw from "rehype-raw";
+import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { PluggableList } from "unified";
 
 import { cn } from "@/lib/utils";
 
@@ -12,6 +17,32 @@ type ChatMessageMarkdownProps = {
   className?: string;
   onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void;
 };
+
+type SanitizeSchema = Parameters<typeof rehypeSanitize>[0];
+
+const SANITIZE_OPTIONS: SanitizeSchema = (() => {
+  const schema: SanitizeSchema = (JSON.parse(JSON.stringify(defaultSchema ?? {})) as SanitizeSchema) ?? {};
+  const tagList = Array.isArray(schema?.tagNames) ? schema.tagNames : [];
+  const existingTags = new Set(tagList);
+  existingTags.add("u");
+  schema.tagNames = Array.from(existingTags);
+
+  const baseAttributes = schema.attributes ?? {};
+  const extendAttributes = (tag: string, attrs: string[]) => {
+    const currentValues = baseAttributes[tag];
+    const current = new Set<string>(Array.isArray(currentValues) ? (currentValues as string[]) : []);
+    attrs.forEach((attr) => current.add(attr));
+    baseAttributes[tag] = Array.from(current);
+  };
+
+  extendAttributes("u", ["class", "className"]);
+  extendAttributes("span", ["class", "className"]);
+  extendAttributes("code", ["class", "className", "data-language"]);
+  extendAttributes("pre", ["class", "className"]);
+
+  schema.attributes = baseAttributes;
+  return schema;
+})();
 
 function createAnchor(
   onLinkClick?: (url: string, event: MouseEvent<HTMLAnchorElement>) => void,
@@ -118,6 +149,11 @@ function createComponents(
 export function ChatMessageMarkdown({ text, className, onLinkClick }: ChatMessageMarkdownProps) {
   const trimmed = text.trim();
   const components = useMemo(() => createComponents(onLinkClick), [onLinkClick]);
+  const remarkPlugins = useMemo<PluggableList>(() => [remarkGfm, remarkMath], []);
+  const rehypePlugins = useMemo<PluggableList>(
+    () => [rehypeRaw, [rehypeSanitize, SANITIZE_OPTIONS], rehypeKatex, rehypeHighlight],
+    [],
+  );
 
   if (!trimmed) {
     return null;
@@ -126,13 +162,13 @@ export function ChatMessageMarkdown({ text, className, onLinkClick }: ChatMessag
   return (
     <div
       className={cn(
-        "space-y-3 text-sm leading-relaxed text-foreground [a]:hover:text-primary",
+        "space-y-3 text-sm leading-relaxed text-foreground [a]:hover:text-primary whitespace-pre-wrap break-words",
         className,
       )}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize]}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {text}

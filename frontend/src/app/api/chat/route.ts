@@ -6,6 +6,72 @@ export const runtime = 'nodejs';
 type AnyRecord = Record<string, unknown>;
 type VercelMessage = { role?: string; content?: unknown; parts?: unknown };
 
+function isRecord(value: unknown): value is AnyRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function findFirstStringKey(source: AnyRecord, key: string): string {
+  const stack: AnyRecord[] = [source];
+  const seen = new Set<AnyRecord>();
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const candidate = current[key];
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+    for (const value of Object.values(current)) {
+      if (!value || typeof value !== "object") {
+        continue;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (isRecord(item)) {
+            stack.push(item);
+          }
+        }
+      } else if (isRecord(value)) {
+        stack.push(value);
+      }
+    }
+  }
+  return "";
+}
+
+function findAutopilotRecord(source: AnyRecord): AnyRecord | null {
+  const stack: AnyRecord[] = [source];
+  const seen = new Set<AnyRecord>();
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const candidate = current.autopilot;
+    if (isRecord(candidate)) {
+      return candidate;
+    }
+    for (const value of Object.values(current)) {
+      if (!value || typeof value !== "object") {
+        continue;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (isRecord(item)) {
+            stack.push(item);
+          }
+        }
+      } else if (isRecord(value)) {
+        stack.push(value);
+      }
+    }
+  }
+  return null;
+}
+
 function extractText(value: unknown): string {
   if (typeof value === 'string') return value.trim();
   if (Array.isArray(value)) {
@@ -24,29 +90,44 @@ function extractText(value: unknown): string {
   return '';
 }
 
-function formatResponseText(payload: AnyRecord, fallback: string): string {
-  const answer = typeof payload.answer === 'string' ? payload.answer.trim() : '';
-  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
-  const reasoning = typeof payload.reasoning === 'string' ? payload.reasoning.trim() : '';
-  const textField = typeof payload.text === 'string' ? payload.text.trim() : '';
-  const autopilot = payload.autopilot && typeof payload.autopilot === 'object' ? (payload.autopilot as AnyRecord) : null;
-
-  let base = answer || message || reasoning || textField || '';
-  if (!base) {
-    return fallback.trim();
+function formatResponseText(payload: unknown, fallback: string): string {
+  if (!isRecord(payload)) {
+    return fallback;
   }
 
+  const answer = findFirstStringKey(payload, 'answer');
+  const message = findFirstStringKey(payload, 'message');
+  const reasoning = findFirstStringKey(payload, 'reasoning');
+  const textField = findFirstStringKey(payload, 'text');
+
+  const base = answer || message || reasoning || textField || '';
+  if (!base) {
+    return fallback;
+  }
+
+  const autopilot = findAutopilotRecord(payload);
   if (autopilot) {
     const mode = typeof autopilot.mode === 'string' ? autopilot.mode.trim() : '';
     const query = typeof autopilot.query === 'string' ? autopilot.query.trim() : '';
     const reason = typeof autopilot.reason === 'string' ? autopilot.reason.trim() : '';
-    const autopilotHint = [mode && `mode: ${mode}`, query && `query: ${query}`, reason && `reason: ${reason}`]
+    const toolHints = Array.isArray(autopilot.tools)
+      ? autopilot.tools
+          .map((entry) => (isRecord(entry) && typeof entry.label === 'string' ? entry.label.trim() : ''))
+          .filter(Boolean)
+      : [];
+    const autopilotHint = [
+      mode && `mode: ${mode}`,
+      query && `query: ${query}`,
+      reason && `reason: ${reason}`,
+      toolHints.length > 0 && `tools: ${toolHints.join('|')}`,
+    ]
       .filter(Boolean)
       .join(', ');
     if (autopilotHint) {
-      base = `${base}\n\n[Autopilot] ${autopilotHint}`;
+      return `${base}\n\n[Autopilot] ${autopilotHint}`;
     }
   }
+
   return base;
 }
 
@@ -223,8 +304,11 @@ export async function POST(req: NextRequest) {
 
   const textResponse =
     typeof parsed === 'string'
-      ? parsed.trim() || rawBody
-      : formatResponseText(parsed as AnyRecord, rawBody) || rawBody;
+      ? (parsed.length > 0 ? parsed : rawBody)
+      : (() => {
+          const candidate = formatResponseText(parsed, rawBody);
+          return candidate.length > 0 ? candidate : rawBody;
+        })();
 
   const headers = new Headers({
     'Cache-Control': 'no-store',

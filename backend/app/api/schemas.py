@@ -151,20 +151,22 @@ class AutopilotToolDirective(BaseModel):
 class AutopilotDirective(BaseModel):
     """Directive requesting the UI to run follow-up autonomous actions."""
 
-    mode: Literal["browser"]
-    query: str
+    mode: Literal["browser", "tools", "multi"]
+    query: str | None = None
     reason: str | None = None
     tools: list[AutopilotToolDirective] | None = None
+    steps: list[Any] | None = None
+    directive: dict[str, Any] | None = None
 
     model_config = ConfigDict(extra="ignore")
 
-    @field_validator("query")
+    @field_validator("query", mode="before")
     @classmethod
-    def _normalize_query(cls, value: Any) -> str:
-        trimmed = str(value or "").strip()
-        if not trimmed:
-            raise ValueError("query must be provided")
-        return trimmed
+    def _normalize_query(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
 
     @field_validator("reason", mode="before")
     @classmethod
@@ -173,6 +175,12 @@ class AutopilotDirective(BaseModel):
             return None
         trimmed = str(value).strip()
         return trimmed or None
+
+    @model_validator(mode="after")
+    def _ensure_payload(self) -> "AutopilotDirective":
+        if not (self.query or self.reason or (self.tools and len(self.tools) > 0) or (self.steps and len(self.steps) > 0) or self.directive):
+            raise ValueError("autopilot directive must include query, reason, tools, steps, or directive details")
+        return self
 
 
 class ChatResponsePayload(BaseModel):

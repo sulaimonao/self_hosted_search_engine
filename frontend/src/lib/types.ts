@@ -164,9 +164,11 @@ export interface ChatResponsePayload {
   autopilot?: AutopilotDirective | null;
 }
 
+export type AutopilotMode = "browser" | "tools" | "multi";
+
 export interface AutopilotDirective {
-  mode: "browser";
-  query: string;
+  mode: AutopilotMode;
+  query?: string | null;
   reason?: string | null;
   tools?: AutopilotToolDirective[] | null;
   directive?: DirectivePayload | null;

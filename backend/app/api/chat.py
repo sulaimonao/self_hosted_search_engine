@@ -45,12 +45,12 @@ _DIAGNOSTIC_JOB_ID = "__diagnostics__"
 _SCHEMA_PROMPT = (
     "You are a helpful assistant embedded in a self-hosted search engine. "
     "Always reply with strict JSON containing the keys reasoning, answer, and citations (an array of strings). "
-    "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in answer. "
+    "Keep reasoning concise (<=6 sentences). Place the final user-facing reply in the answer field; never rely on message for presentation. "
     "Include citations when you reference external facts; omit when not applicable. "
-    "If the knowledge cutoff prevents a confident answer, or the user explicitly grants you control of the browser "
-    "to continue researching on their behalf, include an autopilot object with the shape "
-    "{\"mode\": \"browser\", \"query\": <string>, \"reason\": <string>}. "
-    "Only request autopilot when real-time browsing is required or the user has asked you to take over."
+    "If additional automation could help (e.g., browsing, searching, file retrieval, running code), include an autopilot object with the shape "
+    '{"mode": "browser" | "tools" | "multi", "query"?: string, "reason"?: string, "steps"?: Verb[], "tools"?: AutopilotTool[]}. '
+    "Use directive steps for browser interactions and describe API-capable helpers in the tools array (e.g., search_vector, file_search.msearch, python_user_visible, browser.search). "
+    "Only request autopilot when real-time actions are necessary or the user has given consent."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
@@ -251,8 +251,9 @@ def _supports_json_format(model: str) -> bool:
 
 
 def _first_string_value(value: Any) -> str:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
+    if isinstance(value, str) and value:
+        if value.strip():
+            return value
     if isinstance(value, Mapping):
         for item in value.values():
             found = _first_string_value(item)
@@ -304,40 +305,45 @@ def _iterable_schema_fallback(items: Iterable[Any]) -> dict[str, Any]:
 
 
 def _coerce_message_text(value: Any) -> str:
-    """Flatten structured Ollama chat message content to plain text."""
+    """Flatten structured Ollama chat message content to plain text while preserving spacing."""
 
     if isinstance(value, str):
-        return value.strip()
+        return value
     if isinstance(value, Mapping):
         text_val = value.get("text")
         if isinstance(text_val, str):
-            return text_val.strip()
+            return text_val
         nested = value.get("content")
         if nested is not None and nested is not value:
             return _coerce_message_text(nested)
         return ""
     if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
-        parts: list[str] = []
-        for entry in value:
-            text = _coerce_message_text(entry)
-            if text:
-                parts.append(text)
-        return "".join(parts).strip()
+        return "".join(
+            text
+            for entry in value
+            for text in [_coerce_message_text(entry)]
+            if text
+        )
     return ""
 
 
 def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
-    mode = str(payload.get("mode", "")).strip().lower()
-    query = str(payload.get("query", "")).strip()
-    if mode != "browser" or not query:
+    mode = str(payload.get("mode", "browser") or "").strip().lower()
+    if mode not in {"browser", "tools", "multi"}:
         return None
 
+    query_val = payload.get("query")
+    query = str(query_val).strip() if isinstance(query_val, str) else ""
     reason_val = payload.get("reason")
-    reason = str(reason_val).strip() if isinstance(reason_val, str) else None
-    if reason == "":
-        reason = None
+    reason = str(reason_val).strip() if isinstance(reason_val, str) else ""
+    directive_value = payload.get("directive")
+    directive = dict(directive_value) if isinstance(directive_value, Mapping) else None
+    steps_value = payload.get("steps")
+    steps: list[Any] | None = None
+    if isinstance(steps_value, Iterable) and not isinstance(steps_value, (str, bytes, bytearray)):
+        steps = list(steps_value)
 
     tools_payload = payload.get("tools")
     tools: list[dict[str, Any]] = []
@@ -365,7 +371,18 @@ def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
                     tool["description"] = description
             tools.append(tool)
 
-    result: dict[str, Any] = {"mode": "browser", "query": query, "reason": reason}
+    if not any([query, reason, directive, steps, tools]):
+        return None
+
+    result: dict[str, Any] = {"mode": mode}
+    if query:
+        result["query"] = query
+    if reason:
+        result["reason"] = reason
+    if directive:
+        result["directive"] = directive
+    if steps:
+        result["steps"] = steps
     if tools:
         result["tools"] = tools
     return result
@@ -396,7 +413,8 @@ def _coerce_model_schema(value: Any) -> dict[str, Any]:
         elif isinstance(parsed, Iterable) and not isinstance(parsed, (str, bytes, bytearray)):
             return _iterable_schema_fallback(parsed)
         else:
-            fallback_text = str(parsed).strip() or _EMPTY_RESPONSE_FALLBACK
+            fallback_candidate = str(parsed)
+            fallback_text = fallback_candidate if fallback_candidate.strip() else _EMPTY_RESPONSE_FALLBACK
             return {
                 "reasoning": "",
                 "answer": fallback_text,
@@ -412,8 +430,7 @@ def _coerce_model_schema(value: Any) -> dict[str, Any]:
                 break
         else:
             reasoning = json.dumps(reasoning) if reasoning is not None else ""
-    reasoning = reasoning.strip()
-    if not reasoning:
+    if isinstance(reasoning, str) and not reasoning.strip():
         filtered = {k: v for k, v in data.items() if k not in {"citations", "answer", "response", "output", "final_answer", "message"}}
         reasoning = _first_string_value(filtered)
 
@@ -432,8 +449,7 @@ def _coerce_model_schema(value: Any) -> dict[str, Any]:
                 answer = fallback_answer or json.dumps(answer)
             if not answer:
                 answer = ""
-    answer = answer.strip()
-    if not answer:
+    if isinstance(answer, str) and not answer.strip():
         filtered = {k: v for k, v in data.items() if k not in {"citations", "reasoning", "thinking", "thoughts", "chain_of_thought"}}
         answer = _first_string_value(filtered)
 
@@ -449,8 +465,8 @@ def _coerce_model_schema(value: Any) -> dict[str, Any]:
 
     autopilot = _coerce_autopilot(data.get("autopilot"))
     return {
-        "reasoning": reasoning.strip(),
-        "answer": answer.strip(),
+        "reasoning": reasoning if isinstance(reasoning, str) else str(reasoning or ""),
+        "answer": answer if isinstance(answer, str) else str(answer or ""),
         "citations": citations_list,
         "autopilot": autopilot,
     }
@@ -471,7 +487,7 @@ def _extract_model_content(payload: Mapping[str, Any]) -> str:
 def _extract_model_reasoning(payload: Mapping[str, Any]) -> str:
     message = payload.get("message")
     if isinstance(message, Mapping):
-        for key in ("reasoning", "thinking"):
+        for key in ("reasoning", "thinking"): 
             raw = message.get(key)
             if isinstance(raw, str) and raw.strip():
                 return raw

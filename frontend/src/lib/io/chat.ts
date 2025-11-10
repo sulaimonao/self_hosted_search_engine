@@ -187,11 +187,14 @@ function parseDirectiveSteps(value: unknown): Verb[] | null {
 export function parseAutopilotDirective(value: unknown): AutopilotDirective | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  const mode = normalizeString(record.mode) ?? "";
-  if (mode !== "browser") return null;
+  const rawMode = (normalizeString(record.mode) ?? "browser").toLowerCase();
+  const allowedModes: AutopilotDirective["mode"][] = ["browser", "tools", "multi"];
+  if (!allowedModes.includes(rawMode as AutopilotDirective["mode"])) {
+    return null;
+  }
+  const directive: AutopilotDirective = { mode: rawMode as AutopilotDirective["mode"] };
   const query = normalizeString(record.query);
-  if (!query) return null;
-  const directive: AutopilotDirective = { mode: "browser", query };
+  if (query) directive.query = query;
   const reason = normalizeString(record.reason);
   if (reason) directive.reason = reason;
   const tools = parseTools(record.tools);
@@ -207,6 +210,19 @@ export function parseAutopilotDirective(value: unknown): AutopilotDirective | nu
   if (topLevelSteps && topLevelSteps.length > 0) {
     directive.steps = topLevelSteps;
   }
+
+  const hasMeaningfulSignal = Boolean(
+    directive.query ||
+      directive.reason ||
+      (directive.tools && directive.tools.length > 0) ||
+      (directive.steps && directive.steps.length > 0) ||
+      directive.directive,
+  );
+
+  if (!hasMeaningfulSignal) {
+    return null;
+  }
+
   return directive;
 }
 

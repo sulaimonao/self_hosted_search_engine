@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import type { ModelInventory } from "@/lib/api";
 import { ChatMessageMarkdown } from "@/components/chat-message";
 import { CopilotHeader } from "@/components/copilot-header";
@@ -8,9 +8,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Loader2, StopCircle } from "lucide-react";
-import { storeChatMessage } from "@/lib/api";
+import { runAutopilotTool, storeChatMessage } from "@/lib/api";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
-import type { AutopilotDirective } from "@/lib/types";
+import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
+import type { AutopilotDirective, AutopilotToolDirective } from "@/lib/types";
 
 type ChatViewMessage = {
   id: string;
@@ -38,6 +39,45 @@ function toPayloadMessages(history: ChatViewMessage[]): ChatPayloadMessage[] {
     }));
 }
 
+type ToolExecutionState = {
+  status: "idle" | "running" | "success" | "error";
+  detail?: string;
+};
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return value.slice(0, Math.max(0, maxLength - 1)).trimEnd() + "…";
+}
+
+function summarizeToolResult(result: Record<string, unknown> | null | undefined): string {
+  if (!result) {
+    return "OK";
+  }
+  try {
+    const serialized = JSON.stringify(result, null, 2);
+    return truncateText(serialized, 400) || "OK";
+  } catch {
+    return String(result);
+  }
+}
+
+function extractAutopilotSteps(value: AutopilotDirective | null | undefined): Verb[] | null {
+  if (!value) {
+    return null;
+  }
+  const directiveSteps = Array.isArray(value.directive?.steps) ? (value.directive?.steps as Verb[]) : [];
+  const topLevelSteps = Array.isArray(value.steps) ? (value.steps as Verb[]) : [];
+  const candidates = directiveSteps.length > 0 ? directiveSteps : topLevelSteps;
+  if (!candidates || candidates.length === 0) {
+    return null;
+  }
+  return candidates.filter((step): step is Verb => Boolean(step && step.type));
+}
+
+type StepWithOptional = Verb & { selector?: string; text?: string; url?: string };
+
 type ChatPanelUseChatProps = {
   inventory?: ModelInventory | null;
   selectedModel?: string | null;
@@ -59,6 +99,12 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{ text: string; model?: string | undefined } | null>(null);
+  const [toolExecutions, setToolExecutions] = useState<Record<string, ToolExecutionState>>({});
+  const [planExecutions, setPlanExecutions] = useState<
+    Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }>
+  >({});
+  const [pendingDirectives, setPendingDirectives] = useState<Record<string, Verb[]>>({});
+  const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
 
   const lastTraceId = useMemo(() => {
     const reversed = [...messages].reverse();
@@ -72,13 +118,114 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
     setError(null);
   }, [selectedModel, inventory?.configured?.primary, inventory?.configured?.fallback]);
 
+  useEffect(() => {
+    setToolExecutions((prev) => {
+      const validKeys = new Set<string>();
+      messages.forEach((message) => {
+        message.autopilot?.tools?.forEach((_tool, index) => {
+          validKeys.add(`${message.id}:${index}`);
+        });
+      });
+      const next: Record<string, ToolExecutionState> = {};
+      let changed = false;
+      validKeys.forEach((key) => {
+        if (prev[key]) {
+          next[key] = prev[key];
+        } else {
+          changed = true;
+        }
+      });
+      for (const key of Object.keys(prev)) {
+        if (!validKeys.has(key)) {
+          changed = true;
+        }
+      }
+      if (!changed && Object.keys(prev).length === Object.keys(next).length) {
+        return prev;
+      }
+      return next;
+    });
+  }, [messages]);
+
+  useEffect(() => {
+    setPendingDirectives((prev) => {
+      const validIds = new Set(messages.map((message) => message.id));
+      const next: Record<string, Verb[]> = {};
+      let changed = false;
+      validIds.forEach((id) => {
+        if (prev[id]) {
+          next[id] = prev[id];
+        }
+      });
+      for (const id of Object.keys(prev)) {
+        if (!validIds.has(id)) {
+          changed = true;
+        }
+      }
+      if (!changed && Object.keys(prev).length === Object.keys(next).length) {
+        return prev;
+      }
+      return changed ? next : prev;
+    });
+  }, [messages]);
+
+  useEffect(() => {
+    setPlanExecutions((prev) => {
+      const validKeys = new Set(messages.map((message) => `${message.id}:directive`));
+      const next: Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }> = {};
+      let changed = false;
+      for (const key of Object.keys(prev)) {
+        if (validKeys.has(key)) {
+          next[key] = prev[key];
+        } else {
+          changed = true;
+        }
+      }
+      if (!changed && Object.keys(prev).length === Object.keys(next).length) {
+        return prev;
+      }
+      return next;
+    });
+  }, [messages]);
+
   const resolveModel = () => selectedModel || inventory?.configured?.primary || inventory?.configured?.fallback || undefined;
 
   const updateAssistantMessage = (assistantId: string, partial: Partial<ChatViewMessage>) => {
-    messagesRef.current = messagesRef.current.map((entry) =>
-      entry.id === assistantId ? { ...entry, ...partial } : entry
-    );
+    let autopilotSteps: Verb[] | null = null;
+    messagesRef.current = messagesRef.current.map((entry) => {
+      if (entry.id !== assistantId) {
+        return entry;
+      }
+      const next = { ...entry, ...partial };
+      autopilotSteps = extractAutopilotSteps(next.autopilot);
+      return next;
+    });
     setMessages(messagesRef.current);
+    const steps = autopilotSteps ?? ([] as Verb[]);
+    const hasSteps = steps.length > 0;
+    setPendingDirectives((prev) => {
+      if (!hasSteps) {
+        if (!prev[assistantId]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[assistantId];
+        return next;
+      }
+      const next = { ...prev, [assistantId]: steps };
+      return next;
+    });
+    if (!hasSteps) {
+      setPlanExecutions((prev) => {
+        const key = `${assistantId}:directive`;
+        if (!prev[key]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
   };
 
   const sendChat = async ({ text, model, appendUser }: { text: string; model?: string | undefined; appendUser: boolean }) => {
@@ -200,6 +347,34 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       const rollback = appendUser ? [...baseHistory] : [...historyBefore];
       messagesRef.current = rollback;
       setMessages(rollback);
+      setPendingDirectives((prev) => {
+        if (!prev[assistantId]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[assistantId];
+        return next;
+      });
+      setPlanExecutions((prev) => {
+        const key = `${assistantId}:directive`;
+        if (!prev[key]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setToolExecutions((prev) => {
+        const targetKeys = Object.keys(prev).filter((key) => key.startsWith(`${assistantId}:`));
+        if (targetKeys.length === 0) {
+          return prev;
+        }
+        const next = { ...prev };
+        for (const key of targetKeys) {
+          delete next[key];
+        }
+        return next;
+      });
 
       if (err && typeof err === "object" && (err as Error).name === "AbortError") {
         // User cancelled; keep lastAttempt for optional retry but avoid surfacing an error.
@@ -223,6 +398,74 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       }
     }
   };
+
+  const handleRunAutopilotTool = useCallback(
+    async (messageId: string, index: number, tool: AutopilotToolDirective) => {
+      const key = `${messageId}:${index}`;
+      setToolExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
+      try {
+        const result = await runAutopilotTool(tool.endpoint, {
+          method: tool.method,
+          payload: tool.payload ?? undefined,
+          chatId: threadId,
+          messageId,
+        });
+        const detail = summarizeToolResult(result as Record<string, unknown> | null | undefined);
+        setToolExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "success", detail },
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Tool request failed");
+        setToolExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: message },
+        }));
+      }
+    },
+    [threadId],
+  );
+
+  const handleRunAutopilotPlan = useCallback(
+    async (messageId: string, steps: Verb[]) => {
+      const key = `${messageId}:directive`;
+      const directiveSteps = pendingDirectives[messageId] ?? steps;
+      if (!directiveSteps || directiveSteps.length === 0) {
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: "Directive has no executable steps." },
+        }));
+        return;
+      }
+      setPlanExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
+      try {
+        const result: AutopilotRunResult = await autopilotExecutor.run({ steps: directiveSteps });
+        if (result.headlessErrors.length > 0) {
+          const detail = result.headlessErrors.map((error) => error.message).join("; ") || "Headless execution failed.";
+          setPlanExecutions((prev) => ({
+            ...prev,
+            [key]: { status: "error", detail },
+          }));
+          return;
+        }
+        const detail =
+          result.headlessBatches > 0
+            ? `Autopilot plan executed (${result.headlessBatches} headless batch${result.headlessBatches === 1 ? "" : "es"}).`
+            : "Autopilot plan executed.";
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "success", detail },
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "Autopilot run failed");
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: message },
+        }));
+      }
+    },
+    [autopilotExecutor, pendingDirectives],
+  );
 
   const handleSend = async () => {
     if (isBusy) return;
@@ -276,16 +519,138 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
             {messages.map((m: ChatViewMessage, idx: number) => {
               const role = m.role ?? "assistant";
               const content = typeof m.content === "string" ? m.content : "";
+              const isAssistant = role === "assistant";
+              const autopilot = isAssistant ? m.autopilot ?? null : null;
+              const directiveSteps = autopilot
+                ? pendingDirectives[m.id] ?? extractAutopilotSteps(autopilot) ?? []
+                : [];
+              const planKey = `${m.id}:directive`;
+              const planExecution = planExecutions[planKey];
+              const planRunning = planExecution?.status === "running";
+              const planSucceeded = planExecution?.status === "success";
+              const planFailed = planExecution?.status === "error";
+              const planDetail = planExecution?.detail;
+
               return (
                 <div
                   key={m.id ?? `${role}-${idx}`}
-                  className={role === "assistant" ? "bg-card rounded-lg border px-3 py-2" : "bg-muted rounded-lg border px-3 py-2"}
+                  className={isAssistant ? "bg-card rounded-lg border px-3 py-2" : "bg-muted rounded-lg border px-3 py-2"}
                 >
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">{role}</div>
-                  <div className="mt-2">
+                  <div className="mt-2 space-y-3">
                     <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} />
-                    {role === "assistant" && isStreaming && idx === messages.length - 1 ? (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
+                    {isAssistant && autopilot ? (
+                      <div className="rounded-md border border-dashed border-primary/30 bg-primary/10 px-3 py-2 text-xs text-foreground">
+                        <p className="font-semibold uppercase tracking-wide text-foreground/80">Autopilot suggestion</p>
+                        <div className="mt-1 space-y-1">
+                          {autopilot.mode ? (
+                            <p className="text-[11px] text-muted-foreground">
+                              Mode: <span className="font-mono text-foreground">{autopilot.mode}</span>
+                            </p>
+                          ) : null}
+                          {autopilot.query ? (
+                            <p className="break-all font-mono text-[13px] text-foreground">{autopilot.query}</p>
+                          ) : null}
+                          {autopilot.reason ? (
+                            <p className="text-[13px] text-foreground/80">{autopilot.reason}</p>
+                          ) : null}
+                          {autopilot.directive?.reason ? (
+                            <p className="text-[13px] text-foreground/70">Plan: {autopilot.directive.reason}</p>
+                          ) : null}
+                        </div>
+                        {directiveSteps.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">Directive steps</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              This may open pages headlessly via the backend. You can revoke consent in Settings.
+                            </p>
+                            <ol className="list-decimal space-y-1 rounded-md border border-primary/20 bg-background/80 p-2 text-[11px]">
+                              {directiveSteps.map((step, index) => (
+                                <li key={`${m.id}:directive:${index}`} className="leading-relaxed">
+                                  <span className="font-medium text-foreground">{step.type}</span>
+                                  {step.headless ? <span className="ml-1 text-muted-foreground">(headless)</span> : null}
+                                  {"selector" in step && (step as StepWithOptional).selector ? (
+                                    <span className="ml-1 text-muted-foreground">{(step as StepWithOptional).selector}</span>
+                                  ) : null}
+                                  {"text" in step && (step as StepWithOptional).text ? (
+                                    <span className="ml-1 text-muted-foreground">“{(step as StepWithOptional).text}”</span>
+                                  ) : null}
+                                  {"url" in step && (step as StepWithOptional).url ? (
+                                    <span className="ml-1 truncate text-muted-foreground">{(step as StepWithOptional).url}</span>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ol>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              disabled={planRunning}
+                              onClick={() => {
+                                void handleRunAutopilotPlan(m.id, directiveSteps);
+                              }}
+                            >
+                              {planRunning ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                              {planRunning ? "Running" : "Run plan"}
+                            </Button>
+                            {planSucceeded && planDetail ? (
+                              <p className="text-[11px] text-foreground/80">{planDetail}</p>
+                            ) : null}
+                            {planFailed && planDetail ? (
+                              <p className="text-[11px] text-destructive">{planDetail}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {Array.isArray(autopilot.tools) && autopilot.tools.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">Available tools</p>
+                            <div className="space-y-2">
+                              {autopilot.tools.map((tool, toolIndex) => {
+                                const toolKey = `${m.id}:${toolIndex}`;
+                                const execution = toolExecutions[toolKey];
+                                const running = execution?.status === "running";
+                                const success = execution?.status === "success";
+                                const failed = execution?.status === "error";
+                                return (
+                                  <div key={toolKey} className="rounded-md border border-primary/20 bg-background/80 p-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <p className="truncate text-xs font-semibold text-primary">{tool.label}</p>
+                                        {tool.description ? (
+                                          <p className="mt-1 text-[11px] text-muted-foreground">{tool.description}</p>
+                                        ) : null}
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={running}
+                                        onClick={() => {
+                                          void handleRunAutopilotTool(m.id, toolIndex, tool);
+                                        }}
+                                      >
+                                        {running ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                        <span>{running ? "Running" : "Run"}</span>
+                                      </Button>
+                                    </div>
+                                    {success && execution?.detail ? (
+                                      <pre className="mt-2 max-h-40 overflow-auto rounded bg-muted px-2 py-1 text-[11px] leading-tight">
+                                        {execution.detail}
+                                      </pre>
+                                    ) : null}
+                                    {failed && execution?.detail ? (
+                                      <p className="mt-2 text-[11px] text-destructive">{execution.detail}</p>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {isAssistant && isStreaming && idx === messages.length - 1 ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         <span>Generating…</span>
                       </div>
@@ -305,7 +670,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
           void handleSend();
         }}
       >
-  <Textarea value={input ?? ""} onChange={(e) => setInput?.(e.target.value)} placeholder={inventory ? "Ask the copilot" : "Ask the copilot"} rows={4} />
+  <Textarea value={input ?? ""} onChange={(e) => setInput(e.target.value)} placeholder={inventory ? "Ask the copilot" : "Ask the copilot"} rows={4} />
         <div className="flex items-center justify-between gap-2">
           {isBusy ? (
             <Button

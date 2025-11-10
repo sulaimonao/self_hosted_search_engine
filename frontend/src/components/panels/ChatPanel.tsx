@@ -1402,17 +1402,24 @@ export function ChatPanel(props: {
                                 <p className="font-semibold uppercase tracking-wide text-foreground/80">
                                   Autopilot suggestion
                                 </p>
-                                <p className="mt-1 break-all font-mono text-[13px] text-foreground">
-                                  {message.autopilot.query}
-                                </p>
-                                {message.autopilot.reason ? (
-                                  <p className="mt-1 text-foreground/80">{message.autopilot.reason}</p>
-                                ) : null}
-                                {message.autopilot.directive?.reason ? (
-                                  <p className="mt-1 text-foreground/80">
-                                    Plan: {message.autopilot.directive.reason}
-                                  </p>
-                                ) : null}
+                                <div className="mt-1 space-y-1">
+                                  {message.autopilot.mode ? (
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Mode: <span className="font-mono text-foreground">{message.autopilot.mode}</span>
+                                    </p>
+                                  ) : null}
+                                  {message.autopilot.query ? (
+                                    <p className="break-all font-mono text-[13px] text-foreground">
+                                      {message.autopilot.query}
+                                    </p>
+                                  ) : null}
+                                  {message.autopilot.reason ? (
+                                    <p className="text-foreground/80">{message.autopilot.reason}</p>
+                                  ) : null}
+                                  {message.autopilot.directive?.reason ? (
+                                    <p className="text-foreground/80">Plan: {message.autopilot.directive.reason}</p>
+                                  ) : null}
+                                </div>
                                 {(() => {
                                   const directiveSteps =
                                     pendingDirectives[message.id] ?? extractAutopilotSteps(message.autopilot) ?? [];
