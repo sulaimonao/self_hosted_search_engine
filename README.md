@@ -125,7 +125,10 @@ editing `.env` files:
 - **Control Center (`/control-center`).** Presents the config schema, toggles
   runtime features (shadow/agent/discovery/index rebuild, privacy controls), and
   exposes diagnostics + model install actions backed by `/api/dev/diag/*` and
-  `/api/admin/install_models`.
+  `/api/admin/install_models`. The new **Chat Tools & Context** card walks
+  through the chips available in the chat panel so operators can confirm how
+  page context, diagnostics, indexing, and DB access are wired without touching
+  `.env` files.
 - **Status Ribbon.** Polls `/api/health` and `/api/dev/diag/snapshot` to show
   health at a glance and deep-link into fixes.
 - **Desktop parity.** The Electron preload bridge proxies the same endpoints via

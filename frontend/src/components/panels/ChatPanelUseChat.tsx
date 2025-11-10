@@ -11,7 +11,8 @@ import { Loader2, StopCircle } from "lucide-react";
 import { runAutopilotTool, storeChatMessage } from "@/lib/api";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
 import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
-import type { AutopilotDirective, AutopilotToolDirective } from "@/lib/types";
+import ContextChips from "@/components/chat/ContextChips";
+import { createDefaultChatContext, type AutopilotDirective, type AutopilotToolDirective, type ChatContext } from "@/lib/types";
 
 type ChatViewMessage = {
   id: string;
@@ -104,7 +105,87 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
     Record<string, { status: "idle" | "running" | "success" | "error"; detail?: string }>
   >({});
   const [pendingDirectives, setPendingDirectives] = useState<Record<string, Verb[]>>({});
+  const [chatContext, setChatContext] = useState<ChatContext>(() => createDefaultChatContext());
+  const contextRef = useRef<ChatContext>(chatContext);
+  const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
+
+  useEffect(() => {
+    contextRef.current = chatContext;
+  }, [chatContext]);
+
+  const resolveActiveUrl = useCallback((): string | null => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const href = window.location.href;
+    try {
+      const current = new URL(href);
+      if (current.pathname.startsWith("/browser")) {
+        const forwarded = current.searchParams.get("url");
+        if (forwarded) {
+          try {
+            return new URL(forwarded).toString();
+          } catch {
+            return decodeURIComponent(forwarded);
+          }
+        }
+      }
+      const param = current.searchParams.get("url");
+      if (param) {
+        try {
+          return new URL(param).toString();
+        } catch {
+          return decodeURIComponent(param);
+        }
+      }
+      return current.href;
+    } catch {
+      const match = href.match(/url=([^&]+)/);
+      if (match && match[1]) {
+        try {
+          return decodeURIComponent(match[1]);
+        } catch {
+          return match[1];
+        }
+      }
+    }
+    return href;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const updateUrl = () => {
+      setActiveUrl(resolveActiveUrl());
+    };
+    updateUrl();
+    window.addEventListener("hashchange", updateUrl);
+    window.addEventListener("popstate", updateUrl);
+    window.addEventListener("focus", updateUrl);
+    return () => {
+      window.removeEventListener("hashchange", updateUrl);
+      window.removeEventListener("popstate", updateUrl);
+      window.removeEventListener("focus", updateUrl);
+    };
+  }, [resolveActiveUrl]);
+
+  const normalizeContext = useCallback((next: ChatContext): ChatContext => {
+    return {
+      page: next.page ?? null,
+      diagnostics: next.diagnostics ?? null,
+      db: next.db ?? { enabled: false },
+      tools: next.tools ?? { allowIndexing: false },
+    };
+  }, []);
+
+  const handleContextChange = useCallback(
+    (next: ChatContext) => {
+      setChatContext(normalizeContext(next));
+    },
+    [normalizeContext],
+  );
 
   const lastTraceId = useMemo(() => {
     const reversed = [...messages].reverse();
@@ -278,6 +359,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         messages: payloadMessages,
         model,
         stream: true,
+        context: contextRef.current,
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "metadata") {
@@ -661,6 +743,10 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
             })}
           </div>
         </ScrollArea>
+      </div>
+
+      <div className="rounded-lg border bg-muted/30 p-3">
+        <ContextChips activeUrl={activeUrl} value={chatContext} onChange={handleContextChange} />
       </div>
 
       <form

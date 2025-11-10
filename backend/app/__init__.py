@@ -74,6 +74,7 @@ def create_app() -> Flask:
     from .api import diagnostics as diagnostics_api
     from .api import diagnostics_self_heal as diagnostics_self_heal_api
     from .api import dev_diag as dev_diag_api
+    from .api import db as db_api
     from .api import self_heal as self_heal_api
     from .api import self_heal_execute as self_heal_execute_api
     from .api import shipit_diag as shipit_diag_api
@@ -97,6 +98,7 @@ def create_app() -> Flask:
     from .api import system_check as system_check_api
     from .api import sources as sources_api
     from .api import runtime as runtime_api
+    from .api import embeddings as embeddings_api
     from .config import AppConfig
     from .embedding_manager import EmbeddingManager
     from .jobs.focused_crawl import FocusedCrawlManager
@@ -626,6 +628,7 @@ def create_app() -> Flask:
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(diagnostics_self_heal_api.bp)
     app.register_blueprint(dev_diag_api.bp)
+    app.register_blueprint(db_api.bp)
     app.register_blueprint(self_heal_api.bp)
     app.register_blueprint(self_heal_execute_api.bp)
     app.register_blueprint(shipit_diag_api.bp)
@@ -641,6 +644,7 @@ def create_app() -> Flask:
     app.register_blueprint(index_api.bp)
     app.register_blueprint(index_health_api.bp)
     app.register_blueprint(discovery_api.bp)
+    app.register_blueprint(embeddings_api.bp)
     app.register_blueprint(shadow_api.bp)
     app.register_blueprint(shipit_crawl_api.bp)
     app.register_blueprint(shipit_history_api.bp)

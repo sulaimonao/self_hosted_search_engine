@@ -23,6 +23,7 @@ from backend.app.io import (
 )
 from backend.app.services.progress_bus import ProgressBus
 from backend.app.services.incident_log import IncidentLog
+from backend.app.services.vector_index import EmbedderUnavailableError, VectorIndexService
 
 from ..config import AppConfig
 from ..services import ollama_client
@@ -50,7 +51,10 @@ _SCHEMA_PROMPT = (
     "If additional automation could help (e.g., browsing, searching, file retrieval, running code), include an autopilot object with the shape "
     '{"mode": "browser" | "tools" | "multi", "query"?: string, "reason"?: string, "steps"?: Verb[], "tools"?: AutopilotTool[]}. '
     "Use directive steps for browser interactions and describe API-capable helpers in the tools array (e.g., search_vector, file_search.msearch, python_user_visible, browser.search). "
-    "Only request autopilot when real-time actions are necessary or the user has given consent."
+    "Only request autopilot when real-time actions are necessary or the user has given consent. "
+    "Available helper tools: diagnostics.run (POST /api/diagnostics/run, payload {smoke?: boolean}), index.snapshot (POST /api/index/snapshot, payload {url}), "
+    "index.site (POST /api/index/site, payload {url, scope}), and db.query (POST /api/db/query, payload {sql} or {named_query}). "
+    "Request db.query only when the context prelude indicates DB access is enabled; diagnostics.run may always be requested."
 )
 _JSON_FORMAT_ALLOWLIST: tuple[str, ...] = ()
 _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully."
@@ -179,6 +183,135 @@ def _publish_payload(stage: str, payload: Any) -> None:
         bus.publish(_DIAGNOSTIC_JOB_ID, event)
     except Exception:  # pragma: no cover - diagnostics best effort
         LOGGER.debug("diagnostics payload publish failed", exc_info=True)
+
+
+_MIN_PAGE_CONTEXT_CHARS = 160
+
+
+def _indent_block(text: str, prefix: str = "  ") -> str:
+    lines = (text or "").splitlines() or [""]
+    return "\n".join(f"{prefix}{line}" for line in lines)
+
+
+def _render_context_prelude(context: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    payload = context if isinstance(context, Mapping) else {}
+    lines: list[str] = ["[CONTEXT]"]
+    meta: dict[str, Any] = {}
+
+    page = payload.get("page") if isinstance(payload, Mapping) else None
+    page_title = ""
+    page_url = ""
+    page_text = ""
+    if isinstance(page, Mapping):
+        page_title = str(page.get("title") or "").strip()
+        page_url = str(page.get("url") or "").strip()
+        text_value = page.get("text")
+        if isinstance(text_value, str):
+            page_text = text_value[: _MAX_CONTEXT_CHARS].strip()
+    if page_title or page_url:
+        lines.append(f"- Page: {page_title or 'Untitled'} ({page_url or 'unknown'})")
+    else:
+        lines.append("- Page: not attached")
+    if page_text:
+        lines.append("  <<BEGIN PAGE TEXT>>")
+        lines.append(_indent_block(page_text, "    "))
+        lines.append("  <<END PAGE TEXT>>")
+        meta["page_chars"] = len(page_text)
+    if page_url:
+        meta["page_url"] = page_url
+
+    diagnostics = payload.get("diagnostics") if isinstance(payload, Mapping) else None
+    diag_status = "unknown"
+    if isinstance(diagnostics, Mapping):
+        diag_status = str(diagnostics.get("status") or "unknown").strip() or "unknown"
+        diag_summary_text = str(diagnostics.get("summary") or "").strip()
+        diag_summary = diag_summary_text or "No summary provided"
+        checks = diagnostics.get("checks")
+        criticals: list[str] = []
+        if isinstance(checks, Iterable):
+            for entry in checks:
+                if not isinstance(entry, Mapping):
+                    continue
+                is_critical = bool(entry.get("critical"))
+                status_value = str(entry.get("status") or "").strip().lower()
+                if status_value in {"error", "fail", "critical"}:
+                    is_critical = True
+                if not is_critical:
+                    continue
+                label = str(entry.get("id") or entry.get("title") or entry.get("detail") or "critical").strip()
+                if label:
+                    criticals.append(label)
+        critical_text = ", ".join(criticals[:4]) if criticals else "none"
+        diag_summary = f"{diag_status}: {diag_summary}"
+        lines.append(f"- Diagnostics summary: {diag_status}; criticals: {critical_text}")
+        meta["diagnostics_status"] = diag_status
+    else:
+        lines.append("- Diagnostics summary: none attached")
+
+    db_payload = payload.get("db") if isinstance(payload, Mapping) else None
+    db_enabled = bool(db_payload.get("enabled")) if isinstance(db_payload, Mapping) else False
+    lines.append(f"- DB access: {'enabled' if db_enabled else 'disabled'}")
+    meta["db_enabled"] = db_enabled
+
+    tools_payload = payload.get("tools") if isinstance(payload, Mapping) else None
+    allow_indexing = bool(tools_payload.get("allowIndexing")) if isinstance(tools_payload, Mapping) else False
+    lines.append(
+        "- Tools allowed: diagnostics.run (always on), index.snapshot/index.site: "
+        f"{'enabled' if allow_indexing else 'disabled'}, db.query: {'enabled' if db_enabled else 'disabled'}"
+    )
+    meta["tools_indexing"] = allow_indexing
+
+    lines.append("[/CONTEXT]")
+    return "\n".join(lines), meta
+
+
+def _maybe_index_page_context(context: Mapping[str, Any] | None) -> None:
+    if not isinstance(context, Mapping):
+        return
+    page = context.get("page")
+    if not isinstance(page, Mapping):
+        return
+    text_value = page.get("text")
+    if not isinstance(text_value, str):
+        return
+    cleaned = text_value.strip()
+    if len(cleaned) < _MIN_PAGE_CONTEXT_CHARS:
+        return
+    app = current_app._get_current_object()
+
+    payload = {
+        "text": cleaned,
+        "url": str(page.get("url") or "").strip() or None,
+        "title": str(page.get("title") or "").strip() or None,
+    }
+
+    def _runner(app_ctx, page_payload):
+        with app_ctx.app_context():
+            service = current_app.config.get("VECTOR_INDEX_SERVICE")
+            if not isinstance(service, VectorIndexService):
+                return
+            metadata = {"source": "chat_context"}
+            try:
+                service.upsert_document(
+                    text=page_payload["text"],
+                    url=page_payload.get("url"),
+                    title=page_payload.get("title"),
+                    metadata=metadata,
+                )
+            except EmbedderUnavailableError as exc:
+                LOGGER.debug("context embedding unavailable: %s", exc.detail)
+            except Exception:
+                LOGGER.debug("context embedding failed", exc_info=True)
+
+    try:
+        threading.Thread(
+            target=_runner,
+            args=(app, payload),
+            name="chat-context-embed",
+            daemon=True,
+        ).start()
+    except Exception:  # pragma: no cover - background scheduling best effort
+        LOGGER.debug("failed to schedule context embedding", exc_info=True)
 
 
 def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[str, Any]:
@@ -508,6 +641,7 @@ def _prepare_messages(
     server_time: str | None = None,
     server_timezone: str | None = None,
     server_time_utc: str | None = None,
+    context_prelude: str | None = None,
 ) -> tuple[list[dict[str, Any]], bool, str]:
     messages = [dict(message) for message in base_messages]
 
@@ -518,7 +652,10 @@ def _prepare_messages(
         clipped = text_context[:_MAX_CONTEXT_CHARS]
         context_bits.append("Extracted page text:\n" + clipped)
 
-    system_sections = [_SCHEMA_PROMPT]
+    system_sections: list[str] = []
+    if context_prelude:
+        system_sections.append(context_prelude)
+    system_sections.append(_SCHEMA_PROMPT)
     if context_bits:
         system_sections.append("\n\n".join(context_bits))
     time_bits: list[str] = []
@@ -927,6 +1064,9 @@ def _execute_chat_request(
     stream_transport: Literal["ndjson", "sse"],
 ) -> Response:
     sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
+    context_payload = chat_request.context or {}
+    _maybe_index_page_context(context_payload)
+    context_prelude, context_meta = _render_context_prelude(context_payload)
 
     chat_logger = current_app.config.get("CHAT_LOGGER")
     if hasattr(chat_logger, "info"):
@@ -1021,10 +1161,13 @@ def _execute_chat_request(
         trace_inputs = {
             "message_count": len(sanitized_messages),
             "requested_model": requested_model,
-            "has_context": bool(text_context or image_context),
+            "has_context": bool(text_context or image_context or context_payload),
             "request_id": request_id,
             "transport": stream_transport if streaming_requested else "json",
         }
+        for key, value in context_meta.items():
+            if isinstance(value, (str, int, float, bool)):
+                trace_inputs[f"context.{key}"] = value
 
         with start_span(
             "http.chat",
@@ -1075,6 +1218,7 @@ def _execute_chat_request(
                 server_time=server_time,
                 server_timezone=server_timezone,
                 server_time_utc=server_time_utc,
+                context_prelude=context_prelude,
             )
 
             log_event(

@@ -218,6 +218,36 @@ export interface PageExtractResponse {
   metadata?: Record<string, unknown>;
 }
 
+export interface DiagnosticsCheckSummary {
+  id: string;
+  status: string;
+  detail?: string | null;
+  critical?: boolean;
+}
+
+export interface DiagnosticsSummary {
+  status: string;
+  summary: string;
+  traceId?: string | null;
+  checks?: DiagnosticsCheckSummary[] | null;
+}
+
+export type ChatContext = {
+  page?: PageExtractResponse | null;
+  diagnostics?: DiagnosticsSummary | null;
+  db?: { enabled: boolean } | null;
+  tools?: { allowIndexing: boolean } | null;
+};
+
+export function createDefaultChatContext(): ChatContext {
+  return {
+    page: null,
+    diagnostics: null,
+    db: { enabled: false },
+    tools: { allowIndexing: false },
+  };
+}
+
 export interface EmbeddingCapabilityStatus {
   model?: string;
   ready?: boolean;

@@ -10,6 +10,8 @@ from backend.app.services.vector_index import (
     EmbedderUnavailableError,
     VectorIndexService,
 )
+from server.refresh_worker import RefreshWorker
+from backend.app.shadow.manager import ShadowIndexer
 
 
 bp = Blueprint("index_api", __name__, url_prefix="/api/index")
@@ -20,6 +22,27 @@ def _service() -> VectorIndexService:
     if service is None:  # pragma: no cover - configured in app factory
         raise RuntimeError("VECTOR_INDEX_SERVICE not configured")
     return service
+
+
+def _shadow_manager() -> ShadowIndexer:
+    manager = current_app.config.get("SHADOW_INDEX_MANAGER")
+    if not isinstance(manager, ShadowIndexer):
+        raise RuntimeError("SHADOW_INDEX_MANAGER not configured")
+    return manager
+
+
+def _refresh_worker() -> RefreshWorker:
+    worker = current_app.config.get("REFRESH_WORKER")
+    if not isinstance(worker, RefreshWorker):
+        raise RuntimeError("REFRESH_WORKER not configured")
+    return worker
+
+
+_SCOPE_DEFAULTS: dict[str, dict[str, int]] = {
+    "page": {"budget": 1, "depth": 1},
+    "domain": {"budget": 40, "depth": 3},
+    "site": {"budget": 80, "depth": 4},
+}
 
 
 def _coerce_str(value: Any) -> str | None:
@@ -253,6 +276,67 @@ def hybrid_search_post() -> tuple[Any, int]:
             response["autopull_started"] = True
         return jsonify(response), 503
     return jsonify(payload), 200
+
+
+@bp.post("/snapshot")
+def snapshot_index() -> tuple[Any, int]:
+    payload = request.get_json(silent=True) or {}
+    url = _coerce_str(payload.get("url"))
+    if not url:
+        return jsonify({"error": "url_required"}), 400
+    try:
+        manager = _shadow_manager()
+    except RuntimeError:
+        return jsonify({"error": "shadow_unavailable"}), 503
+    try:
+        snapshot = manager.enqueue(url, reason="chat_index")
+    except RuntimeError as exc:
+        return jsonify({"error": "shadow_disabled", "message": str(exc)}), 503
+    except ValueError as exc:
+        return jsonify({"error": "invalid_url", "message": str(exc)}), 400
+    response = {
+        "jobId": snapshot.get("jobId") or snapshot.get("job_id"),
+        "status": snapshot.get("state") or "queued",
+        "phase": snapshot.get("phase"),
+        "url": snapshot.get("url") or url,
+        "message": snapshot.get("message") or "Queued for shadow indexing",
+    }
+    return jsonify(response), 202
+
+
+@bp.post("/site")
+def index_site() -> tuple[Any, int]:
+    payload = request.get_json(silent=True) or {}
+    url = _coerce_str(payload.get("url"))
+    if not url:
+        return jsonify({"error": "url_required"}), 400
+    scope = _coerce_str(payload.get("scope")) or "domain"
+    defaults = _SCOPE_DEFAULTS.get(scope, _SCOPE_DEFAULTS["domain"])
+    try:
+        worker = _refresh_worker()
+    except RuntimeError:
+        return jsonify({"error": "refresh_unavailable"}), 503
+    query = f"index:{url}"
+    try:
+        job_id, status_snapshot, created = worker.enqueue(
+            query,
+            use_llm=False,
+            seeds=[url],
+            budget=defaults["budget"],
+            depth=defaults["depth"],
+            force=True,
+        )
+    except ValueError as exc:
+        return jsonify({"error": "invalid_request", "message": str(exc)}), 400
+
+    payload = {
+        "jobId": job_id,
+        "status": (status_snapshot.get("state") if isinstance(status_snapshot, Mapping) else None) or "queued",
+        "created": created,
+        "scope": scope,
+        "query": query,
+    }
+    return jsonify(payload), 202
 
 
 __all__ = ["bp"]

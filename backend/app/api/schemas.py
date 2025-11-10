@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -57,6 +57,7 @@ class ChatRequest(BaseModel):
     model: str | None = None
     messages: list[ChatMessage] = Field(default_factory=list)
     stream: bool | None = None
+    context: dict[str, Any] | None = None
     url: str | None = None
     text_context: str | None = None
     image_context: str | None = None
@@ -118,6 +119,15 @@ class ChatRequest(BaseModel):
         if isinstance(value, (int, float)):
             return bool(value)
         raise ValueError("stream must be a boolean flag")
+
+    @field_validator("context", mode="before")
+    @classmethod
+    def _normalize_context(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            return {str(key): item for key, item in value.items()}
+        return None
 
 
 class AutopilotToolDirective(BaseModel):

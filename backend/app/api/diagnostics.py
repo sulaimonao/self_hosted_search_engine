@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from pathlib import Path
+from typing import Any
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from ..config import AppConfig
 from ..jobs.diagnostics import run_diagnostics
@@ -69,14 +71,48 @@ def diagnostics_run():
             500,
         )
 
-    payload = {
+    stdout_text = (result.stdout or "").strip()
+    summary_text = stdout_text.splitlines()[0] if stdout_text else ""
+    checks_payload = None
+    try:
+        parsed = json.loads(stdout_text) if stdout_text else None
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        summary_text = str(parsed.get("summary") or parsed.get("status") or summary_text or "Diagnostics finished")
+        raw_checks = parsed.get("checks") or parsed.get("results")
+        if isinstance(raw_checks, list):
+            checks: list[dict[str, object]] = []
+            for entry in raw_checks[:20]:
+                if not isinstance(entry, dict):
+                    continue
+                status_val = str(entry.get("status") or entry.get("state") or "unknown").strip()
+                detail_val = entry.get("detail") or entry.get("message") or entry.get("summary")
+                checks.append(
+                    {
+                        "id": str(entry.get("id") or entry.get("name") or f"check_{len(checks)+1}"),
+                        "status": status_val or "unknown",
+                        "detail": detail_val,
+                        "critical": bool(entry.get("critical"))
+                        or status_val.lower() in {"fail", "error", "timeout"},
+                    }
+                )
+            if checks:
+                checks_payload = checks
+
+    status = "ok" if result.returncode == 0 else "error"
+    response_payload: dict[str, Any] = {
         "ok": result.returncode == 0,
+        "status": status,
+        "summary": summary_text or ("Diagnostics completed" if result.returncode == 0 else "Diagnostics reported issues"),
+        "checks": checks_payload,
+        "traceId": getattr(g, "trace_id", None),
         "returncode": result.returncode,
-        "stdout": (result.stdout or "").strip(),
+        "stdout": stdout_text,
         "stderr": (result.stderr or "").strip(),
     }
     incident_log = current_app.config.get("INCIDENT_LOG")
     if isinstance(incident_log, IncidentLog):
-        payload["incidents"] = incident_log.list(limit=50)
-        payload["incident_snapshot"] = incident_log.snapshot()
-    return jsonify(payload)
+        response_payload["incidents"] = incident_log.list(limit=50)
+        response_payload["incident_snapshot"] = incident_log.snapshot()
+    return jsonify(response_payload)

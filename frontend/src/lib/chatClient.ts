@@ -22,6 +22,7 @@ export interface ChatSendRequest {
   messages: ChatPayloadMessage[];
   model?: string | null;
   stream?: boolean;
+  context?: Record<string, unknown> | null;
   url?: string | null;
   textContext?: string | null;
   imageContext?: string | null;
@@ -253,6 +254,7 @@ export class ChatClient {
       // is specified.
       model: request.model ?? null,
       stream,
+      context: request.context ?? null,
       url: request.url ?? null,
       textContext: request.textContext ?? null,
       imageContext: request.imageContext ?? null,

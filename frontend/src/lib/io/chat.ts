@@ -15,6 +15,7 @@ type ChatMessageInput = {
 type ChatRequestInput = {
   model?: string | null;
   stream?: boolean | null;
+  context?: unknown;
   url?: string | null;
   textContext?: string | null;
   imageContext?: string | null;
@@ -36,6 +37,7 @@ export type ChatRequestPayload = {
     metadata?: Record<string, unknown>;
   }>;
   stream?: boolean;
+  context?: Record<string, unknown>;
   url?: string;
   text_context?: string;
   image_context?: string;
@@ -112,6 +114,9 @@ export function toChatRequest(input: ChatRequestInput & { messages: unknown }): 
 
   const model = normalizeString(input.model);
   if (model) payload.model = model;
+  if (input.context && typeof input.context === "object" && !Array.isArray(input.context)) {
+    payload.context = input.context as Record<string, unknown>;
+  }
   if (typeof input.stream === "boolean") payload.stream = input.stream;
   const url = normalizeString(input.url);
   if (url) payload.url = url;

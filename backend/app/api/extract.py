@@ -107,16 +107,8 @@ def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
     return payload
 
 
-@bp.post("/extract")
-def extract() -> Any:
-    payload = request.get_json(silent=True) or {}
-    url = (payload.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "url_required"}), 400
-
+def _handle_extract(url: str, capture_vision: bool) -> tuple[dict[str, Any], int]:
     trace_id = getattr(g, "trace_id", None)
-    capture_vision = _should_capture_vision()
-
     log_event(
         "INFO",
         "extract.start",
@@ -135,7 +127,7 @@ def extract() -> Any:
             url=url,
             msg=str(exc),
         )
-        return jsonify({"error": "timeout", "message": str(exc)}), 504
+        return {"error": "timeout", "message": str(exc)}, 504
     except PlaywrightError as exc:
         log_event(
             "ERROR",
@@ -145,7 +137,7 @@ def extract() -> Any:
             error=exc.__class__.__name__,
             msg=str(exc),
         )
-        return jsonify({"error": "extract_failed", "message": str(exc)}), 502
+        return {"error": "extract_failed", "message": str(exc)}, 502
     except Exception as exc:  # pragma: no cover - defensive fallback
         log_event(
             "ERROR",
@@ -155,7 +147,7 @@ def extract() -> Any:
             error=exc.__class__.__name__,
             msg=str(exc),
         )
-        return jsonify({"error": "extract_failed", "message": str(exc)}), 502
+        return {"error": "extract_failed", "message": str(exc)}, 502
 
     log_event(
         "INFO",
@@ -165,7 +157,30 @@ def extract() -> Any:
         chars=len(result.get("text", "")),
         has_img=bool(result.get("screenshot_b64")),
     )
-    return jsonify(result)
+    return result, 200
+
+
+@bp.post("/extract")
+def extract() -> Any:
+    payload = request.get_json(silent=True) or {}
+    url = (payload.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url_required"}), 400
+
+    capture_vision = _should_capture_vision()
+    data, status = _handle_extract(url, capture_vision)
+    return jsonify(data), status
+
+
+@bp.get("/page/extract")
+def extract_page() -> Any:
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url_required"}), 400
+
+    capture_vision = _should_capture_vision()
+    data, status = _handle_extract(url, capture_vision)
+    return jsonify(data), status
 
 
 __all__ = ["bp"]

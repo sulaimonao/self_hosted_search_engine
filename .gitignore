@@ -62,6 +62,8 @@ diagnostics/*
 !backend/app/api/self_heal_execute.py
 !backend/app/api/diagnostics_self_heal.py
 !backend/app/api/utils.py
+!backend/app/api/db.py
+!backend/app/api/embeddings.py
 !backend/app/config/
 !backend/app/config/__init__.py
 !backend/app/config/models.py

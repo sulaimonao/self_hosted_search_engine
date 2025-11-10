@@ -35,6 +35,7 @@ import type {
   SystemCheckResponse,
   CapabilitySnapshot,
   MetaHealthResponse,
+  DiagnosticsCheckSummary,
 } from "@/lib/types";
 
 import { chatClient, type ChatPayloadMessage, type ChatSendRequest, type ChatSendResult } from "@/lib/chatClient";
@@ -2394,8 +2395,13 @@ export async function installModels(payload: { models: string[] }): Promise<Olla
 
 export type DiagnosticsRunResponse = {
   ok: boolean;
+  status: string;
+  summary: string;
+  checks?: DiagnosticsCheckSummary[] | null;
+  traceId?: string | null;
+  stdout?: string;
+  stderr?: string;
   message?: string;
-  summary?: Record<string, unknown>;
   [key: string]: unknown;
 };
 
