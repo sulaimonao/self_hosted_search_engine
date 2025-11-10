@@ -1,19 +1,42 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import type { ModelInventory } from "@/lib/api";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
 import { ChatMessageMarkdown } from "@/components/chat-message";
 import { CopilotHeader } from "@/components/copilot-header";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Loader2, StopCircle } from "lucide-react";
-import { safeLocalStorage } from "@/utils/isomorphicStorage";
 import { storeChatMessage } from "@/lib/api";
+import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
+import type { AutopilotDirective } from "@/lib/types";
 
-const DEFAULT_THROTTLE = 50;
+type ChatViewMessage = {
+  id: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  reasoning?: string;
+  citations?: string[];
+  traceId?: string | null;
+  autopilot?: AutopilotDirective | null;
+};
+
+const createId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2);
+};
+
+function toPayloadMessages(history: ChatViewMessage[]): ChatPayloadMessage[] {
+  return history
+    .filter((entry) => entry.role === "user" || entry.role === "assistant" || entry.role === "system" || entry.role === "tool")
+    .map((entry) => ({
+      role: entry.role,
+      content: entry.content ?? "",
+    }));
+}
 
 type ChatPanelUseChatProps = {
   inventory?: ModelInventory | null;
@@ -24,79 +47,195 @@ type ChatPanelUseChatProps = {
 };
 
 export default function ChatPanelUseChat({ inventory, selectedModel, threadId, onLinkClick, onModelChange }: ChatPanelUseChatProps) {
-  const storedThrottle = typeof window !== "undefined" ? safeLocalStorage.get("chat:throttleMs") : null;
-  const throttleMs = storedThrottle ? Number.parseInt(storedThrottle, 10) || DEFAULT_THROTTLE : DEFAULT_THROTTLE;
+  const [messages, setMessages] = useState<ChatViewMessage[]>([]);
+  const messagesRef = useRef<ChatViewMessage[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
-  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat" }), []);
-
-  type IncomingMsg = { id?: string; role?: string; content?: string; text?: string };
-  // useChat types vary; treat as unknown and narrow
-  // useChat v5 expects you to manage your own input; keep a local input state
+  const abortRef = useRef<AbortController | null>(null);
   const [input, setInput] = useState("");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chatHook = useChat({ transport, experimental_throttle: throttleMs } as any) as unknown as {
-    messages?: IncomingMsg[];
-    sendMessage?: (arg: unknown, opts?: unknown) => Promise<unknown>;
-    status?: string;
-  };
-  const { messages = [], sendMessage, status } = chatHook;
-
   const [isBusy, setIsBusy] = useState(false);
-
+  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{ text: string; model?: string | undefined } | null>(null);
+
   const lastTraceId = useMemo(() => {
-    // try to find a trace id on the last assistant message if present
     const reversed = [...messages].reverse();
     for (const m of reversed) {
-      const meta = (m && typeof m === 'object')
-        ? ((m as Record<string, unknown>).traceId ?? (m as Record<string, unknown>).trace_id ?? null)
-        : null;
-      if (typeof meta === 'string' && meta) return meta;
+      if (m.traceId) return m.traceId;
     }
     return null;
   }, [messages]);
 
   useEffect(() => {
-    // clear local error when model selection or inventory changes
     setError(null);
   }, [selectedModel, inventory?.configured?.primary, inventory?.configured?.fallback]);
 
-  const handleSend = async () => {
-    const trimmed = (input ?? "").trim();
-    if (!trimmed || isBusy) return;
+  const resolveModel = () => selectedModel || inventory?.configured?.primary || inventory?.configured?.fallback || undefined;
+
+  const updateAssistantMessage = (assistantId: string, partial: Partial<ChatViewMessage>) => {
+    messagesRef.current = messagesRef.current.map((entry) =>
+      entry.id === assistantId ? { ...entry, ...partial } : entry
+    );
+    setMessages(messagesRef.current);
+  };
+
+  const sendChat = async ({ text, model, appendUser }: { text: string; model?: string | undefined; appendUser: boolean }) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (isBusy) return;
+
     setIsBusy(true);
-    try {
-      // Persist user message locally for history parity
-      await storeChatMessage(threadId, {
+    setIsStreaming(true);
+    setError(null);
+    setLastAttempt({ text: trimmed, model });
+
+    const historyBefore = messagesRef.current;
+    const userMessage = appendUser
+      ? ({ id: createId(), role: "user" as const, content: trimmed } satisfies ChatViewMessage)
+      : null;
+    const assistantId = createId();
+    const assistantMessage: ChatViewMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+    };
+
+    const baseHistory = appendUser ? [...historyBefore, userMessage!] : [...historyBefore];
+    const updatedHistory = [...baseHistory, assistantMessage];
+    messagesRef.current = updatedHistory;
+    setMessages(updatedHistory);
+
+    if (userMessage) {
+      void storeChatMessage(threadId, {
         id: `local-${Date.now()}`,
         role: "user",
         content: trimmed,
       }).catch(() => undefined);
+    }
 
-    // v5: send text as `{ text }` and pass additional body via options
-    // Ensure we always provide a model (fall back to configured primary/fallback)
-    const model =
-      selectedModel || inventory?.configured?.primary || inventory?.configured?.fallback || undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const payloadMessages = toPayloadMessages(baseHistory);
+
+    let streamedAnswer = "";
+    let streamedReasoning = "";
+    let streamedCitations: string[] = [];
+    let streamedTraceId: string | null = null;
+    let streamedAutopilot: AutopilotDirective | null | undefined;
+
     try {
-      setLastAttempt({ text: trimmed, model });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (sendMessage as any)({ text: trimmed }, { body: { model } });
+      const result = await chatClient.send({
+        messages: payloadMessages,
+        model,
+        stream: true,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "metadata") {
+            streamedTraceId = event.trace_id ?? streamedTraceId ?? null;
+            if (streamedTraceId) {
+              updateAssistantMessage(assistantId, { traceId: streamedTraceId });
+            }
+            return;
+          }
+          if (event.type === "delta") {
+            if (typeof event.answer === "string" && event.answer) {
+              streamedAnswer = event.answer;
+            } else if (typeof event.delta === "string" && event.delta) {
+              streamedAnswer += event.delta;
+            }
+            if (typeof event.reasoning === "string" && event.reasoning) {
+              streamedReasoning = event.reasoning;
+            }
+            if (Array.isArray(event.citations) && event.citations.length > 0) {
+              streamedCitations = event.citations;
+            }
+            updateAssistantMessage(assistantId, {
+              content: streamedAnswer,
+              reasoning: streamedReasoning || undefined,
+              citations: streamedCitations.length > 0 ? streamedCitations : undefined,
+            });
+            return;
+          }
+          if (event.type === "complete") {
+            streamedAnswer = event.payload.answer || streamedAnswer;
+            streamedReasoning = event.payload.reasoning || streamedReasoning;
+            streamedCitations = event.payload.citations ?? streamedCitations;
+            streamedTraceId = event.payload.trace_id ?? streamedTraceId ?? null;
+            streamedAutopilot = event.payload.autopilot ?? null;
+            updateAssistantMessage(assistantId, {
+              content: streamedAnswer,
+              reasoning: streamedReasoning || undefined,
+              citations: streamedCitations?.length ? streamedCitations : undefined,
+              traceId: streamedTraceId,
+              autopilot: streamedAutopilot ?? null,
+            });
+            return;
+          }
+          if (event.type === "error") {
+            setError(event.error || "Chat stream error");
+          }
+        },
+      });
+
+      const finalAnswer = result.payload.answer || streamedAnswer;
+      const finalReasoning = result.payload.reasoning || streamedReasoning;
+      const finalCitations = result.payload.citations ?? streamedCitations;
+      const finalTrace = result.traceId ?? streamedTraceId ?? null;
+      const finalAutopilot = result.payload.autopilot ?? streamedAutopilot ?? null;
+
+      updateAssistantMessage(assistantId, {
+        content: finalAnswer,
+        reasoning: finalReasoning || undefined,
+        citations: finalCitations?.length ? finalCitations : undefined,
+        traceId: finalTrace,
+        autopilot: finalAutopilot,
+      });
+
       setError(null);
       setLastAttempt(null);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.error("Chat send failed", e);
-      setError(message);
-    }
+    } catch (err) {
+      const rollback = appendUser ? [...baseHistory] : [...historyBefore];
+      messagesRef.current = rollback;
+      setMessages(rollback);
+
+      if (err && typeof err === "object" && (err as Error).name === "AbortError") {
+        // User cancelled; keep lastAttempt for optional retry but avoid surfacing an error.
+        return;
+      }
+
+      if (err instanceof ChatRequestError) {
+        setError(err.hint ?? err.message ?? "Chat request failed");
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(String(err));
+      }
+      console.error("Chat send failed", err);
     } finally {
+      abortRef.current = null;
       setIsBusy(false);
-      setInput("");
+      setIsStreaming(false);
+      if (appendUser) {
+        setInput("");
+      }
     }
   };
 
-  const isStreaming = status === "streaming" || status === "loading";
+  const handleSend = async () => {
+    if (isBusy) return;
+    const trimmed = (input ?? "").trim();
+    if (!trimmed) return;
+    const model = resolveModel();
+    await sendChat({ text: trimmed, model, appendUser: true });
+  };
+
+  const handleRetry = async () => {
+    if (!lastAttempt || isBusy) return;
+    await sendChat({ text: lastAttempt.text, model: lastAttempt.model, appendUser: false });
+  };
 
   return (
     <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
@@ -105,7 +244,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         selectedModel={selectedModel ?? null}
         onModelChange={onModelChange ?? (() => {})}
       />
-      {error || status === "error" ? (
+      {error ? (
         <div className="flex items-center justify-between rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
           <div className="flex items-center gap-2">
             <div>Error: {error ?? "Failed to send message."}</div>
@@ -118,21 +257,8 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
               <Button
                 size="sm"
                 variant="outline"
-                onClick={async () => {
-                  if (!lastAttempt) return;
-                  setError(null);
-                  setIsBusy(true);
-                  try {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    await (sendMessage as any)({ text: lastAttempt.text }, { body: { model: lastAttempt.model } });
-                    setError(null);
-                    setLastAttempt(null);
-                  } catch (e) {
-                    const message = e instanceof Error ? e.message : String(e);
-                    setError(message);
-                  } finally {
-                    setIsBusy(false);
-                  }
+                onClick={() => {
+                  void handleRetry();
                 }}
               >
                 Retry
@@ -147,18 +273,9 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       <div className="flex-1 overflow-hidden rounded-lg border bg-background">
         <ScrollArea className="h-full pr-3">
           <div className="space-y-4 p-3 pr-1">
-            {messages.map((m: IncomingMsg, idx: number) => {
+            {messages.map((m: ChatViewMessage, idx: number) => {
               const role = m.role ?? "assistant";
-              // Support Vercel AI SDK v5 UIMessage shape: prefer concatenated parts[].text, then fallback to legacy content/text
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const parts = Array.isArray((m as any)?.parts) ? (m as any).parts : null;
-              const textFromParts = parts
-                ? parts
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    .map((p: any) => (p && typeof p === "object" && "text" in p ? String(p.text ?? "") : ""))
-                    .join("")
-                : "";
-              const content = textFromParts || (typeof m.content === "string" ? m.content : m.text ?? "");
+              const content = typeof m.content === "string" ? m.content : "";
               return (
                 <div
                   key={m.id ?? `${role}-${idx}`}
@@ -167,7 +284,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">{role}</div>
                   <div className="mt-2">
                     <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} />
-                    {role === "assistant" && isStreaming ? (
+                    {role === "assistant" && isStreaming && idx === messages.length - 1 ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         <span>Generating…</span>
@@ -191,7 +308,13 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   <Textarea value={input ?? ""} onChange={(e) => setInput?.(e.target.value)} placeholder={inventory ? "Ask the copilot" : "Ask the copilot"} rows={4} />
         <div className="flex items-center justify-between gap-2">
           {isBusy ? (
-            <Button type="button" variant="outline" onClick={() => {}}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                abortRef.current?.abort();
+              }}
+            >
               <StopCircle className="mr-2 h-4 w-4" /> Cancel
             </Button>
           ) : (

@@ -247,13 +247,11 @@ export class ChatClient {
     };
 
     const payload = toChatRequest({
-      // Normalize model: backend may accept family aliases (e.g. "gpt-oss")
-      // while the UI/inventory may expose concrete variants (e.g. "gpt-oss:120b").
-      // If a concrete variant is provided, prefer the family prefix when
-      // sending to the backend so it matches allowed aliases.
-      model: (typeof request.model === "string" && request.model.includes(":"))
-        ? request.model.split(":")[0]
-        : request.model ?? null,
+      // Preserve the exact model identifier (e.g. "gpt-oss:20b") so the backend
+      // can forward the request directly to the installed Ollama variant. The
+      // backend still accepts family aliases (e.g. "gpt-oss") when no variant
+      // is specified.
+      model: request.model ?? null,
       stream,
       url: request.url ?? null,
       textContext: request.textContext ?? null,
