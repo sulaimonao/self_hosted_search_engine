@@ -47,6 +47,50 @@ describe('app/api/chat/route.ts', () => {
     globalThis.fetch = originalFetch;
   });
 
+  it('adapts Vercel useChat payloads into StreamingTextResponse', async () => {
+    const req = new MockRequest(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Hello world',
+              },
+            ],
+          },
+        ],
+        body: { model: 'gpt-test' },
+      },
+      { accept: 'text/plain' },
+    );
+
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      expect(url.endsWith('/api/chat')).toBe(true);
+      const payload = JSON.parse((init?.body as string) ?? '{}');
+      expect(payload.stream).toBe(false);
+      expect(payload.messages[0].content).toBe('Hello world');
+      expect(payload.model).toBe('gpt-test');
+      return createUpstreamResponse(JSON.stringify({ answer: 'Hi back!', model: 'gpt-test' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'X-LLM-Model': 'gpt-test', 'X-Request-Id': 'trace-xyz' },
+      });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fetchSpy;
+
+    const result = await chatRoute.POST({
+      json: () => req.json(),
+      headers: req.headersLike,
+    } as unknown as NextRequest);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(result.headers.get('content-type')).toContain('text/plain');
+    expect(result.headers.get('x-llm-model')).toBe('gpt-test');
+    expect(await result.text()).toBe('Hi back!');
+  });
+
   it('accepts non-empty text for NDJSON path and proxies to /api/chat', async () => {
     const req = new MockRequest({ text: 'hello there' }, { accept: 'application/x-ndjson' });
     // mock global fetch to capture URL

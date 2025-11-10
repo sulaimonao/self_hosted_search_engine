@@ -25,11 +25,16 @@ def _enabled() -> bool:
     return bool(current_app.config.get("FEATURE_LOCAL_DISCOVERY"))
 
 
-def _serialize(record: DiscoveryRecord, *, include_text: bool) -> dict[str, Any]:
-    service = _service()
-    if service is None:  # pragma: no cover - guarded by caller
+def _serialize(
+    record: DiscoveryRecord,
+    *,
+    include_text: bool,
+    service: LocalDiscoveryService | None = None,
+) -> dict[str, Any]:
+    target = service if service is not None else _service()
+    if target is None:  # pragma: no cover - guarded by caller
         raise RuntimeError("Local discovery unavailable")
-    return service.to_dict(record, include_text=include_text)
+    return target.to_dict(record, include_text=include_text)
 
 
 @bp.get("/events")
@@ -53,7 +58,7 @@ def stream_events() -> Response:
                     continue
                 if record is None:
                     break
-                payload = json.dumps(service.to_dict(record, include_text=False))
+                payload = json.dumps(_serialize(record, include_text=False, service=service))
                 yield f"data: {payload}\n\n"
         finally:
             service.unsubscribe(token)
@@ -77,7 +82,7 @@ def get_item(record_id: str):
     if record is None:
         return jsonify({"error": "not_found"}), 404
 
-    return jsonify(_serialize(record, include_text=True)), 200
+    return jsonify(_serialize(record, include_text=True, service=service)), 200
 
 
 @bp.post("/confirm")
