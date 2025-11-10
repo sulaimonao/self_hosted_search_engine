@@ -417,3 +417,63 @@ export class ChatClient {
 }
 
 export const chatClient = new ChatClient();
+
+// Simplified streaming utility for direct use with reducers
+export type StreamEvt =
+  | { type: "delta"; data: ChatStreamEvent }
+  | { type: "complete" }
+  | { type: "heartbeat" }
+  | { type: "error"; error: string };
+
+export type ChatRequest = {
+  model: string;
+  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+};
+
+export async function streamChat(
+  req: ChatRequest,
+  onEvent: (e: StreamEvt) => void,
+  signal: AbortSignal
+) {
+  const res = await fetch(resolveApi("/api/chat"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/x-ndjson",
+    },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line) as ChatStreamEvent;
+        // Map to StreamEvt format
+        if (parsed.type === "delta") {
+          onEvent({ type: "delta", data: parsed });
+        } else if (parsed.type === "complete") {
+          onEvent({ type: "complete" });
+        } else if (parsed.type === "error") {
+          onEvent({ type: "error", error: parsed.error });
+        } else if (parsed.type === "metadata") {
+          // Skip metadata or handle as heartbeat
+          onEvent({ type: "heartbeat" });
+        }
+      } catch {
+        onEvent({ type: "error", error: "bad_json_line" });
+      }
+    }
+  }
+}
