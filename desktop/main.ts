@@ -91,6 +91,18 @@ type BrowserBounds = {
   height: number;
 };
 
+type BrowserSettings = {
+  thirdPartyCookies: boolean;
+  searchMode: 'auto' | 'query';
+  spellcheckLanguage: string;
+  proxy: {
+    mode: 'system' | 'manual';
+    host: string;
+    port: string;
+  };
+  openSearchExternally: boolean;
+};
+
 const require = createRequire(import.meta.url);
 const { runBrowserDiagnostics }: {
   runBrowserDiagnostics: (options?: {
@@ -246,6 +258,15 @@ const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
 const NAV_STATE_CHANNEL = 'nav:state';
 const TAB_LIST_CHANNEL = 'browser:tabs';
+const SETTINGS_CHANNEL = 'settings:state';
+const DEFAULT_SETTINGS: BrowserSettings = {
+  thirdPartyCookies: true,
+  searchMode: 'auto',
+  spellcheckLanguage: 'en-US',
+  proxy: { mode: 'system', host: '', port: '' },
+  openSearchExternally: false,
+};
+const FALLBACK_SPELLCHECK_LANGUAGES = ['en-US', 'en-GB'];
 
 let win: BrowserWindow | null = null;
 let lastSystemCheck: SystemCheckResult = null;
@@ -255,6 +276,285 @@ const tabs = new Map<string, BrowserTabRecord>();
 const tabOrder: string[] = [];
 let activeTabId: string | null = null;
 let browserContentBounds: Rectangle = { ...DEFAULT_BOUNDS };
+const runtimeNetworkState: { acceptLanguage: string | null } = {
+  acceptLanguage: null,
+};
+let runtimeSettings: BrowserSettings = { ...DEFAULT_SETTINGS };
+let settingsFilePath: string | null = null;
+let cachedSystemSpellcheckLanguages: string[] | null = null;
+const permissionHandlerSessions = new WeakSet<Electron.Session>();
+
+function formatAcceptLanguageHeader(value: string | null | undefined): string | null {
+  const normalized = normalizeLanguageCode(value);
+  if (!normalized) {
+    return null;
+  }
+  const [primary] = normalized.split('-');
+  if (primary && primary.length && primary.toLowerCase() !== normalized.toLowerCase()) {
+    return `${normalized},${primary};q=0.9`;
+  }
+  return normalized;
+}
+
+function updateRuntimeAcceptLanguage(locale?: string | null) {
+  const formatted = formatAcceptLanguageHeader(locale ?? null);
+  if (formatted) {
+    runtimeNetworkState.acceptLanguage = formatted;
+    return;
+  }
+  const fallback = typeof app.getLocale === 'function' ? app.getLocale() : null;
+  runtimeNetworkState.acceptLanguage = formatAcceptLanguageHeader(fallback);
+}
+
+function normalizeLanguageCode(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const [canonical] = Intl.getCanonicalLocales(trimmed);
+    if (canonical) {
+      return canonical;
+    }
+  } catch {
+    // ignore invalid locales
+  }
+  return trimmed.replace(/_/g, '-');
+}
+
+function normalizeLanguageList(values: unknown): string[] {
+  const normalized: string[] = [];
+  const addValue = (candidate: unknown) => {
+    const normalizedValue = normalizeLanguageCode(candidate);
+    if (normalizedValue) {
+      normalized.push(normalizedValue);
+    }
+  };
+  if (Array.isArray(values)) {
+    values.forEach(addValue);
+  } else if (values) {
+    addValue(values);
+  }
+  return Array.from(new Set(normalized));
+}
+
+function collectSpellcheckLanguages(sourceList: unknown): string[] {
+  const normalized = normalizeLanguageList(sourceList);
+  const seen = new Set(normalized);
+  const addValue = (value: unknown) => {
+    const normalizedValue = normalizeLanguageCode(value);
+    if (normalizedValue && !seen.has(normalizedValue)) {
+      seen.add(normalizedValue);
+      normalized.push(normalizedValue);
+    }
+  };
+  addValue(runtimeSettings?.spellcheckLanguage);
+  FALLBACK_SPELLCHECK_LANGUAGES.forEach(addValue);
+  return normalized;
+}
+
+function getSystemSpellcheckLanguages(): string[] {
+  if (Array.isArray(cachedSystemSpellcheckLanguages)) {
+    return cachedSystemSpellcheckLanguages;
+  }
+  const sess = session.fromPartition(MAIN_SESSION_KEY);
+  const spellcheckSession = sess as Electron.Session & {
+    availableSpellCheckerLanguages?: () => string[] | undefined;
+  };
+  if (spellcheckSession && typeof spellcheckSession.availableSpellCheckerLanguages === 'function') {
+    try {
+      const available = spellcheckSession.availableSpellCheckerLanguages();
+      cachedSystemSpellcheckLanguages = normalizeLanguageList(Array.isArray(available) ? available : []);
+      return cachedSystemSpellcheckLanguages;
+    } catch (error) {
+      log.warn('Failed to enumerate spellcheck languages', { error });
+    }
+  }
+  cachedSystemSpellcheckLanguages = [];
+  return cachedSystemSpellcheckLanguages;
+}
+
+function listAvailableSpellcheckLanguages(): string[] {
+  const baseLanguages = getSystemSpellcheckLanguages();
+  return collectSpellcheckLanguages(baseLanguages);
+}
+
+function resolveSettingsStorePath(): string | null {
+  if (settingsFilePath) {
+    return settingsFilePath;
+  }
+  if (!app.isReady()) {
+    return null;
+  }
+  try {
+    settingsFilePath = path.join(app.getPath('userData'), 'browser-settings.json');
+    return settingsFilePath;
+  } catch (error) {
+    log.warn('Failed to resolve browser settings path', { error });
+    return null;
+  }
+}
+
+function emitSettingsState() {
+  if (runtimeSettings) {
+    sendToRenderer(SETTINGS_CHANNEL, runtimeSettings);
+  }
+}
+
+function persistRuntimeSettings() {
+  const targetPath = resolveSettingsStorePath();
+  if (!targetPath || !runtimeSettings) {
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, JSON.stringify(runtimeSettings, null, 2), 'utf8');
+  } catch (error) {
+    log.warn('Failed to persist browser settings', { error });
+  }
+}
+
+function normalizeSettings(candidate: Partial<BrowserSettings> | null | undefined): BrowserSettings {
+  const base: BrowserSettings = {
+    ...DEFAULT_SETTINGS,
+    proxy: { ...DEFAULT_SETTINGS.proxy },
+  };
+  if (!candidate || typeof candidate !== 'object') {
+    return base;
+  }
+  if (typeof candidate.thirdPartyCookies === 'boolean') {
+    base.thirdPartyCookies = candidate.thirdPartyCookies;
+  }
+  if (candidate.searchMode === 'auto' || candidate.searchMode === 'query') {
+    base.searchMode = candidate.searchMode;
+  }
+  if (typeof candidate.spellcheckLanguage === 'string' && candidate.spellcheckLanguage.trim()) {
+    base.spellcheckLanguage = candidate.spellcheckLanguage.trim();
+  }
+  if (typeof candidate.openSearchExternally === 'boolean') {
+    base.openSearchExternally = candidate.openSearchExternally;
+  }
+  if (candidate.proxy && typeof candidate.proxy === 'object') {
+    const mode: 'manual' | 'system' = candidate.proxy.mode === 'manual' ? 'manual' : 'system';
+    const host = typeof candidate.proxy.host === 'string' ? candidate.proxy.host : '';
+    const port = Number.isFinite(Number(candidate.proxy.port)) ? String(candidate.proxy.port) : '';
+    base.proxy = { mode, host, port };
+  }
+  return base;
+}
+
+function loadRuntimeSettings() {
+  const targetPath = resolveSettingsStorePath();
+  if (!targetPath) {
+    runtimeSettings = { ...DEFAULT_SETTINGS };
+    return;
+  }
+  try {
+    if (fs.existsSync(targetPath)) {
+      const raw = fs.readFileSync(targetPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      runtimeSettings = normalizeSettings(parsed);
+      return;
+    }
+  } catch (error) {
+    log.warn('Failed to load browser settings', { error });
+  }
+  runtimeSettings = { ...DEFAULT_SETTINGS };
+}
+
+function mergeSettings(
+  base: BrowserSettings,
+  patch: Partial<BrowserSettings> | null | undefined,
+): BrowserSettings {
+  if (!patch || typeof patch !== 'object') {
+    return base;
+  }
+  const next: Partial<BrowserSettings> = {
+    ...base,
+    ...patch,
+    proxy: {
+      ...base.proxy,
+      ...(patch.proxy ?? {}),
+    },
+  };
+  return normalizeSettings(next);
+}
+
+function applySpellcheckSettings(sess: Electron.Session | null, language: string | undefined) {
+  updateRuntimeAcceptLanguage(language);
+  if (!sess || !language) {
+    return;
+  }
+  try {
+    sess.setSpellCheckerLanguages([language]);
+  } catch (error) {
+    log.warn('Failed to apply spellcheck language', { error });
+  }
+}
+
+async function applyProxySettings(sess: Electron.Session | null, proxy: BrowserSettings['proxy']) {
+  if (!sess || !proxy) {
+    return;
+  }
+  if (proxy.mode === 'manual') {
+    const host = (proxy.host || '').trim();
+    const portValue = Number(proxy.port);
+    if (host && Number.isFinite(portValue) && portValue > 0) {
+      const proxyRules = `${host}:${portValue}`;
+      try {
+        await sess.setProxy({ proxyRules });
+        return;
+      } catch (error) {
+        log.warn('Failed to apply manual proxy', { error });
+      }
+    }
+  }
+  try {
+    await sess.setProxy({ mode: 'system' });
+  } catch (error) {
+    log.warn('Failed to reset proxy settings', { error });
+  }
+}
+
+async function applyRuntimeSettingsToSession(targetSession?: Electron.Session | null) {
+  const sess = targetSession ?? session.fromPartition(MAIN_SESSION_KEY);
+  if (!sess || !runtimeSettings) {
+    return;
+  }
+  applySpellcheckSettings(sess, runtimeSettings.spellcheckLanguage);
+  await applyProxySettings(sess, runtimeSettings.proxy);
+}
+
+async function updateRuntimeSettings(patch: Partial<BrowserSettings> | null | undefined) {
+  runtimeSettings = mergeSettings(runtimeSettings ?? DEFAULT_SETTINGS, patch);
+  persistRuntimeSettings();
+  emitSettingsState();
+  await applyRuntimeSettingsToSession();
+}
+
+function registerPermissionHandlers(sess: Electron.Session | null) {
+  if (!sess || permissionHandlerSessions.has(sess)) {
+    return;
+  }
+  permissionHandlerSessions.add(sess);
+  sess.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
+    const permissionName = permission as unknown as string;
+    if (permissionName !== 'cookies') {
+      return true;
+    }
+    if (!runtimeSettings || runtimeSettings.thirdPartyCookies) {
+      return true;
+    }
+    const embeddingOrigin = details?.embeddingOrigin || requestingOrigin;
+    if (!embeddingOrigin || embeddingOrigin === requestingOrigin) {
+      return true;
+    }
+    return false;
+  });
+}
 
 function resolveFrontendTarget(): string {
   if (isDev) {
@@ -534,12 +834,11 @@ async function createBrowserTab(url?: string, options: { activate?: boolean } = 
   const id = randomUUID();
   const view = new BrowserView({
     webPreferences: {
-      partition: MAIN_SESSION_KEY ?? 'persist:main',
+      partition: MAIN_SESSION_KEY,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
-      webviewTag: true,
     },
   });
 
@@ -607,11 +906,9 @@ function closeBrowserTab(tabId: string): boolean {
     if (webContents && !webContents.isDestroyed()) {
       webContents.removeAllListeners();
       webContents.stop();
-      webContents.destroy();
+      (webContents as Electron.WebContents & { destroy?: () => void }).destroy?.();
     }
-    if (typeof view.destroy === 'function') {
-      view.destroy();
-    }
+    (view as BrowserView & { destroy?: () => void }).destroy?.();
   } catch (error) {
     log.warn('Failed to destroy BrowserView resources', { tabId, error });
   }
@@ -764,13 +1061,16 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
-      partition: MAIN_SESSION_KEY ?? 'persist:main',
+      partition: MAIN_SESSION_KEY,
       webviewTag: true,
       spellcheck: true,
     },
   });
 
-  win.once('ready-to-show', () => win?.show());
+  win.once('ready-to-show', () => {
+    win?.show();
+    emitSettingsState();
+  });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
@@ -812,8 +1112,12 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  loadRuntimeSettings();
   const mainSession = session.fromPartition(MAIN_SESSION_KEY);
   mainSession.setUserAgent(RESOLVED_USER_AGENT);
+  registerPermissionHandlers(mainSession);
+  updateRuntimeAcceptLanguage(runtimeSettings?.spellcheckLanguage || app.getLocale());
+  await applyRuntimeSettingsToSession(mainSession);
 
   mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const acceptLanguageHeader =
@@ -830,13 +1134,14 @@ app.whenReady().then(async () => {
       'sec-ch-ua-full-version-list',
     ];
 
-    const headers = {
+    const headers: Record<string, string | string[]> = {
       ...details.requestHeaders,
       'User-Agent': RESOLVED_USER_AGENT,
     };
 
     if (acceptLanguageHeader) {
       headers['Accept-Language'] = acceptLanguageHeader;
+      runtimeNetworkState.acceptLanguage = formatAcceptLanguageHeader(acceptLanguageHeader) ?? acceptLanguageHeader;
     }
 
     for (const key of hintKeys) {
@@ -911,6 +1216,15 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+ipcMain.handle('settings:get', async () => runtimeSettings);
+
+ipcMain.handle('settings:update', async (_event, patch: Partial<BrowserSettings> | null | undefined) => {
+  await updateRuntimeSettings(patch);
+  return runtimeSettings;
+});
+
+ipcMain.handle('settings:list-spellcheck-languages', async () => listAvailableSpellcheckLanguages());
 
 ipcMain.handle(
   'llm:stream',

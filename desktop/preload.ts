@@ -31,6 +31,18 @@ type BrowserBounds = {
   height: number;
 };
 
+type BrowserSettings = {
+  thirdPartyCookies: boolean;
+  searchMode: 'auto' | 'query';
+  spellcheckLanguage: string;
+  proxy: {
+    mode: 'system' | 'manual';
+    host?: string;
+    port?: string;
+  };
+  openSearchExternally: boolean;
+};
+
 type BrowserAPI = {
   navigate: (url: string, options?: { tabId?: string }) => void;
   goBack: (options?: { tabId?: string }) => void;
@@ -43,6 +55,10 @@ type BrowserAPI = {
   onNavState: (handler: (state: BrowserNavState) => void) => Unsubscribe;
   onTabList: (handler: (summary: BrowserTabList) => void) => Unsubscribe;
   requestTabList: () => Promise<BrowserTabList>;
+  onSettings: (handler: (settings: BrowserSettings) => void) => Unsubscribe;
+  getSettings: () => Promise<BrowserSettings>;
+  updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
+  getSpellcheckLanguages: () => Promise<string[]>;
 };
 
 type DesktopSystemCheckChannel =
@@ -209,7 +225,7 @@ const ALLOWED_EVENTS = new Set<DesktopSystemCheckChannel>([
 
 const noop: Unsubscribe = () => undefined;
 
-const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs']);
+const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs', 'settings:state']);
 
 function subscribe(channel: DesktopSystemCheckChannel, handler: SystemCheckHandler): Unsubscribe {
   if (!ALLOWED_EVENTS.has(channel) || typeof handler !== 'function') {
@@ -299,6 +315,10 @@ function createBrowserAPI(): BrowserAPI {
     onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
     onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
     requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+    onSettings: (handler) => subscribeBrowserChannel('settings:state', handler),
+    getSettings: () => ipcRenderer.invoke('settings:get'),
+    updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),
+    getSpellcheckLanguages: () => ipcRenderer.invoke('settings:list-spellcheck-languages'),
   };
 
   return api;

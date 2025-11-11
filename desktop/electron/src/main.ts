@@ -151,9 +151,8 @@ function attachLiveView(browserWindow: BrowserWindow) {
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
-      partition: MAIN_SESSION_KEY ?? "persist:main",
+      partition: MAIN_SESSION_KEY,
       nodeIntegration: false,
-      webviewTag: true,
     },
   });
   browserWindow.setBrowserView(liveView);
@@ -195,7 +194,7 @@ function createWindow() {
       sandbox: true,
       spellcheck: true,
       webviewTag: true,
-      partition: MAIN_SESSION_KEY ?? "persist:main",
+      partition: MAIN_SESSION_KEY,
     },
   });
 

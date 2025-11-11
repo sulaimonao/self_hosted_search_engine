@@ -1085,7 +1085,7 @@ function handleTabLifecycle(tab) {
 async function createBrowserTab(url, options = {}) {
   const id = randomUUID();
   const isIncognito = options.incognito === true;
-  const basePartition = MAIN_SESSION_KEY ?? 'persist:main';
+  const basePartition = MAIN_SESSION_KEY;
   const partitionKey = isIncognito ? `${INCOGNITO_SESSION_PREFIX}${id}` : basePartition;
   configureSessionPartition(partitionKey, { persistDownloads: !isIncognito });
   const view = new BrowserView({
@@ -1095,7 +1095,6 @@ async function createBrowserTab(url, options = {}) {
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
-      webviewTag: true,
     },
   });
 
@@ -1575,7 +1574,7 @@ function createWindow() {
       sandbox: true,
       nodeIntegration: false,
       webSecurity: true,
-      partition: MAIN_SESSION_KEY ?? 'persist:main',
+      partition: MAIN_SESSION_KEY,
       webviewTag: true,
       spellcheck: true,
     },
