@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ModelInventory } from "@/lib/api";
 import { ChatMessageMarkdown } from "@/components/chat-message";
 import { CopilotHeader } from "@/components/copilot-header";
@@ -19,6 +20,7 @@ import {
   type ChatContext,
   type ChatToolDefinition,
 } from "@/lib/types";
+import { useAppStore } from "@/state/useAppStore";
 
 type ChatViewMessage = {
   id: string;
@@ -114,6 +116,11 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   const [chatContext, setChatContext] = useState<ChatContext>(() => createDefaultChatContext());
   const contextRef = useRef<ChatContext>(chatContext);
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
+  const { activeTab } = useAppStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab?.(),
+    })),
+  );
   const toolDefinitions = useMemo<ChatToolDefinition[]>(
     () => [
       {
@@ -206,6 +213,17 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       window.removeEventListener("focus", updateUrl);
     };
   }, [resolveActiveUrl]);
+
+  useEffect(() => {
+    const candidate = activeTab?.url?.trim();
+    if (candidate) {
+      setActiveUrl(candidate);
+    } else if (typeof window !== "undefined") {
+      setActiveUrl(resolveActiveUrl());
+    } else {
+      setActiveUrl(null);
+    }
+  }, [activeTab?.url, resolveActiveUrl]);
 
   const normalizeContext = useCallback((next: ChatContext): ChatContext => {
     return {
