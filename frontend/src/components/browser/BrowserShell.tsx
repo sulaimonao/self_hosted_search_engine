@@ -212,7 +212,26 @@ function BrowserShellInner() {
     if (browserAPI || supportsWebview) {
       return;
     }
+    const getExpectedOrigin = () => {
+      const current = historyRef.current.current() || fallbackUrl;
+      if (!current || !current.trim()) {
+        return null;
+      }
+      try {
+        return new URL(current).origin;
+      } catch {
+        return null;
+      }
+    };
     const handler = (event: MessageEvent) => {
+      const iframeWindow = fallbackIframeRef.current?.contentWindow;
+      if (!iframeWindow || event.source !== iframeWindow) {
+        return;
+      }
+      const expectedOrigin = getExpectedOrigin();
+      if (!expectedOrigin || event.origin !== expectedOrigin) {
+        return;
+      }
       const data = event?.data;
       if (!data || typeof data !== "object") {
         return;
@@ -234,7 +253,7 @@ function BrowserShellInner() {
     return () => {
       window.removeEventListener("message", handler);
     };
-  }, [browserAPI, supportsWebview, updateTabFromHistory]);
+  }, [browserAPI, fallbackUrl, supportsWebview, updateTabFromHistory]);
 
   useEffect(() => {
     if (!browserAPI || !viewContainerRef.current) {
@@ -589,7 +608,7 @@ function BrowserShellInner() {
             src={fallbackUrl}
             title={activeTab?.title ?? "tab"}
             className="h-full w-full border-0"
-            allow="accelerometer; autoplay; clipboard-read; clipboard-write; encrypted-media; geolocation; microphone; camera; midi; payment"
+            allow="accelerometer; autoplay; clipboard-read; encrypted-media; geolocation; microphone; camera"
             onLoad={handleIframeLoad}
           />
         )}
