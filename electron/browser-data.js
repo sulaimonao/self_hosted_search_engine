@@ -80,6 +80,7 @@ class BrowserDataStore {
       deleteHistoryBeyondLimit: this.db.prepare(
         'DELETE FROM history WHERE id IN (SELECT id FROM history ORDER BY visit_time DESC LIMIT -1 OFFSET ?)',
       ),
+      deleteHistoryForOrigin: this.db.prepare('DELETE FROM history WHERE url = ? OR url LIKE ?'),
       insertDownload: this.db.prepare(
         'INSERT OR REPLACE INTO downloads(id, url, filename, mime, bytes_total, bytes_received, path, state, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ),
@@ -256,6 +257,13 @@ class BrowserDataStore {
 
   clearHistory() {
     this.statements.clearHistory.run();
+  }
+
+  clearHistoryForOrigin(origin) {
+    if (!origin) {
+      return;
+    }
+    this.statements.deleteHistoryForOrigin.run(origin, `${origin}/%`);
   }
 
   clearDownloads() {

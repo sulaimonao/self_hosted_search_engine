@@ -142,7 +142,7 @@ export interface BrowserAPI {
   clearPermission: (origin: string, permission: string) => Promise<{ ok: boolean }>;
   clearOriginPermissions: (origin: string) => Promise<{ ok: boolean }>;
   setPermission: (origin: string, permission: string, setting: "allow" | "deny") => Promise<{ ok: boolean }>;
-  clearSiteData: (origin: string) => Promise<{ ok: boolean; error?: string }>;
+  clearSiteData: (origin: string) => Promise<{ ok: boolean; error?: string; historyCleared?: boolean }>;
   clearBrowsingData: (options?: {
     history?: boolean;
     downloads?: boolean;

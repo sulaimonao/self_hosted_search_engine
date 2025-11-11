@@ -1915,16 +1915,38 @@ ipcMain.handle('site:clear-data', async (_event, payload = {}) => {
   if (!origin) {
     return { ok: false };
   }
+  let historyCleared = false;
   try {
     const sess = getMainSession();
     if (!sess) {
       return { ok: false };
     }
-    await sess.clearStorageData({ origin });
-    return { ok: true };
+    if (browserDataStore) {
+      try {
+        browserDataStore.clearHistoryForOrigin(origin);
+        historyCleared = true;
+      } catch (error) {
+        console.warn('Failed to clear history for origin', { origin, error });
+      }
+    }
+    await sess.clearStorageData({
+      origin,
+      storages: [
+        'cookies',
+        'filesystem',
+        'localstorage',
+        'sessionstorage',
+        'indexdb',
+        'serviceworkers',
+        'websql',
+        'cachestorage',
+      ],
+      quotas: ['temporary', 'persistent', 'syncable'],
+    });
+    return { ok: true, historyCleared };
   } catch (error) {
     console.warn('Failed to clear site data', { origin, error });
-    return { ok: false, error: error?.message || String(error) };
+    return { ok: false, error: error?.message || String(error), historyCleared };
   }
 });
 
