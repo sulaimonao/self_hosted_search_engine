@@ -789,12 +789,18 @@ function closeBrowserTab(tabId) {
   tabs.delete(tabId);
 
   try {
-    if (!tab.view.webContents.isDestroyed()) {
-      tab.view.webContents.removeAllListeners();
-      tab.view.webContents.stop();
+    const { view } = tab;
+    const { webContents } = view;
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.removeAllListeners();
+      webContents.stop();
+      webContents.destroy();
+    }
+    if (typeof view.destroy === 'function') {
+      view.destroy();
     }
   } catch (error) {
-    console.warn('Failed to destroy BrowserView webContents', { tabId, error });
+    console.warn('Failed to destroy BrowserView resources', { tabId, error });
   }
 
   if (wasActive) {
