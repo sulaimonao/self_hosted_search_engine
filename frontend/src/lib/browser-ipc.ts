@@ -126,6 +126,7 @@ export interface BrowserAPI {
   setPermission: (origin: string, permission: string, setting: "allow" | "deny") => Promise<{ ok: boolean }>;
   clearSiteData: (origin: string) => Promise<{ ok: boolean; error?: string }>;
   getSettings: () => Promise<BrowserSettings>;
+  getSpellcheckLanguages?: () => Promise<string[]>;
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
   onSettings: (handler: (settings: BrowserSettings) => void) => (() => void) | void;
   openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;

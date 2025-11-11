@@ -136,6 +136,7 @@ function createBrowserAPI() {
     requestDownloads: (limit) => ipcRenderer.invoke('downloads:list', { limit }),
     showDownload: (id) => ipcRenderer.invoke('downloads:show-in-folder', { id }),
     getSettings: () => ipcRenderer.invoke('settings:get'),
+    getSpellcheckLanguages: () => ipcRenderer.invoke('settings:list-spellcheck-languages'),
     updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),
     openExternal: (url) => {
       const target = typeof url === 'string' ? url.trim() : '';

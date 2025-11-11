@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +10,57 @@ import { Switch } from "@/components/ui/switch";
 import { resolveBrowserAPI, type BrowserSettings } from "@/lib/browser-ipc";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 
-const SPELLCHECK_OPTIONS = [
-  { label: "English (US)", value: "en-US" },
-  { label: "English (UK)", value: "en-GB" },
-];
+const FALLBACK_SPELLCHECK_CODES = ["en-US", "en-GB"];
+
+type SpellcheckOption = {
+  label: string;
+  value: string;
+};
+
+function normalizeLanguageCode(value?: string | null) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const [canonical] = Intl.getCanonicalLocales(trimmed);
+    if (canonical) {
+      return canonical;
+    }
+  } catch {
+    // Ignore invalid locale codes and fall back to the user input below.
+  }
+  return trimmed.replace(/_/g, "-");
+}
+
+function buildSpellcheckOptions(
+  codes: string[],
+  formatLabel: (value: string) => string,
+  selected?: string | null,
+): SpellcheckOption[] {
+  const seen = new Set<string>();
+  const entries: SpellcheckOption[] = [];
+
+  const push = (value?: string | null) => {
+    const normalized = normalizeLanguageCode(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    entries.push({ value: normalized, label: formatLabel(normalized) });
+  };
+
+  push(selected);
+  codes.forEach((code) => push(code));
+  FALLBACK_SPELLCHECK_CODES.forEach((code) => push(code));
+
+  return entries.sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+  );
+}
 
 type SettingsSheetProps = {
   open: boolean;
@@ -24,8 +71,63 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const api = useMemo(() => resolveBrowserAPI(), []);
   const settings = useBrowserRuntimeStore((state) => state.settings);
   const setSettings = useBrowserRuntimeStore((state) => state.setSettings);
+  const languageDisplayNames = useMemo(() => {
+    if (typeof Intl === "undefined" || typeof Intl.DisplayNames !== "function") {
+      return null;
+    }
+    const locale =
+      typeof navigator === "object" && typeof navigator.language === "string" && navigator.language
+        ? navigator.language
+        : "en";
+    try {
+      return new Intl.DisplayNames([locale], { type: "language" });
+    } catch {
+      return null;
+    }
+  }, []);
+  const formatLanguageLabel = useCallback(
+    (code: string) => {
+      const normalized = normalizeLanguageCode(code) ?? code;
+      if (!languageDisplayNames) {
+        return normalized;
+      }
+      try {
+        return (
+          languageDisplayNames.of(normalized) ??
+          languageDisplayNames.of(normalized.split("-")[0]) ??
+          normalized
+        );
+      } catch {
+        return normalized;
+      }
+    },
+    [languageDisplayNames],
+  );
+  const [spellcheckOptions, setSpellcheckOptions] = useState<SpellcheckOption[]>(() =>
+    buildSpellcheckOptions(FALLBACK_SPELLCHECK_CODES, formatLanguageLabel, settings?.spellcheckLanguage),
+  );
   const [proxyHost, setProxyHost] = useState("");
   const [proxyPort, setProxyPort] = useState("");
+
+  useEffect(() => {
+    if (!api?.getSpellcheckLanguages) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .getSpellcheckLanguages()
+      .then((codes) => {
+        if (!cancelled && Array.isArray(codes) && codes.length > 0) {
+          setSpellcheckOptions(buildSpellcheckOptions(codes, formatLanguageLabel));
+        }
+      })
+      .catch((error) => {
+        console.warn("[browser] failed to load spellcheck languages", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, formatLanguageLabel]);
 
   useEffect(() => {
     if (open && settings) {
@@ -33,6 +135,17 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
       setProxyPort(settings.proxy?.port ?? "");
     }
   }, [open, settings]);
+
+  const displayedSpellcheckOptions = useMemo(() => {
+    if (!settings?.spellcheckLanguage) {
+      return spellcheckOptions;
+    }
+    const normalized = normalizeLanguageCode(settings.spellcheckLanguage);
+    if (!normalized || spellcheckOptions.some((option) => option.value === normalized)) {
+      return spellcheckOptions;
+    }
+    return [{ value: normalized, label: formatLanguageLabel(normalized) }, ...spellcheckOptions];
+  }, [spellcheckOptions, settings?.spellcheckLanguage, formatLanguageLabel]);
 
   const applyPatch = async (patch: Partial<BrowserSettings>) => {
     if (!api) {
@@ -118,14 +231,18 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
           <section className="space-y-2">
             <h3 className="text-sm font-medium">Spellcheck</h3>
             <Select
-              value={settings?.spellcheckLanguage ?? "en-US"}
+              value={
+                settings?.spellcheckLanguage ??
+                displayedSpellcheckOptions[0]?.value ??
+                "en-US"
+              }
               onValueChange={(value) => applyPatch({ spellcheckLanguage: value })}
             >
               <SelectTrigger className="w-full text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {SPELLCHECK_OPTIONS.map((option) => (
+                {displayedSpellcheckOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                   </SelectItem>

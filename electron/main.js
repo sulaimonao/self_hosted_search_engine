@@ -91,6 +91,7 @@ let browserContentBounds = { ...DEFAULT_BOUNDS };
 let browserDataStore = null;
 const pendingPermissionRequests = new Map();
 let runtimeSettings = null;
+let cachedSystemSpellcheckLanguages = null;
 const runtimeNetworkState = {
   userAgent: null,
   acceptLanguage: null,
@@ -132,6 +133,7 @@ const DEFAULT_SETTINGS = {
   proxy: { mode: 'system', host: '', port: '' },
   openSearchExternally: false,
 };
+const FALLBACK_SPELLCHECK_LANGUAGES = ['en-US', 'en-GB'];
 
 function resolveFrontendUrl() {
   if (!app.isPackaged) {
@@ -225,6 +227,100 @@ function persistRuntimeSettings() {
   }
 }
 
+function normalizeLanguageCode(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const [canonical] = Intl.getCanonicalLocales(trimmed);
+    if (canonical) {
+      return canonical;
+    }
+  } catch {
+    // Ignore invalid locale values.
+  }
+  return trimmed.replace(/_/g, '-');
+}
+
+function normalizeLanguageList(values) {
+  const normalized = [];
+  const addValue = (value) => {
+    const normalizedValue = normalizeLanguageCode(value);
+    if (normalizedValue) {
+      normalized.push(normalizedValue);
+    }
+  };
+  if (Array.isArray(values)) {
+    values.forEach(addValue);
+  } else if (values) {
+    addValue(values);
+  }
+  return Array.from(new Set(normalized));
+}
+
+function formatAcceptLanguageHeader(value) {
+  const normalized = normalizeLanguageCode(value);
+  if (!normalized) {
+    return null;
+  }
+  const [primary] = normalized.split('-');
+  if (primary && primary.length && primary.toLowerCase() !== normalized.toLowerCase()) {
+    return `${normalized},${primary};q=0.9`;
+  }
+  return normalized;
+}
+
+function updateRuntimeAcceptLanguage(locale) {
+  const formatted = formatAcceptLanguageHeader(locale);
+  if (formatted) {
+    runtimeNetworkState.acceptLanguage = formatted;
+    return;
+  }
+  const fallback = typeof app.getLocale === 'function' ? app.getLocale() : null;
+  runtimeNetworkState.acceptLanguage = formatAcceptLanguageHeader(fallback);
+}
+
+function collectSpellcheckLanguages(sourceList) {
+  const normalized = normalizeLanguageList(sourceList);
+  const seen = new Set(normalized);
+  const addValue = (value) => {
+    const normalizedValue = normalizeLanguageCode(value);
+    if (normalizedValue && !seen.has(normalizedValue)) {
+      seen.add(normalizedValue);
+      normalized.push(normalizedValue);
+    }
+  };
+  addValue(runtimeSettings?.spellcheckLanguage);
+  FALLBACK_SPELLCHECK_LANGUAGES.forEach(addValue);
+  return normalized;
+}
+
+function getSystemSpellcheckLanguages() {
+  if (Array.isArray(cachedSystemSpellcheckLanguages)) {
+    return cachedSystemSpellcheckLanguages;
+  }
+  const sess = getMainSession();
+  if (sess && typeof sess.availableSpellCheckerLanguages === 'function') {
+    try {
+      const available = sess.availableSpellCheckerLanguages();
+      cachedSystemSpellcheckLanguages = normalizeLanguageList(Array.isArray(available) ? available : []);
+      return cachedSystemSpellcheckLanguages;
+    } catch (error) {
+      console.warn('Failed to enumerate spellcheck languages', { error });
+    }
+  }
+  return [];
+}
+
+function listAvailableSpellcheckLanguages() {
+  const baseLanguages = getSystemSpellcheckLanguages();
+  return collectSpellcheckLanguages(baseLanguages);
+}
+
 async function applyProxySettings(sess, proxySettings) {
   if (!sess || !proxySettings) {
     return;
@@ -250,6 +346,7 @@ async function applyProxySettings(sess, proxySettings) {
 }
 
 function applySpellcheckSettings(sess, language) {
+  updateRuntimeAcceptLanguage(language);
   if (!sess || !language) {
     return;
   }
@@ -1250,6 +1347,8 @@ ipcMain.handle('downloads:show-in-folder', async (_event, payload = {}) => {
   }
 });
 
+ipcMain.handle('settings:list-spellcheck-languages', async () => listAvailableSpellcheckLanguages());
+
 ipcMain.handle('settings:get', async () => runtimeSettings ?? DEFAULT_SETTINGS);
 
 ipcMain.handle('settings:update', async (_event, patch = {}) => {
@@ -1449,20 +1548,7 @@ if (!app.requestSingleInstanceLock()) {
       runtimeNetworkState.localeCountryCode = localeCountryCode;
       runtimeNetworkState.locale = preferredLocale;
 
-      let acceptLanguage = null;
-      if (preferredLocale && typeof preferredLocale === 'string') {
-        const normalized = preferredLocale.trim();
-        if (normalized) {
-          const [language] = normalized.split('-');
-          if (language && language.length && language.toLowerCase() !== normalized.toLowerCase()) {
-            acceptLanguage = `${normalized},${language};q=0.9`;
-          } else {
-            acceptLanguage = normalized;
-          }
-        }
-      }
-
-      runtimeNetworkState.acceptLanguage = acceptLanguage;
+      updateRuntimeAcceptLanguage(preferredLocale);
 
       if (!browserDataStore) {
         browserDataStore = initializeBrowserData(app);
