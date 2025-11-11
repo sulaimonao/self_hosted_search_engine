@@ -138,4 +138,22 @@ describe("BrowserDataStore retention", () => {
     expect(store.getRecentHistory(10)).toEqual([]);
     expect(store.listDownloads(10)).toEqual([]);
   });
+
+  it("deletes individual downloads and returns the removed entry", () => {
+    const download = {
+      id: "single",
+      url: "https://example.com/single.bin",
+      filename: "single.bin",
+      bytesTotal: 10,
+      bytesReceived: 5,
+      path: "/tmp/single.bin",
+      state: "in_progress",
+      completedAt: null,
+    };
+    store.recordDownload(download);
+
+    const removed = store.deleteDownload("single");
+    expect(removed).toMatchObject({ id: "single", url: download.url });
+    expect(store.listDownloads(10)).toEqual([]);
+  });
 });

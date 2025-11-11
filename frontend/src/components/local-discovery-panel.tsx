@@ -3,24 +3,13 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import type { DiscoveryPreview } from "@/lib/types";
+import { formatFileSize } from "@/lib/format";
 
 interface LocalDiscoveryPanelProps {
   items: DiscoveryPreview[];
   busyIds: Set<string>;
   onInclude: (id: string) => void;
   onDismiss: (id: string) => void;
-}
-
-function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -82,4 +71,3 @@ export function LocalDiscoveryPanel({ items, busyIds, onInclude, onDismiss }: Lo
     </div>
   );
 }
-

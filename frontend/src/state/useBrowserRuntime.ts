@@ -21,6 +21,7 @@ type RuntimeState = {
   downloads: Record<string, BrowserDownloadState>;
   downloadOrder: string[];
   upsertDownload: (entry: BrowserDownloadState) => void;
+  removeDownload: (id: string) => void;
   clearDownloads: () => void;
 
   downloadsOpen: boolean;
@@ -62,11 +63,34 @@ export const useBrowserRuntimeStore = create<RuntimeState>((set) => ({
   downloadOrder: [],
   upsertDownload: (entry) =>
     set((state) => {
+      if (entry.deleted) {
+        if (!state.downloads[entry.id]) {
+          return state;
+        }
+        const nextDownloads = { ...state.downloads };
+        delete nextDownloads[entry.id];
+        return {
+          downloads: nextDownloads,
+          downloadOrder: state.downloadOrder.filter((candidate) => candidate !== entry.id),
+        };
+      }
       const downloads = { ...state.downloads, [entry.id]: entry };
       const order = state.downloadOrder.includes(entry.id)
         ? state.downloadOrder
         : [entry.id, ...state.downloadOrder].slice(0, MAX_DOWNLOADS);
       return { downloads, downloadOrder: order };
+    }),
+  removeDownload: (id) =>
+    set((state) => {
+      if (!state.downloads[id]) {
+        return state;
+      }
+      const nextDownloads = { ...state.downloads };
+      delete nextDownloads[id];
+      return {
+        downloads: nextDownloads,
+        downloadOrder: state.downloadOrder.filter((candidate) => candidate !== id),
+      };
     }),
   clearDownloads: () => set({ downloads: {}, downloadOrder: [] }),
 

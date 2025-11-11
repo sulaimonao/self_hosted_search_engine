@@ -158,6 +158,7 @@ const runtimeNetworkState = {
   localeCountryCode: null,
   locale: null,
 };
+const activeDownloadItems = new Map();
 
 function flushSseBuffer(target, requestId, buffer) {
   if (!target || target.isDestroyed?.()) {
@@ -656,6 +657,7 @@ function registerDownloadHandlers(sess, options = {}) {
     };
     browserDataStore.recordDownload(initialEntry);
     emitDownload(initialEntry);
+    activeDownloadItems.set(downloadId, item);
 
     item.on('updated', (_updateEvent, state) => {
       browserDataStore.updateDownloadProgress(downloadId, {
@@ -678,6 +680,7 @@ function registerDownloadHandlers(sess, options = {}) {
         completedAt: Date.now(),
       });
       emitDownloadById(downloadId);
+      activeDownloadItems.delete(downloadId);
     });
   });
 }
@@ -1732,6 +1735,109 @@ ipcMain.handle('downloads:show-in-folder', async (_event, payload = {}) => {
   } catch (error) {
     return { ok: false, error: error?.message || String(error) };
   }
+});
+
+ipcMain.handle('downloads:pause', async (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!id) {
+    return { ok: false, error: 'invalid_id' };
+  }
+  const item = activeDownloadItems.get(id);
+  if (!item) {
+    return { ok: false, error: 'not_found' };
+  }
+  const state = typeof item.getState === 'function' ? item.getState() : null;
+  if (state && state !== 'progressing') {
+    return { ok: false, error: 'not_progressing' };
+  }
+  try {
+    if (typeof item.isPaused === 'function' && item.isPaused()) {
+      return { ok: true };
+    }
+    if (typeof item.pause === 'function') {
+      item.pause();
+    } else {
+      return { ok: false, error: 'pause_unavailable' };
+    }
+    if (browserDataStore) {
+      browserDataStore.updateDownloadProgress(id, { state: 'paused' });
+      emitDownloadById(id);
+    }
+    return { ok: true };
+  } catch (error) {
+    console.warn('Failed to pause download', { id, error });
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('downloads:resume', async (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!id) {
+    return { ok: false, error: 'invalid_id' };
+  }
+  const item = activeDownloadItems.get(id);
+  if (!item) {
+    return { ok: false, error: 'not_found' };
+  }
+  try {
+    const canResume = typeof item.canResume === 'function' ? item.canResume() : true;
+    if (typeof item.isPaused === 'function' && !item.isPaused() && !canResume) {
+      return { ok: false, error: 'not_paused' };
+    }
+    if (typeof item.resume === 'function') {
+      item.resume();
+    } else {
+      return { ok: false, error: 'resume_unavailable' };
+    }
+    if (browserDataStore) {
+      browserDataStore.updateDownloadProgress(id, { state: 'in_progress' });
+      emitDownloadById(id);
+    }
+    return { ok: true };
+  } catch (error) {
+    console.warn('Failed to resume download', { id, error });
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('downloads:cancel', async (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!id) {
+    return { ok: false, error: 'invalid_id' };
+  }
+  const item = activeDownloadItems.get(id);
+  if (!item) {
+    return { ok: false, error: 'not_found' };
+  }
+  try {
+    if (typeof item.cancel === 'function') {
+      item.cancel();
+    } else {
+      return { ok: false, error: 'cancel_unavailable' };
+    }
+    return { ok: true };
+  } catch (error) {
+    console.warn('Failed to cancel download', { id, error });
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('downloads:clear-entry', async (_event, payload = {}) => {
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  if (!browserDataStore || !id) {
+    return { ok: false, error: 'invalid_id' };
+  }
+  const entry = browserDataStore.getDownload(id);
+  if (!entry) {
+    return { ok: false, error: 'not_found' };
+  }
+  if (entry.state !== 'completed') {
+    return { ok: false, error: 'not_completed' };
+  }
+  browserDataStore.deleteDownload(id);
+  activeDownloadItems.delete(id);
+  emitDownload({ ...entry, deleted: true });
+  return { ok: true };
 });
 
 ipcMain.handle('settings:list-spellcheck-languages', async () => listAvailableSpellcheckLanguages());

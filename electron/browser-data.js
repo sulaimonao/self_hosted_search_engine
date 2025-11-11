@@ -90,6 +90,7 @@ class BrowserDataStore {
       deleteDownloadsBeyondLimit: this.db.prepare(
         'DELETE FROM downloads WHERE id IN (SELECT id FROM downloads ORDER BY started_at DESC LIMIT -1 OFFSET ?)',
       ),
+      deleteDownloadById: this.db.prepare('DELETE FROM downloads WHERE id=?'),
       getPermission: this.db.prepare(
         'SELECT setting FROM permissions WHERE origin=? AND permission=?',
       ),
@@ -259,6 +260,18 @@ class BrowserDataStore {
 
   clearDownloads() {
     this.statements.clearDownloads.run();
+  }
+
+  deleteDownload(id) {
+    if (!id) {
+      return null;
+    }
+    const entry = this.getDownload(id);
+    if (!entry) {
+      return null;
+    }
+    this.statements.deleteDownloadById.run(id);
+    return entry;
   }
 }
 

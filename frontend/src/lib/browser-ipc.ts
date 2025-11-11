@@ -42,9 +42,10 @@ export type BrowserDownloadState = {
   bytesTotal?: number | null;
   bytesReceived?: number | null;
   path?: string | null;
-  state: "in_progress" | "completed" | "cancelled" | "interrupted";
+  state: "in_progress" | "completed" | "cancelled" | "interrupted" | "paused";
   startedAt?: number | null;
   completedAt?: number | null;
+  deleted?: boolean;
 };
 
 export type BrowserSettings = {
@@ -130,6 +131,10 @@ export interface BrowserAPI {
   onDownload: (handler: (download: BrowserDownloadState) => void) => (() => void) | void;
   requestDownloads: (limit?: number) => Promise<BrowserDownloadState[]>;
   showDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  pauseDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  resumeDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  cancelDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  clearDownload: (id: string) => Promise<{ ok: boolean; error?: string }>;
   onPermissionPrompt: (handler: (prompt: BrowserPermissionPrompt) => void) => (() => void) | void;
   respondToPermission: (decision: { id: string; decision: "allow" | "deny"; remember?: boolean }) => void;
   onPermissionState: (handler: (state: BrowserPermissionState) => void) => (() => void) | void;

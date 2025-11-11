@@ -123,10 +123,12 @@ function BrowserShellInner() {
     }
   }, [activePanel]);
 
-  const activeDownloads = useMemo(
-    () => downloadOrder.filter((id) => downloads[id]?.state === "in_progress").length,
-    [downloadOrder, downloads],
-  );
+  const activeDownloads = useMemo(() => {
+    return downloadOrder.filter((id) => {
+      const state = downloads[id]?.state;
+      return state === "in_progress" || state === "paused";
+    }).length;
+  }, [downloadOrder, downloads]);
 
   const fallbackWebviewRef = useRef<ElectronWebviewElement | null>(null);
   const fallbackIframeRef = useRef<HTMLIFrameElement | null>(null);
