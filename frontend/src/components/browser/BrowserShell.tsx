@@ -26,7 +26,7 @@ import { LocalSearchPanel } from "@/components/panels/LocalSearchPanel";
 import { ShadowPanel } from "@/components/panels/ShadowPanel";
 import { useEvents } from "@/state/useEvents";
 import { Panel, useAppStore } from "@/state/useAppStore";
-import { resolveBrowserAPI } from "@/lib/browser-ipc";
+import { resolveBrowserAPI, type BrowserNavError } from "@/lib/browser-ipc";
 import { useBrowserIpc } from "@/hooks/useBrowserIpc";
 import { SiteInfoPopover } from "@/components/browser/SiteInfoPopover";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
@@ -59,6 +59,42 @@ const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   shadow: <ShadowPanel />,
   agentLog: <AgentLogPanel />,
 };
+
+function toBrowserNavError(error: unknown, fallback = "Navigation failed"): BrowserNavError {
+  let code: number | undefined;
+  let description = fallback;
+
+  if (typeof error === "object" && error !== null) {
+    const codeCandidate =
+      typeof (error as { errorCode?: unknown }).errorCode === "number"
+        ? ((error as { errorCode?: number }).errorCode as number)
+        : typeof (error as { code?: unknown }).code === "number"
+          ? ((error as { code?: number }).code as number)
+          : undefined;
+    if (typeof codeCandidate === "number") {
+      code = codeCandidate;
+    }
+    const rawDescription =
+      typeof (error as { errorDescription?: unknown }).errorDescription === "string"
+        ? ((error as { errorDescription?: string }).errorDescription as string)
+        : typeof (error as { description?: unknown }).description === "string"
+          ? ((error as { description?: string }).description as string)
+          : error instanceof Error && typeof error.message === "string"
+            ? error.message
+            : null;
+    if (rawDescription && rawDescription.trim()) {
+      description = rawDescription.trim();
+    }
+  } else if (typeof error === "string" && error.trim()) {
+    description = error.trim();
+  }
+
+  if (!description) {
+    description = fallback;
+  }
+
+  return { code, description };
+}
 
 export function BrowserShell() {
   return <BrowserShellInner />;
@@ -303,27 +339,38 @@ function BrowserShellInner() {
       return;
     }
     const webview = fallbackWebviewRef.current;
-    if (!webview || !activeTab?.url) {
+    const tabId = activeTab?.id;
+    const targetUrl = activeTab?.url;
+    if (!webview || !tabId || !targetUrl) {
       return;
     }
+    const pushFallbackError = (error: unknown) => {
+      const normalized = toBrowserNavError(error);
+      useAppStore.getState().updateTab(tabId, {
+        isLoading: false,
+        error: normalized,
+      });
+    };
     try {
       const currentUrl = typeof webview.getURL === "function" ? webview.getURL() : webview.getAttribute("src") || "";
-      if (currentUrl !== activeTab.url) {
+      if (currentUrl !== targetUrl) {
         if (typeof webview.loadURL === "function") {
-          const loadResult = webview.loadURL(activeTab.url);
+          const loadResult = webview.loadURL(targetUrl);
           if (loadResult instanceof Promise) {
             void loadResult.catch((error) => {
               console.warn("[browser] failed to load fallback webview URL", error);
+              pushFallbackError(error);
             });
           }
         } else {
-          webview.setAttribute("src", activeTab.url);
+          webview.setAttribute("src", targetUrl);
         }
       }
     } catch (error) {
       console.warn("[browser] failed to sync fallback webview", error);
+      pushFallbackError(error);
     }
-  }, [activeTab?.url, hasBrowserAPI]);
+  }, [activeTab?.id, activeTab?.url, hasBrowserAPI]);
 
   useEffect(() => {
     if (hasBrowserAPI) {
@@ -379,7 +426,7 @@ function BrowserShellInner() {
         isLoading: false,
         error: {
           code: errorCode,
-          description: errorDescription || "Navigation failed",
+          description: errorDescription?.trim() || "Navigation failed",
         },
       });
     };
@@ -572,6 +619,38 @@ function BrowserShellInner() {
     }
     updateTabFromHistory(currentUrl, { loading: false });
   }, [browserAPI, supportsWebview, fallbackUrl, updateTabFromHistory]);
+  const handleIframeError = useCallback(() => {
+    if (browserAPI || supportsWebview) {
+      return;
+    }
+    const tabId = activeTab?.id;
+    if (!tabId) {
+      return;
+    }
+    useAppStore.getState().updateTab(tabId, {
+      isLoading: false,
+      error: { description: "The network request failed before the page could load." },
+    });
+  }, [activeTab?.id, browserAPI, supportsWebview]);
+  const handleOpenExternal = useCallback(() => {
+    if (!activeTab?.url) {
+      return;
+    }
+    const url = activeTab.url;
+    if (browserAPI && typeof browserAPI.openExternal === "function") {
+      void browserAPI
+        .openExternal(url)
+        .catch((error) => console.warn("[browser] failed to open external url", error));
+      return;
+    }
+    if (typeof window !== "undefined") {
+      try {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } catch (error) {
+        console.warn("[browser] failed to open window", error);
+      }
+    }
+  }, [activeTab?.url, browserAPI]);
 
   return (
     <div className="flex h-full min-h-screen flex-col">
@@ -807,6 +886,7 @@ function BrowserShellInner() {
             className="h-full w-full border-0"
             allow="accelerometer; autoplay; clipboard-read; encrypted-media; geolocation; microphone; camera"
             onLoad={handleIframeLoad}
+            onError={handleIframeError}
           />
         )}
 
@@ -815,10 +895,40 @@ function BrowserShellInner() {
             <div className="pointer-events-auto max-w-sm rounded-md border bg-background p-4 shadow">
               <p className="text-sm font-medium">Unable to load page</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {activeTab.error?.description ?? "An unexpected network error occurred."}
+                {activeTab.error?.description?.trim() || "An unexpected network error occurred."}
               </p>
-              <div className="mt-3 flex justify-end">
-                <Button size="sm" onClick={() => browserAPI?.reload({ tabId: activeTab.id, ignoreCache: true })}>
+              {typeof activeTab.error?.code === "number" ? (
+                <p className="mt-1 text-[11px] font-mono text-muted-foreground">Error code {activeTab.error.code}</p>
+              ) : null}
+              {activeTab.url ? (
+                <p className="mt-2 truncate text-[11px] text-muted-foreground" title={activeTab.url}>
+                  {activeTab.url}
+                </p>
+              ) : null}
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground">
+                <div className="rounded bg-muted/60 p-2 font-mono leading-relaxed text-foreground/80">
+                  {(activeTab.error?.description?.trim() || "Navigation failed.")
+                    .split("\n")
+                    .map((line, index) => (
+                      <span key={index} className="block">
+                        {line}
+                      </span>
+                    ))}
+                </div>
+                <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setDiagnosticsOpen(true)}>
+                  View developer diagnostics
+                </Button>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!activeTab.url}
+                  onClick={handleOpenExternal}
+                >
+                  Open in system browser
+                </Button>
+                <Button size="sm" onClick={handleReload}>
                   Retry
                 </Button>
               </div>

@@ -44,7 +44,14 @@ const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
 const INVENTORY_REFRESH_DELAY_MS = 5_000;
 
-type Banner = { intent: "info" | "error"; text: string };
+type BannerAction = {
+  id: string;
+  label: string;
+  action: "retry-last" | "dismiss" | "cancel-stream";
+  variant?: "default" | "outline";
+};
+
+type Banner = { intent: "info" | "error"; text: string; actions?: BannerAction[] };
 
 type ToolExecutionState = {
   status: "idle" | "running" | "success" | "error";
@@ -253,6 +260,16 @@ export function ChatPanel(props: {
   const streamSessionRef = useRef<string | null>(null);
 
   const messagesRef = useRef<ChatMessage[]>(messages);
+  const lastPromptRef = useRef<string | null>(null);
+  const buildStreamErrorActions = useCallback((): BannerAction[] => {
+    const actions: BannerAction[] = [
+      { id: "cancel-stream", label: "Cancel", action: "cancel-stream", variant: "outline" },
+    ];
+    if (lastPromptRef.current) {
+      actions.unshift({ id: "retry-stream", label: "Retry", action: "retry-last" });
+    }
+    return actions;
+  }, [lastPromptRef]);
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
@@ -672,14 +689,18 @@ export function ChatPanel(props: {
     [navigate],
   );
 
-  const handleSend = useCallback(async () => {
-    const trimmed = input.trim();
-    if (!trimmed || isBusy) {
-      if (!trimmed) {
-        setInput("");
+  const handleSend = useCallback(
+    async (overrideInput?: string) => {
+      const source = typeof overrideInput === "string" ? overrideInput : input;
+      const trimmed = source.trim();
+      if (!trimmed || isBusy) {
+        if (!trimmed) {
+          setInput("");
+        }
+        return;
       }
-      return;
-    }
+
+      lastPromptRef.current = trimmed;
 
     if (inventory && !llmReachable) {
       setBanner({ intent: "error", text: "Cannot send message while Ollama is offline." });
@@ -781,7 +802,7 @@ export function ChatPanel(props: {
         }
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "Failed to resolve page context";
-        setBanner({ intent: "error", text: messageText });
+        setBanner({ intent: "error", text: messageText, actions: buildStreamErrorActions() });
       }
     }
 
@@ -995,7 +1016,8 @@ export function ChatPanel(props: {
       }
       setIsBusy(false);
     }
-  }, [
+  },
+  [
     activeTab?.id,
     activeTab?.title,
     activeTab?.url,
@@ -1013,7 +1035,9 @@ export function ChatPanel(props: {
     updateMessage,
     usePageContext,
     setContextSummary,
-  ]);
+    buildStreamErrorActions,
+  ],
+);
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -1021,6 +1045,15 @@ export function ChatPanel(props: {
     },
     [handleSend],
   );
+
+  const handleRetryLastPrompt = useCallback(() => {
+    const lastPrompt = lastPromptRef.current;
+    if (!lastPrompt || isBusy) {
+      return;
+    }
+    setBanner(null);
+    void handleSend(lastPrompt);
+  }, [handleSend, isBusy, setBanner]);
 
   useEffect(() => {
     if (!llmStreamSupported) {
@@ -1077,7 +1110,7 @@ export function ChatPanel(props: {
       streamCompletionRef.current = llmStream.requestId;
       setIsBusy(false);
       if (llmStream.error) {
-        setBanner({ intent: "error", text: llmStream.error });
+        setBanner({ intent: "error", text: llmStream.error, actions: buildStreamErrorActions() });
         incidentBus.record("STREAM_ERROR", {
           message: llmStream.error,
           severity: "warn",
@@ -1099,7 +1132,7 @@ export function ChatPanel(props: {
       }
       activeStreamRef.current = null;
     }
-  }, [llmStream, llmStreamSupported, setBanner, setIsBusy, threadId, updateMessage]);
+  }, [buildStreamErrorActions, llmStream, llmStreamSupported, setBanner, setIsBusy, threadId, updateMessage]);
 
   const handleCancel = useCallback(() => {
     if (llmStreamSupported) {
@@ -1119,6 +1152,28 @@ export function ChatPanel(props: {
     abortRef.current.abort();
     setBanner({ intent: "info", text: "Cancelling request…" });
   }, [abortLlmStream, llmStreamSupported]);
+
+  const handleBannerAction = useCallback(
+    (action: BannerAction["action"]) => {
+      switch (action) {
+        case "retry-last":
+          handleRetryLastPrompt();
+          return;
+        case "cancel-stream": {
+          const hadActiveStream = Boolean(activeStreamRef.current);
+          handleCancel();
+          if (!hadActiveStream) {
+            setBanner(null);
+          }
+          return;
+        }
+        case "dismiss":
+        default:
+          setBanner(null);
+      }
+    },
+    [activeStreamRef, handleCancel, handleRetryLastPrompt, setBanner],
+  );
 
   useEffect(() => {
     return () => {
@@ -1578,7 +1633,22 @@ export function ChatPanel(props: {
                   : "border-border text-muted-foreground",
               )}
             >
-              {banner.text}
+              <p>{banner.text}</p>
+              {banner.actions && banner.actions.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {banner.actions.map((action) => (
+                    <Button
+                      key={action.id}
+                      type="button"
+                      size="sm"
+                      variant={action.variant === "outline" ? "outline" : "default"}
+                      onClick={() => handleBannerAction(action.action)}
+                    >
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <form className="space-y-2" onSubmit={handleSubmit}>
