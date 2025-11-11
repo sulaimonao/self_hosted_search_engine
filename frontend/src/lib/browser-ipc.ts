@@ -97,6 +97,17 @@ export type BrowserDiagnosticsResult = {
   error?: string | null;
 };
 
+export type ClearBrowsingDataResult = {
+  ok: boolean;
+  cleared: {
+    history: boolean;
+    downloads: boolean;
+    cookies: boolean;
+    cache: boolean;
+  };
+  errors?: { scope: string; message: string }[];
+};
+
 export interface BrowserAPI {
   navigate: (url: string, options?: { tabId?: string; transition?: string }) => void;
   back: (options?: { tabId?: string }) => void;
@@ -125,6 +136,12 @@ export interface BrowserAPI {
   clearOriginPermissions: (origin: string) => Promise<{ ok: boolean }>;
   setPermission: (origin: string, permission: string, setting: "allow" | "deny") => Promise<{ ok: boolean }>;
   clearSiteData: (origin: string) => Promise<{ ok: boolean; error?: string }>;
+  clearBrowsingData: (options?: {
+    history?: boolean;
+    downloads?: boolean;
+    cookies?: boolean;
+    cache?: boolean;
+  }) => Promise<ClearBrowsingDataResult>;
   getSettings: () => Promise<BrowserSettings>;
   getSpellcheckLanguages?: () => Promise<string[]>;
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;

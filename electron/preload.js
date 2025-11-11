@@ -157,6 +157,7 @@ function createBrowserAPI() {
     setPermission: (origin, permission, setting) =>
       ipcRenderer.invoke('permissions:set', { origin, permission, setting }),
     clearSiteData: (origin) => ipcRenderer.invoke('site:clear-data', { origin }),
+    clearBrowsingData: (options) => ipcRenderer.invoke('browser:clear-data', options ?? {}),
     runDiagnostics: () => ipcRenderer.invoke('browser:diagnostics-run'),
   };
 }

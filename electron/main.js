@@ -535,6 +535,71 @@ function clearAllPermissionsForOrigin(origin) {
   emitPermissionState(origin);
 }
 
+async function clearBrowsingData(options = {}) {
+  const normalized = {
+    history: options.history !== false,
+    downloads: options.downloads !== false,
+    cookies: options.cookies !== false,
+    cache: options.cache !== false,
+  };
+  const result = { history: false, downloads: false, cookies: false, cache: false };
+  const errors = [];
+
+  if (browserDataStore) {
+    if (normalized.history) {
+      try {
+        browserDataStore.clearHistory();
+        result.history = true;
+      } catch (error) {
+        errors.push({ scope: 'history', message: error?.message || String(error) });
+      }
+    }
+    if (normalized.downloads) {
+      try {
+        browserDataStore.clearDownloads();
+        result.downloads = true;
+      } catch (error) {
+        errors.push({ scope: 'downloads', message: error?.message || String(error) });
+      }
+    }
+  }
+
+  const sess = getMainSession();
+  if (sess && normalized.cookies) {
+    try {
+      await sess.clearStorageData({
+        storages: [
+          'cookies',
+          'localstorage',
+          'sessionstorage',
+          'indexdb',
+          'websql',
+          'serviceworkers',
+          'cachestorage',
+        ],
+        quotas: ['temporary', 'persistent', 'syncable'],
+      });
+      result.cookies = true;
+    } catch (error) {
+      errors.push({ scope: 'cookies', message: error?.message || String(error) });
+    }
+  }
+  if (sess && normalized.cache) {
+    try {
+      await sess.clearCache();
+      result.cache = true;
+    } catch (error) {
+      errors.push({ scope: 'cache', message: error?.message || String(error) });
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    cleared: result,
+    errors,
+  };
+}
+
 function safeJson(response) {
   return response
     .json()
@@ -1314,6 +1379,8 @@ ipcMain.handle('browser:diagnostics-run', async () => {
   }
 });
 
+ipcMain.handle('browser:clear-data', async (_event, payload = {}) => clearBrowsingData(payload));
+
 ipcMain.handle('history:list', async (_event, payload = {}) => {
   if (!browserDataStore) {
     return [];
@@ -1552,6 +1619,8 @@ if (!app.requestSingleInstanceLock()) {
 
       if (!browserDataStore) {
         browserDataStore = initializeBrowserData(app);
+        browserDataStore.trimHistory();
+        browserDataStore.trimDownloads();
         loadRuntimeSettings();
       }
 

@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
+const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+const HISTORY_MAX_ENTRIES = 1000;
+const HISTORY_MAX_AGE_MS = 30 * MILLIS_PER_DAY;
+const DOWNLOAD_MAX_ENTRIES = 1000;
+const DOWNLOAD_MAX_AGE_MS = 30 * MILLIS_PER_DAY;
+
 const SCHEMA = `
 PRAGMA journal_mode=WAL;
 
@@ -70,11 +76,19 @@ class BrowserDataStore {
       recentHistory: this.db.prepare(
         'SELECT id, url, title, visit_time AS visitTime, transition, referrer FROM history ORDER BY visit_time DESC LIMIT ?',
       ),
+      deleteHistoryOlderThan: this.db.prepare('DELETE FROM history WHERE visit_time < ?'),
+      deleteHistoryBeyondLimit: this.db.prepare(
+        'DELETE FROM history WHERE id IN (SELECT id FROM history ORDER BY visit_time DESC LIMIT -1 OFFSET ?)',
+      ),
       insertDownload: this.db.prepare(
         'INSERT OR REPLACE INTO downloads(id, url, filename, mime, bytes_total, bytes_received, path, state, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ),
       recentDownloads: this.db.prepare(
         'SELECT id, url, filename, mime, bytes_total AS bytesTotal, bytes_received AS bytesReceived, path, state, started_at AS startedAt, completed_at AS completedAt FROM downloads ORDER BY started_at DESC LIMIT ?',
+      ),
+      deleteDownloadsOlderThan: this.db.prepare('DELETE FROM downloads WHERE started_at < ?'),
+      deleteDownloadsBeyondLimit: this.db.prepare(
+        'DELETE FROM downloads WHERE id IN (SELECT id FROM downloads ORDER BY started_at DESC LIMIT -1 OFFSET ?)',
       ),
       getPermission: this.db.prepare(
         'SELECT setting FROM permissions WHERE origin=? AND permission=?',
@@ -92,6 +106,8 @@ class BrowserDataStore {
       ),
       getSetting: this.db.prepare('SELECT value FROM settings WHERE key=?'),
       allSettings: this.db.prepare('SELECT key, value FROM settings'),
+      clearHistory: this.db.prepare('DELETE FROM history'),
+      clearDownloads: this.db.prepare('DELETE FROM downloads'),
     };
   }
 
@@ -100,6 +116,7 @@ class BrowserDataStore {
     const info = this.statements.insertHistory.run(url, title ?? null, now, transition ?? null, referrer ?? null);
     const historyId = Number(info.lastInsertRowid);
     this.statements.insertVisit.run(historyId, now, null);
+    this.trimHistory(now);
     return { id: historyId, url, title: title ?? null, visitTime: now, transition: transition ?? null, referrer: referrer ?? null };
   }
 
@@ -111,7 +128,7 @@ class BrowserDataStore {
     return this.statements.recentHistory.all(limit);
   }
 
-  recordDownload(entry) {
+  recordDownload(entry, options = {}) {
     const now = entry.startedAt ?? Date.now();
     this.statements.insertDownload.run(
       entry.id,
@@ -125,10 +142,16 @@ class BrowserDataStore {
       now,
       entry.completedAt ?? null,
     );
+    if (!options?.skipTrim) {
+      this.trimDownloads(now);
+    }
   }
 
   updateDownloadProgress(id, { bytesReceived, bytesTotal, state, path, completedAt }) {
-    const existing = this.getDownload(id) ?? {};
+    const existing = this.getDownload(id);
+    if (!existing) {
+      return;
+    }
     this.recordDownload({
       id,
       url: existing.url ?? null,
@@ -140,7 +163,7 @@ class BrowserDataStore {
       state: state ?? existing.state ?? 'in_progress',
       startedAt: existing.startedAt ?? Date.now(),
       completedAt: completedAt ?? existing.completedAt ?? null,
-    });
+    }, { skipTrim: true });
   }
 
   getDownload(id) {
@@ -209,6 +232,34 @@ class BrowserDataStore {
     }
     return result;
   }
+
+  trimHistory(now = Date.now()) {
+    if (HISTORY_MAX_AGE_MS > 0) {
+      const cutoff = now - HISTORY_MAX_AGE_MS;
+      this.statements.deleteHistoryOlderThan.run(cutoff);
+    }
+    if (HISTORY_MAX_ENTRIES > 0) {
+      this.statements.deleteHistoryBeyondLimit.run(HISTORY_MAX_ENTRIES);
+    }
+  }
+
+  trimDownloads(now = Date.now()) {
+    if (DOWNLOAD_MAX_AGE_MS > 0) {
+      const cutoff = now - DOWNLOAD_MAX_AGE_MS;
+      this.statements.deleteDownloadsOlderThan.run(cutoff);
+    }
+    if (DOWNLOAD_MAX_ENTRIES > 0) {
+      this.statements.deleteDownloadsBeyondLimit.run(DOWNLOAD_MAX_ENTRIES);
+    }
+  }
+
+  clearHistory() {
+    this.statements.clearHistory.run();
+  }
+
+  clearDownloads() {
+    this.statements.clearDownloads.run();
+  }
 }
 
 function initializeBrowserData(app) {
@@ -224,4 +275,8 @@ function initializeBrowserData(app) {
 module.exports = {
   initializeBrowserData,
   BrowserDataStore,
+  HISTORY_MAX_ENTRIES,
+  HISTORY_MAX_AGE_MS,
+  DOWNLOAD_MAX_ENTRIES,
+  DOWNLOAD_MAX_AGE_MS,
 };

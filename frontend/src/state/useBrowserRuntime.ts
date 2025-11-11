@@ -21,6 +21,7 @@ type RuntimeState = {
   downloads: Record<string, BrowserDownloadState>;
   downloadOrder: string[];
   upsertDownload: (entry: BrowserDownloadState) => void;
+  clearDownloads: () => void;
 
   downloadsOpen: boolean;
   setDownloadsOpen: (open: boolean) => void;
@@ -67,6 +68,7 @@ export const useBrowserRuntimeStore = create<RuntimeState>((set) => ({
         : [entry.id, ...state.downloadOrder].slice(0, MAX_DOWNLOADS);
       return { downloads, downloadOrder: order };
     }),
+  clearDownloads: () => set({ downloads: {}, downloadOrder: [] }),
 
   downloadsOpen: false,
   setDownloadsOpen: (open) => set({ downloadsOpen: open }),

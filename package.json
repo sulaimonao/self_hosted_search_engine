@@ -26,6 +26,7 @@
     "electron-builder": "^24.13.3",
     "electronmon": "^2.0.2",
     "jsdom": "^27.1.0",
+    "vitest": "^4.0.8",
     "wait-on": "^7.2.0"
   },
   "build": {

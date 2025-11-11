@@ -71,6 +71,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const api = useMemo(() => resolveBrowserAPI(), []);
   const settings = useBrowserRuntimeStore((state) => state.settings);
   const setSettings = useBrowserRuntimeStore((state) => state.setSettings);
+  const setHistoryEntries = useBrowserRuntimeStore((state) => state.setHistory);
+  const clearDownloads = useBrowserRuntimeStore((state) => state.clearDownloads);
   const languageDisplayNames = useMemo(() => {
     if (typeof Intl === "undefined" || typeof Intl.DisplayNames !== "function") {
       return null;
@@ -108,6 +110,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   );
   const [proxyHost, setProxyHost] = useState("");
   const [proxyPort, setProxyPort] = useState("");
+  const [isClearingData, setIsClearingData] = useState(false);
+  const [clearDataState, setClearDataState] = useState<"idle" | "success" | "error">("idle");
 
   useEffect(() => {
     if (!api?.getSpellcheckLanguages) {
@@ -171,6 +175,36 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
     });
   };
 
+  const handleClearBrowsingData = async () => {
+    if (!api || isClearingData) {
+      return;
+    }
+    const confirmed =
+      typeof window === "undefined"
+        ? true
+        : window.confirm("Clear history, downloads, cookies, and cached files? This cannot be undone.");
+    if (!confirmed) {
+      return;
+    }
+    setIsClearingData(true);
+    setClearDataState("idle");
+    try {
+      const outcome = await api.clearBrowsingData();
+      if (outcome?.ok) {
+        setHistoryEntries([]);
+        clearDownloads();
+        setClearDataState("success");
+      } else {
+        setClearDataState("error");
+      }
+    } catch (error) {
+      console.warn("[browser] failed to clear browsing data", error);
+      setClearDataState("error");
+    } finally {
+      setIsClearingData(false);
+    }
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-[420px] space-y-6" side="right">
@@ -191,6 +225,30 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 checked={settings?.thirdPartyCookies ?? true}
                 onCheckedChange={(checked) => applyPatch({ thirdPartyCookies: Boolean(checked) })}
               />
+            </div>
+            <div className="rounded-md border p-3 space-y-3">
+              <div>
+                <p className="text-sm font-medium">Clear browsing data</p>
+                <p className="text-xs text-muted-foreground">
+                  Deletes history, downloads, cookies, and cached files stored by this browser.
+                </p>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={isClearingData}
+                  onClick={handleClearBrowsingData}
+                >
+                  {isClearingData ? "Clearing…" : "Clear data"}
+                </Button>
+                {clearDataState === "success" ? (
+                  <span className="text-xs text-muted-foreground">Cleared</span>
+                ) : null}
+                {clearDataState === "error" ? (
+                  <span className="text-xs text-destructive">Failed</span>
+                ) : null}
+              </div>
             </div>
           </section>
           <section className="space-y-2">
