@@ -68,11 +68,11 @@ function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigField
 const RUNTIME_TAB_ID = "runtime-desktop";
 
 const AGENT_BROWSER_DEFAULTS: AgentBrowserConfigPayload = {
-  enabled: false,
-  AGENT_BROWSER_ENABLED: false,
+  enabled: true,
+  AGENT_BROWSER_ENABLED: true,
   AGENT_BROWSER_DEFAULT_TIMEOUT_S: 15,
   AGENT_BROWSER_NAV_TIMEOUT_MS: 15000,
-  AGENT_BROWSER_HEADLESS: true,
+  AGENT_BROWSER_HEADLESS: false,
 };
 
 const MANDATORY_MODEL_FAMILIES = ["gpt-oss", "gemma3", "embeddinggemma"] as const;

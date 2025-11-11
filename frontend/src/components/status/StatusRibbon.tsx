@@ -82,7 +82,7 @@ export function StatusRibbon() {
   const components = data?.components ?? {};
 
   return (
-    <div className="pointer-events-none fixed right-4 top-4 z-50 max-w-md">
+    <div className="pointer-events-none fixed bottom-4 left-4 z-50 max-w-md w-fit">
       <Popover>
         <PopoverTrigger className="pointer-events-auto w-full text-left">
           <Card className={cn("flex items-center gap-3 px-4 py-2 shadow-lg", statusVariant(overallStatus))}>
@@ -99,7 +99,7 @@ export function StatusRibbon() {
             </Link>
           </Card>
         </PopoverTrigger>
-        <PopoverContent className="w-72 text-sm" align="end">
+        <PopoverContent className="w-72 text-sm" align="start" side="top" sideOffset={8}>
           <div className="space-y-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Components</p>
