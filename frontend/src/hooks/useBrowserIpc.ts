@@ -27,6 +27,8 @@ function mapNavStateToTab(state: BrowserNavState) {
     canGoForward: state.canGoForward,
     isLoading: Boolean(state.isLoading),
     error: state.error ?? null,
+    sessionPartition: state.sessionPartition ?? "persist:main",
+    incognito: Boolean(state.isIncognito),
   };
 }
 

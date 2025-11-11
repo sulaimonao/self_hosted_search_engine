@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { EyeOff, Plus, X } from "lucide-react";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -9,13 +9,15 @@ import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state/useAppStore";
 
 export function TabsBar() {
-  const { tabs, activeTabId, setActive, closeTab, addTab } = useAppStore(
+  const { tabs, activeTabId, setActive, closeTab, addTab, incognitoMode, setIncognitoMode } = useAppStore(
     useShallow((state) => ({
       tabs: state.tabs,
       activeTabId: state.activeTabId,
       setActive: state.setActive,
       closeTab: state.closeTab,
       addTab: state.addTab,
+      incognitoMode: state.incognitoMode,
+      setIncognitoMode: state.setIncognitoMode,
     })),
   );
 
@@ -44,6 +46,7 @@ export function TabsBar() {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={tab.favicon} alt="" className="h-3 w-3" />
                 ) : null}
+                {tab.incognito ? <EyeOff size={12} className="h-3 w-3 text-muted-foreground" /> : null}
                 <span className="max-w-[200px] truncate">{tab.title || tab.url || "New Tab"}</span>
                 {tabs.length > 1 ? (
                   <X
@@ -62,6 +65,15 @@ export function TabsBar() {
       </div>
       <Button size="icon" variant="outline" onClick={() => addTab("https://example.com")} title="New tab">
         <Plus size={16} />
+      </Button>
+      <Button
+        size="icon"
+        variant={incognitoMode ? "default" : "outline"}
+        onClick={() => setIncognitoMode(!incognitoMode)}
+        aria-pressed={incognitoMode}
+        title={incognitoMode ? "Incognito mode on" : "Incognito mode off"}
+      >
+        <EyeOff size={16} />
       </Button>
     </div>
   );

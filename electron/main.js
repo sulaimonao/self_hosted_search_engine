@@ -116,6 +116,10 @@ app.commandLine.appendSwitch(
 );
 
 const MAIN_SESSION_KEY = 'persist:main';
+const INCOGNITO_SESSION_PREFIX = 'persist:incognito-';
+const permissionHandlerSessions = new WeakSet();
+const webRequestHandlerSessions = new WeakSet();
+const downloadHandlerSessions = new WeakSet();
 const DESKTOP_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const RESOLVED_USER_AGENT = (() => {
@@ -486,9 +490,10 @@ function emitPermissionState(origin) {
 }
 
 function registerPermissionHandlers(sess) {
-  if (!sess) {
+  if (!sess || permissionHandlerSessions.has(sess)) {
     return;
   }
+  permissionHandlerSessions.add(sess);
 
   sess.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
     if (!runtimeSettings) {
@@ -552,6 +557,169 @@ function registerPermissionHandlers(sess) {
       permission: canonical,
     });
   });
+}
+
+function registerWebRequestHandlers(sess) {
+  if (!sess || webRequestHandlerSessions.has(sess)) {
+    return;
+  }
+  webRequestHandlerSessions.add(sess);
+
+  try {
+    sess.setUserAgent(RESOLVED_USER_AGENT);
+  } catch (error) {
+    console.warn('Failed to set session user agent', { error });
+  }
+
+  sess.webRequest.onBeforeSendHeaders((details, callback) => {
+    const acceptLanguageHeader =
+      details.requestHeaders['Accept-Language'] ?? details.requestHeaders['accept-language'];
+
+    const hintKeys = [
+      'sec-ch-ua',
+      'sec-ch-ua-mobile',
+      'sec-ch-ua-platform',
+      'sec-ch-ua-arch',
+      'sec-ch-ua-model',
+      'sec-ch-ua-platform-version',
+      'sec-ch-ua-full-version-list',
+    ];
+    const headers = {
+      ...details.requestHeaders,
+      'User-Agent': RESOLVED_USER_AGENT,
+    };
+
+    if (acceptLanguageHeader) {
+      headers['Accept-Language'] = acceptLanguageHeader;
+    }
+
+    for (const key of hintKeys) {
+      const value = details.requestHeaders[key] ?? details.requestHeaders[key.toUpperCase()];
+      if (value != null) {
+        headers[key] = value;
+      }
+    }
+
+    headers['sec-ch-ua'] = headers['sec-ch-ua'] ?? '"Chromium";v="120", "Not A(Brand";v="99"';
+    headers['sec-ch-ua-mobile'] = headers['sec-ch-ua-mobile'] ?? '?0';
+    headers['sec-ch-ua-platform'] = headers['sec-ch-ua-platform'] ?? '"macOS"';
+
+    if (!headers['Accept-Language']) {
+      headers['Accept-Language'] = runtimeNetworkState.acceptLanguage || app.getLocale();
+    }
+    callback({ requestHeaders: headers });
+  });
+
+  sess.webRequest.onHeadersReceived((details, callback) => {
+    const headers = details.responseHeaders || {};
+    if (!app.isPackaged) {
+      headers['Content-Security-Policy'] = [
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: http: https:",
+      ];
+    }
+    callback({ responseHeaders: headers });
+  });
+}
+
+function registerDownloadHandlers(sess, options = {}) {
+  if (!sess || downloadHandlerSessions.has(sess)) {
+    return;
+  }
+  downloadHandlerSessions.add(sess);
+  const persistDownloads = options.persistDownloads !== false;
+
+  sess.on('will-download', (_event, item) => {
+    const filename = item.getFilename();
+    const savePath = path.join(app.getPath('downloads'), filename);
+    try {
+      item.setSavePath(savePath);
+    } catch (error) {
+      console.warn('Failed to set download save path', { error });
+    }
+
+    if (!persistDownloads || !browserDataStore) {
+      return;
+    }
+
+    const downloadId = randomUUID();
+    const initialEntry = {
+      id: downloadId,
+      url: item.getURL(),
+      filename,
+      mime: item.getMimeType(),
+      bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+      bytesReceived: item.getReceivedBytes(),
+      path: savePath,
+      state: 'in_progress',
+      startedAt: Date.now(),
+      completedAt: null,
+    };
+    browserDataStore.recordDownload(initialEntry);
+    emitDownload(initialEntry);
+
+    item.on('updated', (_updateEvent, state) => {
+      browserDataStore.updateDownloadProgress(downloadId, {
+        bytesReceived: item.getReceivedBytes(),
+        bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+        state: state === 'interrupted' ? 'interrupted' : 'in_progress',
+        path: savePath,
+      });
+      emitDownloadById(downloadId);
+    });
+
+    item.once('done', (_doneEvent, state) => {
+      const finalState =
+        state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted';
+      browserDataStore.updateDownloadProgress(downloadId, {
+        bytesReceived: item.getReceivedBytes(),
+        bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
+        state: finalState,
+        path: savePath,
+        completedAt: Date.now(),
+      });
+      emitDownloadById(downloadId);
+    });
+  });
+}
+
+function configureSessionPartition(partitionKey, options = {}) {
+  const key =
+    typeof partitionKey === 'string' && partitionKey.trim().length > 0
+      ? partitionKey.trim()
+      : MAIN_SESSION_KEY;
+  const targetSession = session.fromPartition(key);
+  registerPermissionHandlers(targetSession);
+  registerWebRequestHandlers(targetSession);
+  registerDownloadHandlers(targetSession, options);
+  return targetSession;
+}
+
+async function cleanupIncognitoPartition(partitionKey) {
+  if (
+    !partitionKey ||
+    typeof partitionKey !== 'string' ||
+    !partitionKey.startsWith(INCOGNITO_SESSION_PREFIX)
+  ) {
+    return;
+  }
+  try {
+    const incognitoSession = session.fromPartition(partitionKey);
+    const tasks = [];
+    if (typeof incognitoSession.clearStorageData === 'function') {
+      tasks.push(incognitoSession.clearStorageData());
+    }
+    if (typeof incognitoSession.clearCache === 'function') {
+      tasks.push(incognitoSession.clearCache());
+    }
+    if (typeof incognitoSession.clearAuthCache === 'function') {
+      tasks.push(incognitoSession.clearAuthCache({ type: 'password' }));
+    }
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks);
+    }
+  } catch (error) {
+    console.warn('Failed to clean incognito session data', { partitionKey, error });
+  }
 }
 
 function settlePermissionRequest(requestId, decision, remember) {
@@ -682,6 +850,8 @@ function buildNavState(tab) {
     isActive: activeTabId === tab.id,
     isLoading: tab.isLoading,
     error: tab.lastError ?? null,
+    sessionPartition: tab.sessionPartition ?? MAIN_SESSION_KEY,
+    isIncognito: Boolean(tab.isIncognito),
   };
 }
 
@@ -713,7 +883,7 @@ function emitDownload(entry) {
 }
 
 function recordNavigationEntry(tab, url, transition) {
-  if (!browserDataStore) {
+  if (!browserDataStore || tab?.isIncognito) {
     return;
   }
   const entry = browserDataStore.recordNavigation({
@@ -728,7 +898,7 @@ function recordNavigationEntry(tab, url, transition) {
 }
 
 function updateHistoryTitle(tab) {
-  if (browserDataStore && tab.lastHistoryId) {
+  if (browserDataStore && tab.lastHistoryId && !tab.isIncognito) {
     browserDataStore.updateHistoryTitle(tab.lastHistoryId, tab.title);
   }
 }
@@ -911,9 +1081,13 @@ function handleTabLifecycle(tab) {
 
 async function createBrowserTab(url, options = {}) {
   const id = randomUUID();
+  const isIncognito = options.incognito === true;
+  const basePartition = MAIN_SESSION_KEY ?? 'persist:main';
+  const partitionKey = isIncognito ? `${INCOGNITO_SESSION_PREFIX}${id}` : basePartition;
+  configureSessionPartition(partitionKey, { persistDownloads: !isIncognito });
   const view = new BrowserView({
     webPreferences: {
-      partition: MAIN_SESSION_KEY ?? 'persist:main',
+      partition: partitionKey,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -934,6 +1108,8 @@ async function createBrowserTab(url, options = {}) {
     lastReferrer: null,
     pendingTransition: typeof options.transition === 'string' ? options.transition : 'typed',
     pendingReferrer: null,
+    isIncognito,
+    sessionPartition: partitionKey,
   };
 
   tabs.set(id, tab);
@@ -1019,6 +1195,10 @@ function closeBrowserTab(tabId) {
     }
   } catch (error) {
     console.warn('Failed to destroy BrowserView resources', { tabId, error });
+  }
+
+  if (tab.isIncognito) {
+    void cleanupIncognitoPartition(tab.sessionPartition);
   }
 
   if (wasActive) {
@@ -1492,7 +1672,8 @@ ipcMain.handle('system-check:export-report', async (_event, options = {}) => {
 
 ipcMain.handle('browser:create-tab', async (_event, payload = {}) => {
   const url = typeof payload.url === 'string' ? payload.url : undefined;
-  return createBrowserTab(url, { activate: true });
+  const incognito = payload.incognito === true;
+  return createBrowserTab(url, { activate: true, incognito });
 });
 
 ipcMain.handle('browser:close-tab', async (_event, payload = {}) => {
@@ -1763,114 +1944,7 @@ if (!app.requestSingleInstanceLock()) {
         loadRuntimeSettings();
       }
 
-      registerPermissionHandlers(mainSession);
-
-      mainSession.setUserAgent(RESOLVED_USER_AGENT);
-      mainSession.webRequest.onBeforeSendHeaders((details, callback) => {
-        const acceptLanguageHeader =
-          details.requestHeaders['Accept-Language'] ??
-          details.requestHeaders['accept-language'];
-
-        const hintKeys = [
-          'sec-ch-ua',
-          'sec-ch-ua-mobile',
-          'sec-ch-ua-platform',
-          'sec-ch-ua-arch',
-          'sec-ch-ua-model',
-          'sec-ch-ua-platform-version',
-          'sec-ch-ua-full-version-list',
-        ];
-        const headers = {
-          ...details.requestHeaders,
-          'User-Agent': RESOLVED_USER_AGENT,
-        };
-
-        if (acceptLanguageHeader) {
-          headers['Accept-Language'] = acceptLanguageHeader;
-        }
-
-        for (const key of hintKeys) {
-          const value =
-            details.requestHeaders[key] ?? details.requestHeaders[key.toUpperCase()];
-          if (value != null) {
-            headers[key] = value;
-          }
-        }
-
-        headers['sec-ch-ua'] =
-          headers['sec-ch-ua'] ??
-          '"Chromium";v="120", "Not A(Brand";v="99"';
-        headers['sec-ch-ua-mobile'] =
-          headers['sec-ch-ua-mobile'] ?? '?0';
-        headers['sec-ch-ua-platform'] =
-          headers['sec-ch-ua-platform'] ?? '"macOS"';
-
-        if (!headers['Accept-Language']) {
-          headers['Accept-Language'] =
-            runtimeNetworkState.acceptLanguage || app.getLocale();
-        }
-        callback({ requestHeaders: headers });
-      });
-
-      mainSession.webRequest.onHeadersReceived((details, callback) => {
-        const headers = details.responseHeaders || {};
-        if (!app.isPackaged) {
-          headers['Content-Security-Policy'] = [
-            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: http: https:",
-          ];
-        }
-        callback({ responseHeaders: headers });
-      });
-
-      mainSession.on('will-download', (_event, item) => {
-        if (!browserDataStore) {
-          return;
-        }
-        const downloadId = randomUUID();
-        const filename = item.getFilename();
-        const savePath = path.join(app.getPath('downloads'), filename);
-        try {
-          item.setSavePath(savePath);
-        } catch (error) {
-          console.warn('Failed to set download save path', { error });
-        }
-        const initialEntry = {
-          id: downloadId,
-          url: item.getURL(),
-          filename,
-          mime: item.getMimeType(),
-          bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
-          bytesReceived: item.getReceivedBytes(),
-          path: savePath,
-          state: 'in_progress',
-          startedAt: Date.now(),
-          completedAt: null,
-        };
-        browserDataStore.recordDownload(initialEntry);
-        emitDownload(initialEntry);
-
-        item.on('updated', (_updateEvent, state) => {
-          browserDataStore.updateDownloadProgress(downloadId, {
-            bytesReceived: item.getReceivedBytes(),
-            bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
-            state: state === 'interrupted' ? 'interrupted' : 'in_progress',
-            path: savePath,
-          });
-          emitDownloadById(downloadId);
-        });
-
-        item.once('done', (_doneEvent, state) => {
-          const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted';
-          browserDataStore.updateDownloadProgress(downloadId, {
-            bytesReceived: item.getReceivedBytes(),
-            bytesTotal: item.getTotalBytes() > 0 ? item.getTotalBytes() : null,
-            state: finalState,
-            path: savePath,
-            completedAt: Date.now(),
-          });
-          emitDownloadById(downloadId);
-        });
-      });
+      configureSessionPartition(MAIN_SESSION_KEY, { persistDownloads: true });
 
       const initialPromise = ensureInitialDiagnostics();
       buildApplicationMenu();

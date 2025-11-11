@@ -18,6 +18,8 @@ type Tab = {
   canGoForward: boolean;
   isLoading?: boolean;
   error?: BrowserNavError | null;
+  sessionPartition?: string | null;
+  incognito?: boolean;
 };
 
 type Notification = {
@@ -41,11 +43,17 @@ type BrowserState = {
   desiredUrl?: string | null;
 };
 
+type CreateTabOptions = {
+  title?: string;
+  incognito?: boolean;
+};
+
 type AppState = {
   tabs: Tab[];
   activeTabId?: string;
   mode: "browser" | "research";
   shadowEnabled: boolean;
+  incognitoMode: boolean;
 
   notifications: Record<string, Notification>;
   panelOpen?: Panel;
@@ -54,13 +62,14 @@ type AppState = {
 
   activeTab?: () => Tab | undefined;
 
-  addTab: (url: string, title?: string) => string;
+  addTab: (url: string, options?: string | CreateTabOptions) => string;
   updateTab: (id: string, patch: Partial<Tab>) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
   replaceTabs: (summary: BrowserTabList) => void;
   setMode: (mode: AppState["mode"]) => void;
   setShadow: (enabled: boolean) => void;
+  setIncognitoMode: (enabled: boolean) => void;
   openPanel: (panel?: Panel) => void;
 
   setHealth: (snapshot: HealthSnapshot | null) => void;
@@ -121,6 +130,8 @@ const DEFAULT_TAB: Tab = {
   canGoForward: false,
   isLoading: false,
   error: null,
+  sessionPartition: "persist:main",
+  incognito: false,
 };
 
 export const useAppStore = create<AppState>()(
@@ -132,6 +143,7 @@ export const useAppStore = create<AppState>()(
         activeTabId: DEFAULT_TAB.id,
         mode: "browser",
         shadowEnabled: false,
+        incognitoMode: false,
         notifications: {},
         health: null,
         browser: {
@@ -144,30 +156,44 @@ export const useAppStore = create<AppState>()(
           return state.tabs.find((tab) => tab.id === targetId);
         },
 
-        addTab: (url, title) => {
+        addTab: (url, options) => {
           const api = resolveBrowserAPI();
+          const state = get();
+          let providedTitle: string | undefined;
+          let incognitoOverride: boolean | undefined;
+          if (typeof options === "string") {
+            providedTitle = options;
+          } else if (options && typeof options === "object") {
+            providedTitle = options.title;
+            if (typeof options.incognito === "boolean") {
+              incognitoOverride = options.incognito;
+            }
+          }
+          const incognito = typeof incognitoOverride === "boolean" ? incognitoOverride : state.incognitoMode;
           if (api) {
             void api
-              .createTab(url)
+              .createTab(url, { incognito })
               .catch((error) => console.warn("[browser] failed to create tab", error));
             return url;
           }
           const id = createId();
           const next: Tab = {
             id,
-            title: title ?? url,
+            title: providedTitle ?? url,
             url,
             favicon: null,
             canGoBack: false,
             canGoForward: false,
             isLoading: false,
             error: null,
+            incognito,
+            sessionPartition: incognito ? "persist:incognito-local" : "persist:main",
           };
-          guardedSet((state) => ({
-            tabs: [...state.tabs, next],
+          guardedSet((storeState) => ({
+            tabs: [...storeState.tabs, next],
             activeTabId: id,
             browser: {
-              ...state.browser,
+              ...storeState.browser,
               desiredUrl: next.url,
             },
           }));
@@ -278,6 +304,8 @@ export const useAppStore = create<AppState>()(
               canGoForward: tab.canGoForward,
               isLoading: Boolean(tab.isLoading),
               error: tab.error ?? null,
+              sessionPartition: tab.sessionPartition ?? "persist:main",
+              incognito: Boolean(tab.isIncognito),
             }));
             if (!mapped.length) {
               return {};
@@ -331,6 +359,14 @@ export const useAppStore = create<AppState>()(
               return {};
             }
             return { shadowEnabled: enabled };
+          }),
+        setIncognitoMode: (enabled) =>
+          guardedSet((state) => {
+            const next = Boolean(enabled);
+            if (state.incognitoMode === next) {
+              return {};
+            }
+            return { incognitoMode: next };
           }),
         openPanel: (panel) =>
           guardedSet((state) => {

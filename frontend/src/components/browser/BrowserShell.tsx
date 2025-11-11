@@ -580,7 +580,7 @@ function BrowserShellInner() {
             src={activeTab?.url ?? "https://wikipedia.org"}
             title={activeTab?.title ?? "tab"}
             className="h-full w-full border-0"
-            partition="persist:main"
+            partition={activeTab?.sessionPartition ?? "persist:main"}
             allowpopups
           />
         ) : (

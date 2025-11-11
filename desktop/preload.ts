@@ -15,6 +15,8 @@ type BrowserNavState = {
   isActive: boolean;
   isLoading?: boolean;
   error?: BrowserNavError | null;
+  sessionPartition?: string | null;
+  isIncognito?: boolean;
 };
 
 type BrowserTabList = {
@@ -34,7 +36,7 @@ type BrowserAPI = {
   goBack: (options?: { tabId?: string }) => void;
   goForward: (options?: { tabId?: string }) => void;
   reload: (options?: { tabId?: string; ignoreCache?: boolean }) => void;
-  createTab: (url?: string) => Promise<BrowserNavState>;
+  createTab: (url?: string, options?: { incognito?: boolean }) => Promise<BrowserNavState>;
   closeTab: (tabId: string) => Promise<{ ok: boolean }>;
   setActiveTab: (tabId: string) => void;
   setBounds: (bounds: BrowserBounds) => void;
@@ -271,7 +273,11 @@ function createBrowserAPI(): BrowserAPI {
         ignoreCache: options?.ignoreCache ?? false,
       });
     },
-    createTab: (url) => ipcRenderer.invoke('browser:create-tab', { url }),
+    createTab: (url, options) =>
+      ipcRenderer.invoke('browser:create-tab', {
+        url,
+        incognito: options?.incognito ?? false,
+      }),
     closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', { tabId }),
     setActiveTab: (tabId) => {
       if (typeof tabId === 'string' && tabId) {

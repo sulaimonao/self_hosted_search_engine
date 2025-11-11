@@ -13,13 +13,14 @@ export interface NavigateOptions {
 }
 
 export function useBrowserNavigation() {
-  const { activeTab, addTab, updateTab, setActive, openPanel } = useAppStore(
+  const { activeTab, addTab, updateTab, setActive, openPanel, incognitoMode } = useAppStore(
     useShallow((state) => ({
       activeTab: state.activeTab?.(),
       addTab: state.addTab,
       updateTab: state.updateTab,
       setActive: state.setActive,
       openPanel: state.openPanel,
+      incognitoMode: state.incognitoMode,
     })),
   );
   const browserAPI = useMemo(() => resolveBrowserAPI(), []);
@@ -43,7 +44,7 @@ export function useBrowserNavigation() {
       if (browserAPI) {
         if (options.newTab || !activeTab) {
           void browserAPI
-            .createTab(target)
+            .createTab(target, { incognito: incognitoMode })
             .catch((error) => console.warn("[browser] failed to open tab", error));
           return null;
         }
@@ -52,7 +53,7 @@ export function useBrowserNavigation() {
       }
 
       if (options.newTab || !activeTab) {
-        const id = addTab(target, normalizedTitle ?? target);
+        const id = addTab(target, { title: normalizedTitle ?? target, incognito: incognitoMode });
         if (normalizedTitle) {
           updateTab(id, { title: normalizedTitle });
         }
@@ -66,6 +67,6 @@ export function useBrowserNavigation() {
       });
       return activeTab.id;
     },
-    [activeTab, addTab, browserAPI, openPanel, setActive, updateTab],
+    [activeTab, addTab, browserAPI, incognitoMode, openPanel, setActive, updateTab],
   );
 }

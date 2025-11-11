@@ -104,7 +104,11 @@ function createBrowserAPI() {
         ignoreCache: options?.ignoreCache ?? false,
       });
     },
-    createTab: (url) => ipcRenderer.invoke('browser:create-tab', { url }),
+    createTab: (url, options) =>
+      ipcRenderer.invoke('browser:create-tab', {
+        url,
+        incognito: options?.incognito === true,
+      }),
     closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', { tabId }),
     setActiveTab: (tabId) => {
       if (typeof tabId === 'string' && tabId) {

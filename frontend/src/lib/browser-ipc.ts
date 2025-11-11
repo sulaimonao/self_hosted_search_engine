@@ -15,6 +15,8 @@ export type BrowserNavState = {
   isActive: boolean;
   isLoading?: boolean;
   error?: BrowserNavError | null;
+  sessionPartition?: string | null;
+  isIncognito?: boolean;
 };
 
 export type BrowserTabList = {
@@ -115,7 +117,7 @@ export interface BrowserAPI {
   goBack: (options?: { tabId?: string }) => void;
   goForward: (options?: { tabId?: string }) => void;
   reload: (options?: { tabId?: string; ignoreCache?: boolean }) => void;
-  createTab: (url?: string) => Promise<BrowserNavState>;
+  createTab: (url?: string, options?: { incognito?: boolean }) => Promise<BrowserNavState>;
   closeTab: (tabId: string) => Promise<{ ok: boolean }>;
   setActiveTab: (tabId: string) => void;
   setBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
