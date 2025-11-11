@@ -201,7 +201,7 @@ export function DownloadsTray() {
             <Download size={16} /> Downloads
           </SheetTitle>
         </SheetHeader>
-        <div className="mt-4 flex h-full flex-col gap-3 overflow-y-auto pb-4">
+        <div className="mt-4 flex h-full flex-col gap-3 overflow-y-auto pb-4" role="list" aria-label="Recent downloads">
           {items.length === 0 ? (
             <p className="text-sm text-muted-foreground">No downloads yet.</p>
           ) : (
@@ -221,12 +221,25 @@ export function DownloadsTray() {
               const etaText =
                 active && metrics?.etaSeconds != null ? formatDuration(metrics.etaSeconds) : null;
               const summary = summarizeBytes(item);
+              const labelId = makeDownloadDomId("download-label", item.id);
+              const stateId = makeDownloadDomId("download-state", item.id);
               return (
-                <div key={item.id} className="rounded-md border p-3">
+                <div
+                  key={item.id}
+                  className="rounded-md border p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  tabIndex={0}
+                  role="listitem"
+                  aria-labelledby={labelId}
+                  aria-describedby={stateId}
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{item.filename ?? item.url}</p>
-                      <p className="text-xs text-muted-foreground">{describeState(item.state)}</p>
+                      <p id={labelId} className="truncate text-sm font-medium">
+                        {item.filename ?? item.url}
+                      </p>
+                      <p id={stateId} className="text-xs text-muted-foreground">
+                        {describeState(item.state)}
+                      </p>
                     </div>
                     {finished ? (
                       <Check size={16} className="text-green-500" />
@@ -292,4 +305,9 @@ export function DownloadsTray() {
       </SheetContent>
     </Sheet>
   );
+}
+
+function makeDownloadDomId(prefix: string, seed: string): string {
+  const normalized = seed.replace(/[^a-zA-Z0-9_-]/g, "");
+  return `${prefix}-${normalized || "download"}`;
 }

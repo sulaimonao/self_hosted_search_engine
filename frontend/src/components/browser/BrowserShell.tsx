@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, MessageSquare, Stethoscope } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useId } from "react";
 import { useShallow } from "zustand/react/shallow";
 import dynamic from "next/dynamic";
 
@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TabsBar } from "@/components/browser/Tabs";
-import { AddressBar } from "@/components/browser/AddressBar";
+import { AddressBar, ADDRESS_BAR_INPUT_ID } from "@/components/browser/AddressBar";
 import { NavHistory } from "@/components/browser/nav-history";
 import { ModeToggle } from "@/components/browser/ModeToggle";
 import { StatusBar } from "@/components/browser/StatusBar";
@@ -39,6 +39,7 @@ import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
 import { useSafeState, useEvent } from "@/lib/react-safe";
 import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 import { useSafeNavigate } from "@/lib/useSafeNavigate";
+import { DEFAULT_NEW_TAB_URL } from "@/components/browser/constants";
 
 const ChatPanel = dynamic(
   () =>
@@ -129,6 +130,10 @@ function BrowserShellInner() {
       return state === "in_progress" || state === "paused";
     }).length;
   }, [downloadOrder, downloads]);
+  const downloadsLabel =
+    activeDownloads > 0
+      ? `Open downloads tray. ${activeDownloads} active download${activeDownloads === 1 ? "" : "s"}.`
+      : "Open downloads tray.";
 
   const fallbackWebviewRef = useRef<ElectronWebviewElement | null>(null);
   const fallbackIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -144,6 +149,18 @@ function BrowserShellInner() {
   const hasBrowserAPI = Boolean(browserAPI);
 
   const pageTitle = activeTab?.title || activeTab?.url || "New Tab";
+  const backDescriptionId = useId();
+  const forwardDescriptionId = useId();
+  const reloadDescriptionId = useId();
+  const downloadsDescriptionId = useId();
+  const menuDescriptionId = useId();
+  const controlCenterDescriptionId = useId();
+  const chatDescriptionId = useId();
+  const localSearchDescriptionId = useId();
+  const collectionsDescriptionId = useId();
+  const shadowDescriptionId = useId();
+  const agentLogDescriptionId = useId();
+  const diagnosticsDescriptionId = useId();
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -397,6 +414,86 @@ function BrowserShellInner() {
     };
   }, [activeTab?.id, activeTab?.url, hasBrowserAPI]);
 
+  const handleKeyboardShortcuts = useEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+    const modifierPressed = event.metaKey || event.ctrlKey;
+    if (!modifierPressed || event.repeat) {
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+    const store = useAppStore.getState();
+    const tabs = store.tabs ?? [];
+    const resolvedActiveId = store.activeTabId ?? tabs[0]?.id ?? null;
+
+    const prevent = () => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const focusAddressBar = () => {
+      const input = document.getElementById(ADDRESS_BAR_INPUT_ID) as HTMLInputElement | null;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    };
+
+    const cycleTab = (direction: 1 | -1) => {
+      if (tabs.length <= 1) {
+        return;
+      }
+      const currentIndex = tabs.findIndex((tab) => tab.id === resolvedActiveId);
+      if (currentIndex < 0) {
+        return;
+      }
+      const nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+      const target = tabs[nextIndex];
+      if (target) {
+        store.setActive(target.id);
+      }
+    };
+
+    if (key === "l" && !event.shiftKey && !event.altKey) {
+      prevent();
+      focusAddressBar();
+      return;
+    }
+
+    if (key === "t" && !event.shiftKey && !event.altKey) {
+      prevent();
+      store.addTab(DEFAULT_NEW_TAB_URL);
+      return;
+    }
+
+    if (key === "w" && !event.shiftKey && !event.altKey && resolvedActiveId) {
+      prevent();
+      store.closeTab(resolvedActiveId);
+      return;
+    }
+
+    if (key === "tab" && !event.altKey) {
+      prevent();
+      cycleTab(event.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (key === "p" && event.shiftKey && !event.altKey) {
+      prevent();
+      store.setIncognitoMode(!store.incognitoMode);
+    }
+  });
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => handleKeyboardShortcuts(event);
+    window.addEventListener("keydown", handler);
+    return () => {
+      window.removeEventListener("keydown", handler);
+    };
+  }, [handleKeyboardShortcuts]);
+
   const handleBack = useCallback(() => {
     if (browserAPI) {
       browserAPI.back({ tabId: activeTab?.id });
@@ -489,24 +586,39 @@ function BrowserShellInner() {
               size="icon"
               disabled={!activeTab?.canGoBack}
               onClick={handleBack}
+              aria-label="Go back"
+              aria-describedby={backDescriptionId}
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={16} aria-hidden="true" />
+              <span id={backDescriptionId} className="sr-only">
+                Go to the previous page in the current tab
+              </span>
             </Button>
             <Button
               variant="outline"
               size="icon"
               disabled={!activeTab?.canGoForward}
               onClick={handleForward}
+              aria-label="Go forward"
+              aria-describedby={forwardDescriptionId}
             >
-              <ArrowRight size={16} />
+              <ArrowRight size={16} aria-hidden="true" />
+              <span id={forwardDescriptionId} className="sr-only">
+                Go to the next page in the current tab
+              </span>
             </Button>
             <Button
               variant="outline"
               size="icon"
               onClick={handleReload}
               disabled={!activeTab}
+              aria-label="Reload page"
+              aria-describedby={reloadDescriptionId}
             >
-              <RotateCcw size={16} />
+              <RotateCcw size={16} aria-hidden="true" />
+              <span id={reloadDescriptionId} className="sr-only">
+                Refreshes the current page
+              </span>
             </Button>
           </div>
           <SiteInfoPopover url={activeTab?.url} />
@@ -529,18 +641,35 @@ function BrowserShellInner() {
             onClick={() => setDownloadsOpen(true)}
             title="Downloads"
             className="relative"
+            aria-label={downloadsLabel}
+            aria-describedby={downloadsDescriptionId}
           >
-            <Download size={16} />
+            <Download size={16} aria-hidden="true" />
+            <span id={downloadsDescriptionId} className="sr-only">
+              Opens the downloads tray
+            </span>
             {activeDownloads > 0 ? (
-              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">
+              <span
+                className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground"
+                aria-hidden="true"
+              >
                 {activeDownloads}
               </span>
             ) : null}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" title="Menu">
-                <Menu size={16} />
+              <Button
+                variant="outline"
+                size="icon"
+                title="Menu"
+                aria-label="Open browser menu"
+                aria-describedby={menuDescriptionId}
+              >
+                <Menu size={16} aria-hidden="true" />
+                <span id={menuDescriptionId} className="sr-only">
+                  Access history, downloads, and other pages
+                </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-40">
@@ -564,29 +693,95 @@ function BrowserShellInner() {
             size="icon"
             title="Control Center"
             onClick={() => navigate.push("/control-center")}
+            aria-label="Open Control Center"
+            aria-describedby={controlCenterDescriptionId}
           >
-            <Cog size={16} />
+            <Cog size={16} aria-hidden="true" />
+            <span id={controlCenterDescriptionId} className="sr-only">
+              Opens browser settings and controls
+            </span>
           </Button>
           <Button
             variant="outline"
             size="icon"
             title="Chat"
-            aria-label="Open chat panel"
             onClick={() => openPanel("chat")}
+            aria-label="Open chat panel"
+            aria-describedby={chatDescriptionId}
           >
-            <MessageSquare size={16} />
+            <MessageSquare size={16} aria-hidden="true" />
+            <span id={chatDescriptionId} className="sr-only">
+              Opens the chat side panel
+            </span>
           </Button>
-          <Button variant="outline" size="icon" onClick={() => openPanel("localSearch")}>🔍</Button>
-          <Button variant="outline" size="icon" onClick={() => openPanel("collections")}>📁</Button>
-          <Button variant="outline" size="icon" onClick={() => openPanel("shadow")}>🕶️</Button>
-          <Button variant="outline" size="icon" onClick={() => openPanel("agentLog")}>🧠</Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => openPanel("localSearch")}
+            aria-label="Open local search panel"
+            aria-describedby={localSearchDescriptionId}
+          >
+            <span aria-hidden="true" role="img">
+              🔍
+            </span>
+            <span id={localSearchDescriptionId} className="sr-only">
+              Browse files discovered on this device
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => openPanel("collections")}
+            aria-label="Open collections panel"
+            aria-describedby={collectionsDescriptionId}
+          >
+            <span aria-hidden="true" role="img">
+              📁
+            </span>
+            <span id={collectionsDescriptionId} className="sr-only">
+              Review saved collections and folders
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => openPanel("shadow")}
+            aria-label="Open shadow panel"
+            aria-describedby={shadowDescriptionId}
+          >
+            <span aria-hidden="true" role="img">
+              🕶️
+            </span>
+            <span id={shadowDescriptionId} className="sr-only">
+              Manage shadow browsing tools
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => openPanel("agentLog")}
+            aria-label="Open agent log"
+            aria-describedby={agentLogDescriptionId}
+          >
+            <span aria-hidden="true" role="img">
+              🧠
+            </span>
+            <span id={agentLogDescriptionId} className="sr-only">
+              View the agent activity log
+            </span>
+          </Button>
           <Button
             variant="outline"
             size="icon"
             title="Diagnostics"
             onClick={() => setDiagnosticsOpen(true)}
+            aria-label="Open diagnostics panel"
+            aria-describedby={diagnosticsDescriptionId}
           >
-            <Stethoscope size={16} />
+            <Stethoscope size={16} aria-hidden="true" />
+            <span id={diagnosticsDescriptionId} className="sr-only">
+              Run diagnostics for troubleshooting
+            </span>
           </Button>
           <NotificationBell />
         </div>

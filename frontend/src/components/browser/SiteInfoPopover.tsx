@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from "react";
 import { Shield } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -119,6 +119,11 @@ export function SiteInfoPopover({ url }: { url?: string | null }) {
       [origin],
     ),
   );
+  const triggerDescriptionId = useId();
+  const disabledTriggerDescriptionId = useId();
+  const popoverTitleId = useId();
+  const popoverDescriptionId = useId();
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open || !api || !origin) {
@@ -192,8 +197,18 @@ export function SiteInfoPopover({ url }: { url?: string | null }) {
 
   if (!origin) {
     return (
-      <Button variant="ghost" size="icon" disabled className="text-muted-foreground">
-        <Shield size={16} />
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled
+        className="text-muted-foreground"
+        aria-label="Site information unavailable"
+        aria-describedby={disabledTriggerDescriptionId}
+      >
+        <Shield size={16} aria-hidden="true" />
+        <span id={disabledTriggerDescriptionId} className="sr-only">
+          Site details will appear once a page is loaded
+        </span>
       </Button>
     );
   }
@@ -202,14 +217,37 @@ export function SiteInfoPopover({ url }: { url?: string | null }) {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button variant="ghost" size="icon" title="Site information">
-            <Shield size={16} />
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Site information"
+            aria-label="Show site information"
+            aria-describedby={triggerDescriptionId}
+          >
+            <Shield size={16} aria-hidden="true" />
+            <span id={triggerDescriptionId} className="sr-only">
+              View security and permissions for this site
+            </span>
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-80 space-y-4">
+        <PopoverContent
+          ref={contentRef}
+          className="w-80 space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          tabIndex={-1}
+          aria-labelledby={popoverTitleId}
+          aria-describedby={popoverDescriptionId}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            contentRef.current?.focus();
+          }}
+        >
           <div>
-            <p className="text-sm font-medium">Site security</p>
-            <p className="truncate text-xs text-muted-foreground">{origin}</p>
+            <p id={popoverTitleId} className="text-sm font-medium">
+              Site security
+            </p>
+            <p id={popoverDescriptionId} className="truncate text-xs text-muted-foreground">
+              {origin}
+            </p>
           </div>
           <div className="space-y-2">
             <p className="text-xs font-medium">Permissions</p>

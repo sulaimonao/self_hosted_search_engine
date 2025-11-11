@@ -10,6 +10,8 @@ import { resolveBrowserAPI } from "@/lib/browser-ipc";
 import { isSearchHostUrl, normalizeAddressInput } from "@/lib/url";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 
+export const ADDRESS_BAR_INPUT_ID = "browser-address-bar-input";
+
 export function AddressBar() {
   const { activeTab, updateTab } = useAppStore(
     useShallow((state) => ({
@@ -48,9 +50,11 @@ export function AddressBar() {
       }}
     >
       <Input
+        id={ADDRESS_BAR_INPUT_ID}
         value={value}
         onChange={(event) => setValue(event.target.value)}
         placeholder="Search or enter address"
+        aria-label="Browser address bar"
         className="flex-1"
       />
       <Button type="submit" variant="secondary">
