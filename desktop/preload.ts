@@ -98,6 +98,7 @@ type Unsubscribe = () => void;
 type LlmStreamPayload = {
   requestId: string;
   body: Record<string, unknown>;
+  tabId?: string | null;
 };
 
 type LlmFramePayload = {
@@ -108,7 +109,7 @@ type LlmFramePayload = {
 type LlmBridge = {
   stream: (payload: LlmStreamPayload) => Promise<unknown>;
   onFrame: (handler: (payload: LlmFramePayload) => void) => Unsubscribe;
-  abort: (requestId?: string | null) => Promise<unknown>;
+  abort: (payload?: { requestId?: string | null; tabId?: string | null } | string | null) => Promise<unknown>;
 };
 
 type DesktopBridge = {
@@ -342,7 +343,11 @@ function exposeBridge() {
         throw new Error('requestId is required');
       }
       const body = payload.body && typeof payload.body === 'object' ? payload.body : {};
-      return ipcRenderer.invoke('llm:stream', { requestId, body });
+      const tabId =
+        typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
+          ? payload.tabId.trim()
+          : null;
+      return ipcRenderer.invoke('llm:stream', { requestId, body, tabId });
     },
     onFrame: (handler: (payload: LlmFramePayload) => void) => {
       if (typeof handler !== 'function') {
@@ -361,7 +366,24 @@ function exposeBridge() {
         ipcRenderer.removeListener('llm:frame', listener);
       };
     },
-    abort: (requestId?: string | null) => ipcRenderer.invoke('llm:abort', requestId ?? null),
+    abort: (payload?: { requestId?: string | null; tabId?: string | null } | string | null) => {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const requestId =
+          typeof payload.requestId === 'string' && payload.requestId.trim().length > 0
+            ? payload.requestId.trim()
+            : payload.requestId ?? null;
+        const tabId =
+          typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
+            ? payload.tabId.trim()
+            : payload.tabId ?? null;
+        return ipcRenderer.invoke('llm:abort', { requestId, tabId });
+      }
+      if (typeof payload === 'string') {
+        const trimmed = payload.trim();
+        return ipcRenderer.invoke('llm:abort', trimmed || null);
+      }
+      return ipcRenderer.invoke('llm:abort', payload ?? null);
+    },
   });
 }
 

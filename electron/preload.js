@@ -227,7 +227,11 @@ contextBridge.exposeInMainWorld('llm', {
       throw new Error('requestId is required');
     }
     const body = payload.body && typeof payload.body === 'object' ? { ...payload.body } : {};
-    return ipcRenderer.invoke('llm:stream', { requestId, body });
+    const tabId =
+      typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
+        ? payload.tabId.trim()
+        : null;
+    return ipcRenderer.invoke('llm:stream', { requestId, body, tabId });
   },
   onFrame: (handler) => {
     if (typeof handler !== 'function') {
@@ -246,7 +250,24 @@ contextBridge.exposeInMainWorld('llm', {
       ipcRenderer.removeListener('llm:frame', listener);
     };
   },
-  abort: (requestId) => ipcRenderer.invoke('llm:abort', requestId ?? null),
+  abort: (payload) => {
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      const requestId =
+        typeof payload.requestId === 'string' && payload.requestId.trim().length > 0
+          ? payload.requestId.trim()
+          : payload.requestId ?? null;
+      const tabId =
+        typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
+          ? payload.tabId.trim()
+          : payload.tabId ?? null;
+      return ipcRenderer.invoke('llm:abort', { requestId, tabId });
+    }
+    if (typeof payload === 'string') {
+      const trimmed = payload.trim();
+      return ipcRenderer.invoke('llm:abort', trimmed || null);
+    }
+    return ipcRenderer.invoke('llm:abort', payload ?? null);
+  },
 });
 
 contextBridge.exposeInMainWorld('browserAPI', createBrowserAPI());

@@ -47,11 +47,67 @@ const API_BASE_URL = (() => {
   return DEFAULT_API_URL;
 })();
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' };
+const LLM_STREAM_INACTIVITY_MS = (() => {
+  const raw = Number(process.env.LLM_STREAM_IDLE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30000;
+})();
 
 let mainWindow;
 let lastBrowserDiagnostics = null;
 let initialBrowserDiagnosticsPromise = null;
 const activeLlmStreams = new Map();
+
+function normalizeTabKey(candidate, contentsId) {
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  } else if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+    return String(candidate);
+  }
+  return `__wc:${contentsId}`;
+}
+
+function ensureLlmStreamRegistry(contentsId) {
+  let registry = activeLlmStreams.get(contentsId);
+  if (!registry) {
+    registry = new Map();
+    activeLlmStreams.set(contentsId, registry);
+  }
+  return registry;
+}
+
+function clearLlmStreamTimer(entry) {
+  if (entry && entry.timeoutId) {
+    clearTimeout(entry.timeoutId);
+    entry.timeoutId = null;
+  }
+}
+
+function detachLlmStream(contentsId, tabKey, entry) {
+  clearLlmStreamTimer(entry);
+  const registry = activeLlmStreams.get(contentsId);
+  if (!registry) {
+    return;
+  }
+  if (entry && registry.get(tabKey) !== entry) {
+    return;
+  }
+  registry.delete(tabKey);
+  if (registry.size === 0) {
+    activeLlmStreams.delete(contentsId);
+  }
+}
+
+function findLlmStreamByRequestId(registry, requestId) {
+  for (const [tabKey, entry] of registry) {
+    if (entry.requestId === requestId) {
+      return { tabKey, entry };
+    }
+  }
+  return null;
+}
 
 app.setAppLogsPath();
 app.commandLine.appendSwitch(
@@ -1003,17 +1059,42 @@ ipcMain.handle(
     body.stream = true;
 
     const controller = new AbortController();
+    let registry = null;
+    let tabKey = null;
     if (contentsId !== null) {
-      const existing = activeLlmStreams.get(contentsId);
+      registry = ensureLlmStreamRegistry(contentsId);
+      tabKey = normalizeTabKey(
+        Object.prototype.hasOwnProperty.call(payload, 'tabId') ? payload.tabId : body.tab_id,
+        contentsId,
+      );
+      const existing = registry.get(tabKey);
       if (existing) {
         try {
           existing.controller.abort();
         } catch (abortError) {
           console.warn('Failed to abort existing LLM stream', abortError);
         }
+        clearLlmStreamTimer(existing);
       }
-      activeLlmStreams.set(contentsId, { controller, requestId });
     }
+    const entry = {
+      controller,
+      requestId,
+      timeoutId: null,
+      tabId: tabKey ?? `__wc:${contentsId ?? -1}`,
+    };
+    if (registry && tabKey) {
+      registry.set(tabKey, entry);
+    }
+    let timedOut = false;
+
+    const scheduleInactivityTimer = () => {
+      clearLlmStreamTimer(entry);
+      entry.timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, LLM_STREAM_INACTIVITY_MS);
+    };
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
@@ -1035,31 +1116,45 @@ ipcMain.handle(
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
+      scheduleInactivityTimer();
       while (true) {
         const { value, done } = await reader.read();
         if (done) {
           break;
         }
+        scheduleInactivityTimer();
         buffer += decoder.decode(value, { stream: true });
         buffer = flushSseBuffer(sender, requestId, buffer);
       }
+      clearLlmStreamTimer(entry);
       buffer += decoder.decode();
       flushSseBuffer(sender, requestId, buffer);
       return { ok: true };
     } catch (error) {
       const aborted = controller.signal.aborted;
-      const message = error instanceof Error ? error.message : String(error ?? 'stream_failed');
-      sendSseError(sender, requestId, {
+      const fallbackMessage =
+        error instanceof Error ? error.message : String(error ?? 'stream_failed');
+      const errorCode = timedOut ? 'timeout' : fallbackMessage;
+      const errorPayload = {
         type: 'error',
-        error: aborted ? 'aborted' : message,
-      });
-      return { ok: false, error: message, aborted };
+        error: timedOut ? 'timeout' : aborted ? 'aborted' : fallbackMessage,
+      };
+      if (timedOut) {
+        errorPayload.hint = `LLM stream idle for ${Math.round(LLM_STREAM_INACTIVITY_MS / 1000)}s`;
+        errorPayload.timeout_ms = LLM_STREAM_INACTIVITY_MS;
+      }
+      sendSseError(sender, requestId, errorPayload);
+      return { ok: false, error: errorCode, aborted, timeout: timedOut };
     } finally {
-      if (contentsId !== null) {
-        const entry = activeLlmStreams.get(contentsId);
-        if (entry && entry.requestId === requestId) {
-          activeLlmStreams.delete(contentsId);
+      if (registry && tabKey) {
+        const current = registry.get(tabKey);
+        if (current === entry) {
+          detachLlmStream(contentsId, tabKey, entry);
+        } else {
+          clearLlmStreamTimer(entry);
         }
+      } else {
+        clearLlmStreamTimer(entry);
       }
     }
   },
@@ -1072,25 +1167,69 @@ ipcMain.handle(
     if (contentsId === null) {
       return { ok: false, active: false };
     }
-    const entry = activeLlmStreams.get(contentsId);
-    if (!entry) {
+    const registry = activeLlmStreams.get(contentsId);
+    if (!registry || registry.size === 0) {
       return { ok: false, active: false };
     }
     let requestId = null;
-    if (typeof payload === 'string' || payload === null) {
-      requestId = payload;
-    } else if (payload && typeof payload === 'object') {
-      requestId = payload.requestId ?? null;
+    let tabId = null;
+    if (typeof payload === 'string') {
+      const trimmed = payload.trim();
+      requestId = trimmed || null;
+    } else if (payload === null || payload === undefined) {
+      requestId = null;
+    } else if (typeof payload === 'object') {
+      if (Object.prototype.hasOwnProperty.call(payload, 'requestId')) {
+        const raw = payload.requestId;
+        if (typeof raw === 'string') {
+          const trimmed = raw.trim();
+          requestId = trimmed || null;
+        } else if (raw === null) {
+          requestId = null;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'tabId')) {
+        const rawTab = payload.tabId;
+        if (typeof rawTab === 'string') {
+          const trimmedTab = rawTab.trim();
+          tabId = trimmedTab || null;
+        } else if (rawTab === null) {
+          tabId = null;
+        }
+      }
     }
-    if (requestId && requestId !== entry.requestId) {
-      return { ok: false, mismatch: true };
+    let targetEntry;
+    let tabKey = null;
+    if (tabId) {
+      tabKey = tabId;
+      targetEntry = registry.get(tabKey);
+    }
+    if (!targetEntry && requestId) {
+      const match = findLlmStreamByRequestId(registry, requestId);
+      if (match) {
+        tabKey = match.tabKey;
+        targetEntry = match.entry;
+      }
+    }
+    if (!targetEntry && !requestId && registry.size === 1) {
+      const iterator = registry.entries().next();
+      if (!iterator.done) {
+        tabKey = iterator.value[0];
+        targetEntry = iterator.value[1];
+      }
+    }
+    if (!targetEntry || !tabKey) {
+      if (requestId) {
+        return { ok: false, mismatch: true };
+      }
+      return { ok: false, active: false };
     }
     try {
-      entry.controller.abort();
-    } catch (error) {
-      console.warn('Failed to abort LLM stream', error);
+      targetEntry.controller.abort();
+    } catch (abortError) {
+      console.warn('Failed to abort LLM stream', abortError);
     }
-    activeLlmStreams.delete(contentsId);
+    detachLlmStream(contentsId, tabKey, targetEntry);
     return { ok: true };
   },
 );

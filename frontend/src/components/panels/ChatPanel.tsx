@@ -834,9 +834,10 @@ export function ChatPanel(props: {
         server_time_utc: serverTime?.server_time_utc ?? undefined,
         request_id: requestId,
         chat_id: requestId,
+        tab_id: activeTab?.id ?? undefined,
       };
       try {
-        await startLlmStream({ requestId, body: streamBody });
+        await startLlmStream({ requestId, body: streamBody, tabId: activeTab?.id ?? null });
       } catch (error) {
         let messageText = error instanceof Error ? error.message : String(error ?? "Stream failed");
         if (messageText === "stream_http_409") {
@@ -995,6 +996,7 @@ export function ChatPanel(props: {
       setIsBusy(false);
     }
   }, [
+    activeTab?.id,
     activeTab?.title,
     activeTab?.url,
     clientLocale,
