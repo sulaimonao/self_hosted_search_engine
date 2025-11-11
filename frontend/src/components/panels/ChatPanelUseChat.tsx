@@ -12,7 +12,13 @@ import { runAutopilotTool, storeChatMessage } from "@/lib/api";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
 import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
 import ContextChips from "@/components/chat/ContextChips";
-import { createDefaultChatContext, type AutopilotDirective, type AutopilotToolDirective, type ChatContext } from "@/lib/types";
+import {
+  createDefaultChatContext,
+  type AutopilotDirective,
+  type AutopilotToolDirective,
+  type ChatContext,
+  type ChatToolDefinition,
+} from "@/lib/types";
 
 type ChatViewMessage = {
   id: string;
@@ -108,6 +114,36 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   const [chatContext, setChatContext] = useState<ChatContext>(() => createDefaultChatContext());
   const contextRef = useRef<ChatContext>(chatContext);
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
+  const toolDefinitions = useMemo<ChatToolDefinition[]>(
+    () => [
+      {
+        name: "diagnostics.run",
+        description: "Run end-to-end diagnostics and return a summary JSON payload.",
+        input_schema: {},
+      },
+      {
+        name: "index.snapshot",
+        description: "Queue a focused snapshot crawl for a single URL.",
+        input_schema: { url: "string" },
+      },
+      {
+        name: "index.site",
+        description: "Start a scoped site crawl using the indexing service.",
+        input_schema: { url: "string", scope: "domain|path" },
+      },
+      {
+        name: "db.query",
+        description: "Run a read-only SQL query against the application state database.",
+        input_schema: { sql: "string" },
+      },
+      {
+        name: "embeddings.add",
+        description: "Embed one or more raw texts into the vector store namespace.",
+        input_schema: { text: "string[]", namespace: "string?" },
+      },
+    ],
+    [],
+  );
   const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
 
   useEffect(() => {
@@ -360,6 +396,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         model,
         stream: true,
         context: contextRef.current,
+        tools: toolDefinitions,
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "metadata") {

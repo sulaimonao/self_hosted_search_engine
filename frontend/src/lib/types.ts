@@ -164,6 +164,12 @@ export interface ChatResponsePayload {
   autopilot?: AutopilotDirective | null;
 }
 
+export interface ChatToolDefinition {
+  name: string;
+  description?: string | null;
+  input_schema?: Record<string, unknown> | null;
+}
+
 export type AutopilotMode = "browser" | "tools" | "multi";
 
 export interface AutopilotDirective {

@@ -1,4 +1,4 @@
-import { ChatResponsePayload, type ChatStreamEvent } from "@/lib/types";
+import { ChatResponsePayload, type ChatStreamEvent, type ChatToolDefinition } from "@/lib/types";
 import { fromChatResponse, parseAutopilotDirective, toChatRequest } from "@/lib/io/chat";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -23,6 +23,7 @@ export interface ChatSendRequest {
   model?: string | null;
   stream?: boolean;
   context?: Record<string, unknown> | null;
+  tools?: ChatToolDefinition[] | null;
   url?: string | null;
   textContext?: string | null;
   imageContext?: string | null;
@@ -255,6 +256,7 @@ export class ChatClient {
       model: request.model ?? null,
       stream,
       context: request.context ?? null,
+      tools: request.tools ?? null,
       url: request.url ?? null,
       textContext: request.textContext ?? null,
       imageContext: request.imageContext ?? null,
