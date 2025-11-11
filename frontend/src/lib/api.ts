@@ -1141,28 +1141,31 @@ export async function fetchChatContext(
   if (!normalizedThread) {
     throw new Error("threadId is required to fetch chat context");
   }
-  const search = new URLSearchParams();
-  const includeTokens = params.include ?? [];
-  if (includeTokens.length > 0) {
-    search.set("include", includeTokens.join(","));
+  const endpoint = `/api/chat/${encodeURIComponent(normalizedThread)}/context`;
+  const payload: Record<string, unknown> = {};
+  if (params.include && params.include.length > 0) {
+    payload.include = params.include;
   }
   if (params.url) {
-    search.set("url", params.url);
+    payload.url = params.url;
   }
   if (params.selection) {
-    search.set("selection", params.selection);
+    payload.selection = params.selection;
   }
   if (params.title) {
-    search.set("title", params.title);
+    payload.title = params.title;
   }
   if (params.locale) {
-    search.set("locale", params.locale);
+    payload.locale = params.locale;
   }
   if (params.time) {
-    search.set("time", params.time);
+    payload.time = params.time;
   }
-  const endpoint = `/api/chat/${encodeURIComponent(normalizedThread)}/context?${search.toString()}`;
-  const response = await fetch(api(endpoint));
+  const response = await fetch(api(endpoint), {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Failed to load chat context (${response.status})`);

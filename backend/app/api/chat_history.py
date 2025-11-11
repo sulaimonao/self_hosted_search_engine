@@ -41,29 +41,81 @@ def store_chat_message(thread_id: str):
     return jsonify({"ok": True, "id": stored_id})
 
 
-@bp.get("/chat/<thread_id>/context")
+@bp.route("/chat/<thread_id>/context", methods=["GET", "POST"])
 def chat_context(thread_id: str):
-    user_id = request.args.get("user", "local").strip() or "local"
-    query = request.args.get("q")
-    url = request.args.get("url")
-    include_raw = request.args.get("include", "")
-    include_tokens = {token.strip().lower() for token in include_raw.split(",") if token.strip()}
-    selection = request.args.get("selection")
-    title = request.args.get("title")
-    locale = request.args.get("locale") or request.args.get("client_locale")
-    client_time = request.args.get("time") or request.args.get("client_time")
-    history_limit = request.args.get("history_limit", type=int) or 10
+    def _normalize_string(value: object | None) -> str | None:
+        if isinstance(value, str):
+            candidate = value.strip()
+            return candidate or None
+        return None
+
+    def _normalize_include(raw: object | None) -> set[str]:
+        tokens: set[str] = set()
+        entries: list[str] = []
+        if isinstance(raw, str):
+            entries = raw.split(",")
+        elif isinstance(raw, (list, tuple, set)):
+            entries = [str(item) for item in raw]
+        for entry in entries:
+            token = entry.strip().lower()
+            if token:
+                tokens.add(token)
+        return tokens
+
+    def _coerce_int(value: object | None, fallback: int = 10) -> int:
+        try:
+            if isinstance(value, bool):
+                raise ValueError("bool")
+            parsed = int(value)  # type: ignore[arg-type]
+            return parsed
+        except (TypeError, ValueError):
+            return fallback
+
+    extra_metadata: dict[str, str] | None = None
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        user_id = _normalize_string(payload.get("user") or payload.get("user_id")) or "local"
+        query = _normalize_string(payload.get("q") or payload.get("query"))
+        url = _normalize_string(payload.get("url"))
+        include_raw = payload.get("include")
+        selection = _normalize_string(payload.get("selection"))
+        title = _normalize_string(payload.get("title"))
+        locale = _normalize_string(payload.get("locale") or payload.get("client_locale"))
+        client_time = _normalize_string(payload.get("time") or payload.get("client_time"))
+        history_limit = _coerce_int(payload.get("history_limit"), fallback=10)
+        metadata_payload = payload.get("metadata")
+        if isinstance(metadata_payload, dict):
+            extra_metadata = {
+                str(key): str(value)
+                for key, value in metadata_payload.items()
+                if isinstance(key, str) and isinstance(value, str) and value.strip()
+            }
+    else:
+        user_id = _normalize_string(request.args.get("user")) or "local"
+        query = _normalize_string(request.args.get("q"))
+        url = _normalize_string(request.args.get("url"))
+        include_raw = request.args.get("include", "")
+        selection = _normalize_string(request.args.get("selection"))
+        title = _normalize_string(request.args.get("title"))
+        locale = _normalize_string(request.args.get("locale") or request.args.get("client_locale"))
+        client_time = _normalize_string(request.args.get("time") or request.args.get("client_time"))
+        history_limit = request.args.get("history_limit", type=int) or 10
+
+    include_tokens = _normalize_include(include_raw)
     metadata = {
         key: value
         for key, value in {
             "url": url,
             "title": title,
-            "client_locale": (locale.strip() if isinstance(locale, str) else None),
-            "client_time": (client_time.strip() if isinstance(client_time, str) else None),
+            "client_locale": locale,
+            "client_time": client_time,
         }.items()
         if isinstance(value, str) and value.strip()
     }
     metadata_payload = metadata or None
+    if extra_metadata:
+        metadata_payload = {**(metadata_payload or {}), **extra_metadata}
     state_db: AppStateDB = current_app.config["APP_STATE_DB"]
     context = assemble_context(
         state_db,
