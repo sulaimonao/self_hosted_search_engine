@@ -16,6 +16,7 @@ type ChatRequestInput = {
   model?: string | null;
   stream?: boolean | null;
   context?: unknown;
+  tools?: unknown;
   url?: string | null;
   textContext?: string | null;
   imageContext?: string | null;
@@ -38,6 +39,7 @@ export type ChatRequestPayload = {
   }>;
   stream?: boolean;
   context?: Record<string, unknown>;
+  tools?: Array<Record<string, unknown>>;
   url?: string;
   text_context?: string;
   image_context?: string;
@@ -75,6 +77,34 @@ function normalizeMetadata(value: unknown): Record<string, unknown> | undefined 
     typeof key === "string" && key.trim().length > 0,
   );
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeTools(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const tools: Array<Record<string, unknown>> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const name = normalizeString(record.name);
+    if (!name) {
+      continue;
+    }
+    const tool: Record<string, unknown> = { name };
+    const description = normalizeString(record.description);
+    if (description) {
+      tool.description = description;
+    }
+    const schema = record.input_schema;
+    if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+      tool.input_schema = schema as Record<string, unknown>;
+    }
+    tools.push(tool);
+  }
+  return tools.length > 0 ? tools : undefined;
 }
 
 function normalizeMessage(raw: unknown): ChatRequestPayload["messages"][number] | null {
@@ -117,6 +147,8 @@ export function toChatRequest(input: ChatRequestInput & { messages: unknown }): 
   if (input.context && typeof input.context === "object" && !Array.isArray(input.context)) {
     payload.context = input.context as Record<string, unknown>;
   }
+  const tools = normalizeTools(input.tools);
+  if (tools) payload.tools = tools;
   if (typeof input.stream === "boolean") payload.stream = input.stream;
   const url = normalizeString(input.url);
   if (url) payload.url = url;

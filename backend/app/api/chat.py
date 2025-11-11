@@ -8,7 +8,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, Iterable, Iterator, List, Literal, Mapping, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Mapping, Optional, Sequence, Union
 
 import requests
 from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
@@ -61,6 +61,14 @@ _EMPTY_RESPONSE_FALLBACK = "No data retrieved, but model responded successfully.
 _TEXTUAL_CONTENT_PATTERN = re.compile(r"[A-Za-z]")
 _MISSING_TEXT_FALLBACK = "I’m here, but I didn’t receive usable text from the model."
 _INCIDENT_DUPLICATE_SSE = "DUPLICATE_SSE"
+
+_TOOL_REGISTRY: dict[str, dict[str, str]] = {
+    "diagnostics.run": {"method": "POST", "endpoint": "/api/diagnostics/run"},
+    "index.snapshot": {"method": "POST", "endpoint": "/api/index/snapshot"},
+    "index.site": {"method": "POST", "endpoint": "/api/index/site"},
+    "db.query": {"method": "POST", "endpoint": "/api/db/query"},
+    "embeddings.add": {"method": "POST", "endpoint": "/api/embeddings/build"},
+}
 
 
 class _SseRegistry:
@@ -193,10 +201,49 @@ def _indent_block(text: str, prefix: str = "  ") -> str:
     return "\n".join(f"{prefix}{line}" for line in lines)
 
 
-def _render_context_prelude(context: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
+def _render_context_prelude(
+    context: Mapping[str, Any] | None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[str, dict[str, Any]]:
     payload = context if isinstance(context, Mapping) else {}
-    lines: list[str] = ["[CONTEXT]"]
     meta: dict[str, Any] = {}
+
+    tool_lines: list[str] = ["[TOOLS]"]
+    declared_tools: list[str] = []
+    if tools:
+        for entry in tools:
+            if not isinstance(entry, Mapping):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            description = str(entry.get("description") or "").strip()
+            schema = entry.get("input_schema") if isinstance(entry, Mapping) else None
+            if not declared_tools:
+                tool_lines.append(
+                    "You MAY call one tool at a time by returning strict JSON like "
+                    '{"tool_call":{"name":"<tool>","arguments":{...}},"answer":"<your natural language answer>"}.'
+                )
+                tool_lines.append("Available tools:")
+            line = f"- {name}"
+            if description:
+                line += f" — {description}"
+            tool_lines.append(line)
+            if isinstance(schema, Mapping) and schema:
+                try:
+                    schema_json = json.dumps(schema, ensure_ascii=False)
+                except Exception:
+                    schema_json = str(schema)
+                tool_lines.append(f"  schema: {schema_json}")
+            declared_tools.append(name)
+    if not declared_tools:
+        tool_lines.append("No tools declared for this turn.")
+    tool_lines.append("[/TOOLS]")
+    meta["tool_count"] = len(declared_tools)
+    if declared_tools:
+        meta["tools"] = declared_tools
+
+    lines: list[str] = tool_lines + ["[CONTEXT]"]
 
     page = payload.get("page") if isinstance(payload, Mapping) else None
     page_title = ""
@@ -312,6 +359,52 @@ def _maybe_index_page_context(context: Mapping[str, Any] | None) -> None:
         ).start()
     except Exception:  # pragma: no cover - background scheduling best effort
         LOGGER.debug("failed to schedule context embedding", exc_info=True)
+
+
+def _normalize_tool_arguments(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
+    return {}
+
+
+def _execute_tool_call(name: str, arguments: Mapping[str, Any] | None) -> tuple[bool, Any, int]:
+    spec = _TOOL_REGISTRY.get(name)
+    if not spec:
+        return False, {"error": "unknown_tool"}, 0
+    method = spec.get("method", "POST").upper()
+    endpoint = spec.get("endpoint") or ""
+    if not endpoint:
+        return False, {"error": "unconfigured_tool"}, 0
+    data = _normalize_tool_arguments(arguments)
+    app = current_app._get_current_object()
+    with app.test_client() as client:
+        if method == "GET":
+            response = client.get(endpoint, query_string=data)
+        else:
+            response = client.post(endpoint, json=data)
+    try:
+        result_payload = response.get_json(silent=True)
+    except Exception:  # pragma: no cover - defensive
+        result_payload = None
+    if result_payload is None:
+        body_text = response.get_data(as_text=True)
+        result_payload = body_text.strip() if body_text else None
+    success = response.status_code < 400
+    return success, result_payload, response.status_code
+
+
+def _format_tool_append(name: str, success: bool, result: Any) -> str:
+    label = "TOOL RESULT" if success else "TOOL ERROR"
+    if isinstance(result, (dict, list)):
+        try:
+            rendered = json.dumps(result, ensure_ascii=False, indent=2)
+        except Exception:
+            rendered = _payload_preview(result, limit=600)
+        return f"[{label}: {name}]\n```json\n{rendered}\n```"
+    text = str(result or "").strip()
+    if not text:
+        text = "OK" if success else "No details provided"
+    return f"[{label}: {name}]\n{text}"
 
 
 def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[str, Any]:
@@ -872,6 +965,7 @@ def _render_response_payload(
     image_context: str | None,
     image_used: bool,
     json_mode: bool,
+    allowed_tools: set[str] | None,
 ) -> ChatResponsePayload:
     content = _extract_model_content(payload_json)
     reasoning_text = _extract_model_reasoning(payload_json).strip()
@@ -900,6 +994,47 @@ def _render_response_payload(
     citations = structured.get("citations") or []
     if not isinstance(citations, list):
         citations = []
+
+    base_answer = str(structured.get("answer") or "")
+    tool_append = ""
+    tool_call = structured.get("tool_call")
+    if isinstance(tool_call, Mapping):
+        tool_name = str(tool_call.get("name") or "").strip()
+        if tool_name and (allowed_tools is None or tool_name in allowed_tools) and tool_name in _TOOL_REGISTRY:
+            arguments = tool_call.get("arguments") if isinstance(tool_call, Mapping) else None
+            success, tool_result, status_code = _execute_tool_call(tool_name, arguments if isinstance(arguments, Mapping) else None)
+            tool_append = _format_tool_append(tool_name, success, tool_result)
+            structured["tool_status"] = "success" if success else "error"
+            structured["tool_result"] = tool_result
+            structured["tool_status_code"] = status_code
+            log_event(
+                "INFO",
+                "chat.tool_executed",
+                trace=trace_id,
+                model=candidate,
+                tool=tool_name,
+                status="ok" if success else "error",
+                status_code=status_code,
+            )
+        elif tool_name:
+            tool_append = _format_tool_append(tool_name, False, "Tool not available for this request")
+            structured["tool_status"] = "skipped"
+            structured["tool_status_code"] = 0
+            log_event(
+                "WARNING",
+                "chat.tool_rejected",
+                trace=trace_id,
+                model=candidate,
+                tool=tool_name,
+                reason="not_allowed",
+            )
+    if tool_append:
+        prefix = base_answer.strip()
+        if prefix:
+            base_answer = f"{prefix}\n\n{tool_append}"
+        else:
+            base_answer = tool_append
+        structured["answer"] = base_answer
 
     answer_text = _guard_contentful_text(
         str(structured.get("answer") or ""),
@@ -959,6 +1094,7 @@ def _stream_chat_response(
     transport: Literal["ndjson", "sse"],
     request_id: str,
     json_mode: bool,
+    allowed_tools: set[str] | None,
     single_flight_key: str | None = None,
 ) -> Response:
     metadata = ChatStreamMetadata(attempt=attempt_index, model=candidate, trace_id=trace_id)
@@ -992,6 +1128,7 @@ def _stream_chat_response(
                 image_context=image_context,
                 image_used=image_used,
                 json_mode=json_mode,
+                allowed_tools=allowed_tools,
             )
             end_reason = "complete"
             payload_dict = _coerce_schema(payload_model.model_dump(exclude_none=True))
@@ -1065,8 +1202,21 @@ def _execute_chat_request(
 ) -> Response:
     sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
     context_payload = chat_request.context or {}
+    tool_specs = chat_request.tools or []
+    serialized_tools: list[Mapping[str, Any]] = [tool.model_dump(exclude_none=True) for tool in tool_specs]
+    allowed_tool_names: set[str] | None = None
+    if serialized_tools:
+        allowed_tool_names = {
+            stripped
+            for stripped in (
+                str(entry.get("name") or "").strip()
+                for entry in serialized_tools
+                if entry.get("name")
+            )
+            if stripped
+        }
     _maybe_index_page_context(context_payload)
-    context_prelude, context_meta = _render_context_prelude(context_payload)
+    context_prelude, context_meta = _render_context_prelude(context_payload, serialized_tools)
 
     chat_logger = current_app.config.get("CHAT_LOGGER")
     if hasattr(chat_logger, "info"):
@@ -1378,6 +1528,7 @@ def _execute_chat_request(
                     transport=stream_transport,
                     request_id=request_id,
                     json_mode=json_mode,
+                    allowed_tools=allowed_tool_names,
                     single_flight_key=release_key,
                 )
 
@@ -1460,6 +1611,7 @@ def _execute_chat_request(
                 image_context=image_context,
                 image_used=image_used,
                 json_mode=json_mode,
+                allowed_tools=allowed_tool_names,
             )
 
             preview_source = response_payload.answer or response_payload.reasoning or ""

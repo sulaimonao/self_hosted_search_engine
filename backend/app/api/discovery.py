@@ -47,19 +47,22 @@ def stream_events() -> Response:
     if service is None:
         return jsonify({"error": "local_discovery_unavailable"}), 503
 
+    app = current_app._get_current_object()
+
     def generate() -> Any:
         token, stream = service.subscribe()
         try:
-            while True:
-                try:
-                    record = stream.get(timeout=15)
-                except queue.Empty:
-                    yield ": keep-alive\n\n"
-                    continue
-                if record is None:
-                    break
-                payload = json.dumps(_serialize(record, include_text=False, service=service))
-                yield f"data: {payload}\n\n"
+            with app.app_context():
+                while True:
+                    try:
+                        record = stream.get(timeout=15)
+                    except queue.Empty:
+                        yield ": keep-alive\n\n"
+                        continue
+                    if record is None:
+                        break
+                    payload = json.dumps(_serialize(record, include_text=False, service=service))
+                    yield f"data: {payload}\n\n"
         finally:
             service.unsubscribe(token)
 

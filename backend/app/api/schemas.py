@@ -51,6 +51,41 @@ class ChatMessage(BaseModel):
         raise ValueError("images must be a sequence of base64 strings")
 
 
+class ToolSpec(BaseModel):
+    """Declarative tool description forwarded to the LLM."""
+
+    name: str
+    description: str | None = None
+    input_schema: dict[str, Any] | None = Field(default=None, alias="input_schema")
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: Any) -> str:
+        trimmed = str(value or "").strip()
+        if not trimmed:
+            raise ValueError("tool name is required")
+        return trimmed
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _trim_description(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        trimmed = str(value).strip()
+        return trimmed or None
+
+    @field_validator("input_schema", mode="before")
+    @classmethod
+    def _ensure_mapping(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            return dict(value)
+        raise ValueError("input_schema must be an object")
+
+
 class ChatRequest(BaseModel):
     """Validated chat invocation payload."""
 
@@ -58,6 +93,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     stream: bool | None = None
     context: dict[str, Any] | None = None
+    tools: list[ToolSpec] | None = None
     url: str | None = None
     text_context: str | None = None
     image_context: str | None = None
@@ -67,7 +103,7 @@ class ChatRequest(BaseModel):
     server_time_utc: str | None = None
     request_id: str | None = Field(default=None, alias="request_id")
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     @field_validator(
         "model",
