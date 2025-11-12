@@ -164,6 +164,96 @@ export interface ChatResponsePayload {
   autopilot?: AutopilotDirective | null;
 }
 
+export interface DomainSnapshotKpis {
+  pages: number;
+  edges: number;
+  queue: number;
+  first_seen: number | null;
+  last_seen: number | null;
+}
+
+export interface DomainSnapshotPage {
+  id: number | null;
+  domain_id: number | null;
+  url: string | null;
+  title?: string | null;
+  tokens?: number | null;
+  word_count?: number | null;
+  text_preview?: string | null;
+  headings?: string[];
+  meta?: Record<string, unknown>;
+  first_seen?: number | null;
+  last_seen?: number | null;
+  status?: string | null;
+  is_sample?: boolean;
+}
+
+export interface DomainQueueEntry {
+  url: string;
+  priority: number;
+  attempts: number;
+  enqueued_at: number | null;
+  status?: string | null;
+}
+
+export interface DomainSnapshot {
+  host: string;
+  found: boolean;
+  kpis: DomainSnapshotKpis;
+  top_pages: DomainSnapshotPage[];
+  key_terms: string[];
+  recent: Array<{ url: string; title: string | null; last_seen: number | null; status?: string | null }>;
+  queue_entries: DomainQueueEntry[];
+}
+
+export interface DomainGraphNode {
+  id: number;
+  url: string;
+  title?: string | null;
+  score?: number | null;
+  last_seen?: number | null;
+}
+
+export interface DomainGraphEdge {
+  id: number;
+  source: number | null;
+  target: number | null;
+  url: string;
+  host?: string | null;
+  weight?: number | null;
+  last_seen?: number | null;
+}
+
+export interface DomainGraphTimeseriesEntry {
+  day: string;
+  pages_delta: number;
+  edges_delta: number;
+  bytes_delta: number;
+}
+
+export interface DomainGraphResponse {
+  host: string;
+  nodes: DomainGraphNode[];
+  edges: DomainGraphEdge[];
+  timeseries: DomainGraphTimeseriesEntry[];
+}
+
+export interface PageSnapshot {
+  found: boolean;
+  url: string;
+  host: string;
+  id?: number | null;
+  title?: string | null;
+  text_preview?: string | null;
+  summary?: string | null;
+  headings?: string[];
+  meta?: Record<string, unknown>;
+  word_count?: number | null;
+  tokens?: number | null;
+  first_seen?: number | null;
+  last_seen?: number | null;
+}
+
 export interface ChatToolDefinition {
   name: string;
   description?: string | null;
@@ -243,6 +333,8 @@ export type ChatContext = {
   diagnostics?: DiagnosticsSummary | null;
   db?: { enabled: boolean } | null;
   tools?: { allowIndexing: boolean } | null;
+  domainSnapshot?: DomainSnapshot | null;
+  pageSnapshot?: PageSnapshot | null;
 };
 
 export function createDefaultChatContext(): ChatContext {
@@ -251,6 +343,8 @@ export function createDefaultChatContext(): ChatContext {
     diagnostics: null,
     db: { enabled: false },
     tools: { allowIndexing: false },
+    domainSnapshot: null,
+    pageSnapshot: null,
   };
 }
 

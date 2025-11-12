@@ -36,6 +36,9 @@ import type {
   CapabilitySnapshot,
   MetaHealthResponse,
   DiagnosticsCheckSummary,
+  DomainSnapshot,
+  DomainGraphResponse,
+  PageSnapshot,
 } from "@/lib/types";
 
 import { chatClient, type ChatPayloadMessage, type ChatSendRequest, type ChatSendResult } from "@/lib/chatClient";
@@ -2128,6 +2131,82 @@ function findSeedForUrl(
   return null;
 }
 
+export interface DomainSnapshotRequestOptions {
+  signal?: AbortSignal;
+}
+
+export interface DomainGraphRequestOptions extends DomainSnapshotRequestOptions {
+  limit?: number;
+}
+
+export async function fetchDomainSnapshot(
+  host: string,
+  options: DomainSnapshotRequestOptions = {}
+): Promise<DomainSnapshot> {
+  const normalized = host.trim();
+  if (!normalized) {
+    throw new Error("host is required");
+  }
+  const params = new URLSearchParams({ host: normalized });
+  const response = await fetchLogged(api(`/api/domains/snapshot?${params.toString()}`), {
+    cache: "no-store",
+    signal: options.signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to fetch domain snapshot (${response.status})`);
+  }
+  return (await response.json()) as DomainSnapshot;
+}
+
+export async function fetchDomainGraph(
+  host: string,
+  options: DomainGraphRequestOptions = {}
+): Promise<DomainGraphResponse> {
+  const normalized = host.trim();
+  if (!normalized) {
+    throw new Error("host is required");
+  }
+  const params = new URLSearchParams({ host: normalized });
+  const { limit } = options;
+  if (typeof limit === "number" && Number.isFinite(limit)) {
+    const bounded = Math.max(1, Math.min(1000, Math.floor(limit)));
+    params.set("limit", String(bounded));
+  }
+  const response = await fetchLogged(api(`/api/domains/graph?${params.toString()}`), {
+    cache: "no-store",
+    signal: options.signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to fetch domain graph (${response.status})`);
+  }
+  return (await response.json()) as DomainGraphResponse;
+}
+
+export async function fetchPageSnapshot(
+  url: string,
+  options: DomainSnapshotRequestOptions = {}
+): Promise<PageSnapshot> {
+  const normalized = url.trim();
+  if (!normalized) {
+    throw new Error("url is required");
+  }
+  const params = new URLSearchParams({ url: normalized });
+  const response = await fetchLogged(api(`/api/domains/page_snapshot?${params.toString()}`), {
+    cache: "no-store",
+    signal: options.signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Failed to fetch page snapshot (${response.status})`);
+  }
+  return (await response.json()) as PageSnapshot;
+}
+
 export async function createDomainSeed(url: string, scope: CrawlScope = "domain"): Promise<SeedEnqueueResult> {
   const normalized = url.trim();
   if (!normalized) {
@@ -2414,6 +2493,8 @@ export async function runDiagnostics(): Promise<DiagnosticsRunResponse> {
     if (response.status === 404) {
       return {
         ok: false,
+        status: "missing_endpoint",
+        summary: "Diagnostics endpoint is not available on this backend.",
         message: "Backend does not expose /api/diagnostics/run; run python3 tools/e2e_diag.py locally.",
       };
     }

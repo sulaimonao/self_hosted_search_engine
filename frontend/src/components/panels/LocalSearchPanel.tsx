@@ -9,6 +9,8 @@ import type { SearchHit, SearchResponseStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DomainStatsPanel } from "@/components/domain/DomainStatsPanel";
 
 type PanelPhase = "idle" | "loading" | "ready" | "error";
 
@@ -23,6 +25,7 @@ export function LocalSearchPanel() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [confidence, setConfidence] = useState<number | null>(null);
   const [llmUsed, setLlmUsed] = useState(false);
+  const [visualizationOpen, setVisualizationOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useBrowserNavigation();
@@ -172,9 +175,19 @@ export function LocalSearchPanel() {
 
   return (
     <div className="flex h-full w-[26rem] flex-col gap-3 p-4">
-      <div>
-        <h3 className="text-sm font-semibold">Local search</h3>
-        <p className="text-xs text-muted-foreground">Search the indexed document store.</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">Local search</h3>
+          <p className="text-xs text-muted-foreground">Search the indexed document store.</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setVisualizationOpen(true)}
+        >
+          Domain stats
+        </Button>
       </div>
       <form className="flex gap-2" onSubmit={handleSubmit}>
         <Input
@@ -241,6 +254,17 @@ export function LocalSearchPanel() {
       <p className="text-[10px] text-muted-foreground">
         Tip: Hold ⌘/Ctrl while clicking a result to open it in a new tab.
       </p>
+
+      <Dialog open={visualizationOpen} onOpenChange={setVisualizationOpen}>
+        <DialogContent className="max-w-[92vw] gap-0 overflow-hidden p-0 sm:max-w-[1100px]">
+          <DialogHeader>
+            <DialogTitle>Domain stats</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[78vh] overflow-y-auto px-6 pb-6">
+            <DomainStatsPanel className="min-h-[65vh]" />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

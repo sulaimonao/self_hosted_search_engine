@@ -41,6 +41,8 @@ function withDefaults(context: ChatContext): ChatContext {
     diagnostics: context.diagnostics ?? null,
     db: context.db ?? { enabled: false },
     tools: context.tools ?? { allowIndexing: false },
+    domainSnapshot: context.domainSnapshot ?? null,
+    pageSnapshot: context.pageSnapshot ?? null,
   };
 }
 

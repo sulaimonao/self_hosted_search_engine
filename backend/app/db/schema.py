@@ -511,6 +511,21 @@ def _migration_007_domain_profiles(connection: sqlite3.Connection) -> None:
         connection.executescript(script)
 
 
+def _migration_009_domain_graph(connection: sqlite3.Connection) -> None:
+    schema_path = _MIGRATIONS_DIR / "009_domain_graph.sql"
+    try:
+        sql = schema_path.read_text("utf-8")
+    except OSError:
+        LOGGER.warning("domain graph schema missing at %s", schema_path)
+        return
+    script = sql.strip()
+    if not script:
+        LOGGER.debug("domain graph schema file %s is empty", schema_path)
+        return
+    with connection:
+        connection.executescript(script)
+
+
 def _migration_008_app_config(connection: sqlite3.Connection) -> None:
     schema_path = _APP_CONFIG_SCHEMA
     try:
@@ -565,6 +580,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("006_sources", _migration_006_sources),
     ("007_domain_profiles", _migration_007_domain_profiles),
     ("008_app_config", _migration_008_app_config),
+    ("009_domain_graph", _migration_009_domain_graph),
     ("20251102_app_config", _migration_20251102_app_config),
     ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]
