@@ -73,6 +73,7 @@ def create_app() -> Flask:
     from .api import health as health_api
     from .api import diagnostics as diagnostics_api
     from .api import diagnostics_self_heal as diagnostics_self_heal_api
+    from .api import roadmap as roadmap_api
     from .api import dev_diag as dev_diag_api
     from .api import db as db_api
     from .api import self_heal as self_heal_api
@@ -627,6 +628,7 @@ def create_app() -> Flask:
     app.register_blueprint(web_search_api.bp)
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(diagnostics_self_heal_api.bp)
+    app.register_blueprint(roadmap_api.bp)
     app.register_blueprint(dev_diag_api.bp)
     app.register_blueprint(db_api.bp)
     app.register_blueprint(self_heal_api.bp)

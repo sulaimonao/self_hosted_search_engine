@@ -34,6 +34,7 @@ required.
 - [LLM integration](#llm-integration)
 - [Chat + Page Context + Tools](#chat--page-context--tools)
 - [Diagnostics snapshot API](#diagnostics-snapshot-api)
+- [Roadmap panel](#roadmap-panel)
 
 ## Stack overview
 
@@ -50,6 +51,10 @@ seeds/           Curated discovery registry (`docs/registry_structure.md`)
 
 Supporting assets live under `data/` at runtime. The directory is safe to delete
 while the services are stopped; the next boot will recreate it as needed.
+
+### Roadmap panel
+
+The Control Center exposes a Roadmap view at `/control-center/roadmap` that renders items from `config/roadmap.json`, merges user notes/status overrides stored in the SQLite runtime DB, and lets you trigger diagnostics to recompute live statuses. The canonical spec lives in `docs/roadmap_browser.md`.
 
 ## Requirements
 
