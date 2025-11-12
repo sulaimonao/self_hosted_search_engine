@@ -3,6 +3,7 @@ import { isClient } from "@/lib/is-client";
 
 import type { ChatResponsePayload, ChatStreamEvent } from "@/lib/types";
 import { readTextStream } from "@/lib/stream";
+import { normalizeChatStreamChunk } from "@/lib/chat/stream";
 
 type LlmFramePayload = {
   requestId?: string | null;
@@ -162,11 +163,16 @@ function parseSseFrame(raw: string): ChatStreamEvent | null {
   }
   const lines = raw.split(/\n/);
   const dataLines: string[] = [];
+  let eventName: string | null = null;
   for (const line of lines) {
     if (!line) {
       continue;
     }
     if (line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
       continue;
     }
     if (line.startsWith("data:")) {
@@ -181,7 +187,11 @@ function parseSseFrame(raw: string): ChatStreamEvent | null {
     return null;
   }
   try {
-    return JSON.parse(payloadText) as ChatStreamEvent;
+    const parsed = JSON.parse(payloadText) as unknown;
+    if (eventName) {
+      return normalizeChatStreamChunk({ event: eventName, data: parsed });
+    }
+    return normalizeChatStreamChunk(parsed);
   } catch {
     return null;
   }

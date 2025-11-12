@@ -1,5 +1,6 @@
 import { ChatResponsePayload, type ChatStreamEvent, type ChatToolDefinition } from "@/lib/types";
-import { fromChatResponse, parseAutopilotDirective, toChatRequest } from "@/lib/io/chat";
+import { fromChatResponse, toChatRequest } from "@/lib/io/chat";
+import { normalizeChatStreamChunk } from "@/lib/chat/stream";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
 
@@ -126,26 +127,26 @@ async function consumeChatStream(
       buffer = buffer.slice(newlineIndex + 1);
       if (chunk) {
         try {
-          const parsed = JSON.parse(chunk) as ChatStreamEvent;
-          if (parsed.type === "metadata") {
-            metadata = parsed;
-            options.onEvent?.(parsed);
-          } else if (parsed.type === "complete") {
-            const sanitized = fromChatResponse(parsed.payload);
-            finalPayload = sanitized;
-            options.onEvent?.({ ...parsed, payload: sanitized });
-          } else if (parsed.type === "delta") {
-            const autopilot = parseAutopilotDirective((parsed as { autopilot?: unknown }).autopilot);
-            options.onEvent?.({ ...parsed, autopilot });
-          } else if (isChatErrorEvent(parsed)) {
-            const trace = parsed.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
-            throw new ChatRequestError(parsed.error || "chat stream error", {
-              status: response.status ?? 500,
-              traceId: trace,
-              hint: parsed.hint ?? undefined,
-            });
-          } else {
-            options.onEvent?.(parsed);
+          const normalized = normalizeChatStreamChunk(parsed);
+          if (normalized) {
+            if (normalized.type === "metadata") {
+              metadata = normalized;
+              options.onEvent?.(normalized);
+            } else if (normalized.type === "complete") {
+              finalPayload = normalized.payload;
+              options.onEvent?.(normalized);
+            } else if (normalized.type === "delta") {
+              options.onEvent?.(normalized);
+            } else if (isChatErrorEvent(normalized)) {
+              const trace = normalized.trace_id ?? getMetadataTraceId() ?? options.fallbackTraceId;
+              throw new ChatRequestError(normalized.error || "chat stream error", {
+                status: response.status ?? 500,
+                traceId: trace,
+                hint: normalized.hint ?? undefined,
+              });
+            } else {
+              options.onEvent?.(normalized);
+            }
           }
         } catch (error) {
           console.warn("Skipping malformed stream chunk", error);
@@ -162,26 +163,26 @@ async function consumeChatStream(
   const trimmed = buffer.trim();
   if (trimmed) {
     try {
-      const parsed = JSON.parse(trimmed) as ChatStreamEvent;
-      if (parsed.type === "metadata") {
-        metadata = parsed;
-        options.onEvent?.(parsed);
-      } else if (parsed.type === "complete") {
-        const sanitized = fromChatResponse(parsed.payload);
-        finalPayload = sanitized;
-        options.onEvent?.({ ...parsed, payload: sanitized });
-      } else if (parsed.type === "delta") {
-        const autopilot = parseAutopilotDirective((parsed as { autopilot?: unknown }).autopilot);
-        options.onEvent?.({ ...parsed, autopilot });
-      } else if (isChatErrorEvent(parsed)) {
-        const trace = parsed.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
-        throw new ChatRequestError(parsed.error || "chat stream error", {
-          status: response.status ?? 500,
-          traceId: trace,
-          hint: parsed.hint ?? undefined,
-        });
-      } else {
-        options.onEvent?.(parsed);
+      const normalized = normalizeChatStreamChunk(parsed);
+      if (normalized) {
+        if (normalized.type === "metadata") {
+          metadata = normalized;
+          options.onEvent?.(normalized);
+        } else if (normalized.type === "complete") {
+          finalPayload = normalized.payload;
+          options.onEvent?.(normalized);
+        } else if (normalized.type === "delta") {
+          options.onEvent?.(normalized);
+        } else if (isChatErrorEvent(normalized)) {
+          const trace = normalized.trace_id ?? metadata?.trace_id ?? options.fallbackTraceId;
+          throw new ChatRequestError(normalized.error || "chat stream error", {
+            status: response.status ?? 500,
+            traceId: trace,
+            hint: normalized.hint ?? undefined,
+          });
+        } else {
+          options.onEvent?.(normalized);
+        }
       }
     } catch (error) {
       console.warn("Ignoring trailing stream chunk", error);
@@ -461,17 +462,17 @@ export async function streamChat(
       buf = buf.slice(idx + 1);
       if (!line) continue;
       try {
-        const parsed = JSON.parse(line) as ChatStreamEvent;
-        // Map to StreamEvt format
-        if (parsed.type === "delta") {
-          onEvent({ type: "delta", data: parsed });
-        } else if (parsed.type === "complete") {
-          onEvent({ type: "complete" });
-        } else if (parsed.type === "error") {
-          onEvent({ type: "error", error: parsed.error });
-        } else if (parsed.type === "metadata") {
-          // Skip metadata or handle as heartbeat
-          onEvent({ type: "heartbeat" });
+        const normalized = normalizeChatStreamChunk(JSON.parse(line));
+        if (normalized) {
+          if (normalized.type === "delta") {
+            onEvent({ type: "delta", data: normalized });
+          } else if (normalized.type === "complete") {
+            onEvent({ type: "complete" });
+          } else if (normalized.type === "error") {
+            onEvent({ type: "error", error: normalized.error });
+          } else if (normalized.type === "metadata") {
+            onEvent({ type: "heartbeat" });
+          }
         }
       } catch {
         onEvent({ type: "error", error: "bad_json_line" });

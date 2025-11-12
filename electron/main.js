@@ -840,6 +840,85 @@ function getActiveTab() {
   return tabs.get(activeTabId);
 }
 
+function waitForMainFrameLoad(wc, timeoutMs = 5000) {
+  if (!wc || wc.isDestroyed() || !wc.isLoading()) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      wc.removeListener('did-finish-load', onFinish);
+      wc.removeListener('did-fail-load', onFail);
+      clearTimeout(timer);
+    };
+    const onFinish = () => {
+      cleanup();
+      resolve();
+    };
+    const onFail = (_event, code, description, failedUrl, isMainFrame) => {
+      if (!isMainFrame) {
+        return;
+      }
+      cleanup();
+      reject(new Error(`Navigation failed (${code}): ${description || failedUrl || 'unknown error'}`));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Navigation timed out'));
+    }, Math.max(1000, timeoutMs));
+    wc.once('did-finish-load', onFinish);
+    wc.once('did-fail-load', onFail);
+  });
+}
+
+async function getActiveTabInfoPayload() {
+  const tab = getActiveTab();
+  if (!tab) {
+    return null;
+  }
+  const wc = tab.view?.webContents;
+  if (!wc || wc.isDestroyed()) {
+    return null;
+  }
+  if (wc.isLoading()) {
+    try {
+      await waitForMainFrameLoad(wc);
+    } catch (error) {
+      console.warn('Timed out waiting for active tab load', error);
+    }
+  }
+  try {
+    const result = await wc.executeJavaScript(
+      `(() => {
+        try {
+          const doc = document;
+          const html = doc?.documentElement?.outerHTML || doc?.body?.outerHTML || "";
+          return { url: window.location.href, title: doc?.title || "", html };
+        } catch (err) {
+          return { url: window.location.href, title: document?.title || "", html: "" };
+        }
+      })();`,
+      true,
+    );
+    return {
+      url: typeof result?.url === 'string' && result.url.trim().length > 0 ? result.url : wc.getURL() || tab.lastUrl || null,
+      title: typeof result?.title === 'string' && result.title.trim().length > 0 ? result.title : tab.title ?? null,
+      html: typeof result?.html === 'string' ? result.html : '',
+    };
+  } catch (error) {
+    console.warn('Failed to evaluate active tab DOM', error);
+    return {
+      url: wc.getURL() || tab.lastUrl || null,
+      title: tab.title ?? null,
+      html: '',
+    };
+  }
+}
+
 function buildNavState(tab) {
   const wc = tab.view.webContents;
   const url = wc.getURL() || tab.lastUrl || 'about:blank';
@@ -1702,6 +1781,15 @@ ipcMain.handle('browser:diagnostics-run', async () => {
 });
 
 ipcMain.handle('browser:clear-data', async (_event, payload = {}) => clearBrowsingData(payload));
+ipcMain.handle('browser:get-active-tab-info', async () => {
+  try {
+    const info = await getActiveTabInfoPayload();
+    return { ok: Boolean(info), data: info };
+  } catch (error) {
+    console.warn('Failed to resolve active tab info', error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
 
 ipcMain.handle('history:list', async (_event, payload = {}) => {
   if (!browserDataStore) {

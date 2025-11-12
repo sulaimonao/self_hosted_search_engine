@@ -149,6 +149,7 @@ export interface BrowserAPI {
     cookies?: boolean;
     cache?: boolean;
   }) => Promise<ClearBrowsingDataResult>;
+  getActiveTabInfo?: () => Promise<{ url: string | null; title: string | null; html: string | null } | null>;
   getSettings: () => Promise<BrowserSettings>;
   getSpellcheckLanguages?: () => Promise<string[]>;
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;

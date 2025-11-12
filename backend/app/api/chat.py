@@ -931,12 +931,36 @@ def _drain_chat_response(response: requests.Response) -> tuple[Mapping[str, Any]
     return accumulator.payload, accumulator
 
 
+def _wrap_stream_event(
+    event: ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError,
+) -> tuple[str, Mapping[str, Any]]:
+    if isinstance(event, ChatStreamMetadata):
+        data = event.model_dump(exclude_none=True, by_alias=True)
+        return "chat.metadata", data
+    if isinstance(event, ChatStreamDelta):
+        chunk = event.delta or event.answer or ""
+        data: dict[str, Any] = {
+            "type": "text",
+            "content": chunk,
+        }
+        if event.reasoning:
+            data["reasoning"] = event.reasoning
+        if event.citations:
+            data["citations"] = event.citations
+        return "chat.delta", data
+    if isinstance(event, ChatStreamComplete):
+        data = event.payload.model_dump(exclude_none=True)
+        return "chat.done", data
+    if isinstance(event, ChatStreamError):
+        data = event.model_dump(exclude_none=True, by_alias=True)
+        return "chat.error", data
+    raise TypeError(f"Unsupported stream event {event.__class__.__name__}")
+
+
 def _serialize_event(event: ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError) -> bytes:
-    if hasattr(event, "model_dump"):
-        payload = event.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-    else:  # pragma: no cover - defensive fallback
-        payload = event  # type: ignore[assignment]
-    return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    name, payload = _wrap_stream_event(event)
+    envelope = {"event": name, "data": payload}
+    return (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def _ndjson_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
@@ -946,11 +970,8 @@ def _ndjson_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatS
 
 def _sse_stream(events: Iterable[ChatStreamMetadata | ChatStreamDelta | ChatStreamComplete | ChatStreamError]) -> Iterator[bytes]:
     for event in events:
-        if hasattr(event, "model_dump"):
-            payload = event.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-        else:  # pragma: no cover - defensive fallback
-            payload = event  # type: ignore[assignment]
-        yield ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
+        name, payload = _wrap_stream_event(event)
+        yield (f"event: {name}\n" + "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
 
 
 def _render_response_payload(

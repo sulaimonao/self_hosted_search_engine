@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
+import { resolveBrowserAPI } from "@/lib/browser-ipc";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export type ContextChipsProps = {
   activeUrl?: string | null;
@@ -59,6 +61,11 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [indexUrl, setIndexUrl] = useState<string>(activeUrl ?? "");
   const [indexScope, setIndexScope] = useState<IndexScope>("domain");
+  const [pageInfo, setPageInfo] = useState<{ url: string | null; title: string | null; html: string | null }>({
+    url: activeUrl ?? null,
+    title: null,
+    html: null,
+  });
 
   useEffect(() => {
     if (dialogOpen) return;
@@ -71,6 +78,55 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
     const trimmed = (activeUrl || "").trim();
     return trimmed || null;
   }, [activeUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setPageInfo((prev) => ({ ...prev, url: resolvedActiveUrl }));
+      return;
+    }
+    const apiBridge = resolveBrowserAPI();
+    if (!apiBridge?.getActiveTabInfo) {
+      setPageInfo((prev) => ({ ...prev, url: resolvedActiveUrl }));
+      return;
+    }
+    let cancelled = false;
+    void apiBridge
+      .getActiveTabInfo()
+      .then((info) => {
+        if (cancelled) {
+          return;
+        }
+        if (info) {
+          setPageInfo({
+            url: info.url?.trim() || resolvedActiveUrl,
+            title: info.title ?? null,
+            html: info.html ?? null,
+          });
+        } else {
+          setPageInfo((prev) => ({ ...prev, url: resolvedActiveUrl ?? prev.url ?? null, html: null }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPageInfo((prev) => ({ ...prev, url: resolvedActiveUrl ?? prev.url ?? null, html: null }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedActiveUrl]);
+
+  const resolvedPageUrl = pageInfo.url ?? resolvedActiveUrl;
+  const pageHostname = useMemo(() => {
+    if (!resolvedPageUrl) {
+      return null;
+    }
+    try {
+      return new URL(resolvedPageUrl).hostname;
+    } catch {
+      return null;
+    }
+  }, [resolvedPageUrl]);
 
   const updateContext = useCallback(
     (patch: Partial<ChatContext>) => {
@@ -90,17 +146,64 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
   );
 
   const handleUseCurrentPage = useCallback(async () => {
-    if (!resolvedActiveUrl) {
-      toast({ title: "No page detected", description: "Open a page in the browser to attach it as context.", variant: "destructive" });
+    setPageLoading(true);
+    let activeInfo: { url?: string | null; title?: string | null; html?: string | null } | null = null;
+    const apiBridge = resolveBrowserAPI();
+    if (apiBridge?.getActiveTabInfo) {
+      try {
+        activeInfo = await apiBridge.getActiveTabInfo();
+      } catch (error) {
+        console.warn("[context] failed to read active tab info", error);
+      }
+    }
+    const targetUrl = activeInfo?.url?.trim() || resolvedActiveUrl;
+    if (!targetUrl) {
+      setPageLoading(false);
+      toast({
+        title: "No URL to index",
+        description: "Open a page in the browser to attach it as context.",
+        variant: "warning",
+      });
       return;
     }
-    setPageLoading(true);
     try {
-      const params = new URLSearchParams({ url: resolvedActiveUrl, vision: "1" });
-      const response = await fetch(api(`/api/page/extract?${params.toString()}`), { cache: "no-store" });
+      const body: Record<string, unknown> = { source_url: targetUrl };
+      const htmlPayload = activeInfo?.html ?? pageInfo.html ?? null;
+      if (htmlPayload && htmlPayload.trim()) {
+        body.html = htmlPayload;
+      }
+      const titleHint = activeInfo?.title ?? pageInfo.title;
+      if (titleHint) {
+        body.title = titleHint;
+      }
+      const query = body.html ? "" : "?vision=1";
+      const response = await fetch(api(`/api/extract${query}`), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
       if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Page extract failed (${response.status})`);
+        let message = `Page extract failed (${response.status})`;
+        try {
+          const detail = await response.json();
+          if (response.status === 400 && detail?.error === "source_url_required") {
+            toast({
+              title: "No URL to index",
+              description: "Open a page in the browser to attach it as context.",
+              variant: "warning",
+            });
+            return;
+          }
+          if (typeof detail?.message === "string" && detail.message.trim()) {
+            message = detail.message.trim();
+          } else if (typeof detail?.error === "string" && detail.error.trim()) {
+            message = detail.error.trim();
+          }
+        } catch {
+          const text = await response.text();
+          message = text || message;
+        }
+        throw new Error(message);
       }
       const payload = await response.json();
       updateContext({ page: payload });
@@ -114,7 +217,7 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
     } finally {
       setPageLoading(false);
     }
-  }, [resolvedActiveUrl, toast, updateContext]);
+  }, [pageInfo.html, pageInfo.title, resolvedActiveUrl, toast, updateContext]);
 
   const handleDiagnostics = useCallback(async () => {
     setDiagLoading(true);
@@ -252,10 +355,25 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant={context.page ? "secondary" : "outline"} onClick={() => void handleUseCurrentPage()} disabled={pageLoading}>
-          {pageLoading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-          Use current page
-        </Button>
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant={context.page ? "secondary" : "outline"}
+                onClick={() => void handleUseCurrentPage()}
+                disabled={pageLoading || !resolvedPageUrl}
+              >
+                {pageLoading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                Use current page{pageHostname ? ` (${pageHostname})` : ""}
+              </Button>
+            </TooltipTrigger>
+            {!resolvedPageUrl ? (
+              <TooltipContent>No active browser tab detected.</TooltipContent>
+            ) : null}
+          </Tooltip>
+        </TooltipProvider>
         <Button type="button" size="sm" variant={context.diagnostics ? "secondary" : "outline"} onClick={() => void handleDiagnostics()} disabled={diagLoading}>
           {diagLoading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
           Attach diagnostics

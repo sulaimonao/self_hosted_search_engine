@@ -11,6 +11,7 @@ from flask import Blueprint, g, jsonify, request
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
 import trafilatura
 
 from server.json_logger import log_event
@@ -25,7 +26,7 @@ def _should_capture_vision() -> bool:
     return flag in {"1", "true", "yes", "on"}
 
 
-def _extract_text(html: str) -> tuple[str, dict[str, Any]]:
+def _extract_text(html: str, *, source_url: str | None = None) -> tuple[str, dict[str, Any]]:
     metadata: dict[str, Any] = {}
     with suppress(Exception):
         meta_json = trafilatura.extract(
@@ -34,6 +35,7 @@ def _extract_text(html: str) -> tuple[str, dict[str, Any]]:
             include_tables=False,
             include_images=False,
             output_format="json",
+            url=source_url,
         )
         if meta_json:
             data = json.loads(meta_json)
@@ -50,10 +52,47 @@ def _extract_text(html: str) -> tuple[str, dict[str, Any]]:
         include_comments=False,
         include_tables=False,
         include_images=False,
+        url=source_url,
     )
     if isinstance(text, str):
         return text, metadata
     return "", metadata
+
+
+def _fallback_dom_text(html: str) -> str:
+    with suppress(Exception):
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text(separator=" ", strip=True)
+        if text:
+            return text
+    return ""
+
+
+def _dom_title(html: str) -> str | None:
+    with suppress(Exception):
+        soup = BeautifulSoup(html, "html.parser")
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+            return title or None
+    return None
+
+
+def _dom_extract(source_url: str, html: str, *, title_hint: str | None = None) -> dict[str, Any]:
+    text, meta = _extract_text(html, source_url=source_url)
+    cleaned_text = text.strip() or _fallback_dom_text(html)
+    payload: dict[str, Any] = {
+        "url": source_url,
+        "text": cleaned_text,
+    }
+    title = title_hint or meta.get("title") or _dom_title(html)
+    if title:
+        payload["title"] = title
+    lang = meta.get("lang")
+    if lang:
+        payload["lang"] = lang
+    if meta:
+        payload.setdefault("metadata", meta)
+    return payload
 
 
 def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
@@ -75,7 +114,7 @@ def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
             html = page.content()
             page_title = page.title()
             lang = page.evaluate("document.documentElement?.lang || null")
-            text, meta = _extract_text(html)
+            text, meta = _extract_text(html, source_url=url)
             if not text.strip():
                 fallback_text = page.evaluate(
                     "document.body ? document.body.innerText : ''"
@@ -93,11 +132,12 @@ def _playwright_extract(url: str, capture_vision: bool) -> dict[str, Any]:
             with suppress(Exception):
                 browser.close()
 
-    payload = {
+    payload: dict[str, Any] = {
         "url": url,
-        "title": page_title,
         "text": text,
     }
+    if page_title:
+        payload["title"] = page_title
     if lang:
         payload["lang"] = lang
     if meta:
@@ -163,20 +203,47 @@ def _handle_extract(url: str, capture_vision: bool) -> tuple[dict[str, Any], int
 @bp.post("/extract")
 def extract() -> Any:
     payload = request.get_json(silent=True) or {}
-    url = (payload.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "url_required"}), 400
+    source_url_raw = payload.get("source_url")
+    source_url = str(source_url_raw).strip() if isinstance(source_url_raw, str) else ""
+    if not source_url:
+        return (
+            jsonify({"error": "source_url_required", "message": "source_url is required"}),
+            400,
+        )
 
-    capture_vision = _should_capture_vision()
-    data, status = _handle_extract(url, capture_vision)
+    title_hint_raw = payload.get("title")
+    title_hint = str(title_hint_raw).strip() if isinstance(title_hint_raw, str) else None
+    html_raw = payload.get("html")
+    html_value = html_raw if isinstance(html_raw, str) and html_raw.strip() else None
+
+    capture_vision = _should_capture_vision() if not html_value else False
+    if html_value:
+        try:
+            data = _dom_extract(source_url, html_value, title_hint=title_hint)
+            return jsonify(data), 200
+        except Exception as exc:  # pragma: no cover - defensive guard
+            log_event(
+                "ERROR",
+                "extract.dom_error",
+                trace=getattr(g, "trace_id", None),
+                url=source_url,
+                error=exc.__class__.__name__,
+                msg=str(exc),
+            )
+            return jsonify({"error": "extract_failed", "message": str(exc)}), 502
+
+    data, status = _handle_extract(source_url, capture_vision)
+    if title_hint and not data.get("title"):
+        data["title"] = title_hint
     return jsonify(data), status
 
 
 @bp.get("/page/extract")
 def extract_page() -> Any:
-    url = (request.args.get("url") or "").strip()
+    raw = request.args.get("source_url") or request.args.get("url") or ""
+    url = raw.strip()
     if not url:
-        return jsonify({"error": "url_required"}), 400
+        return jsonify({"error": "source_url_required"}), 400
 
     capture_vision = _should_capture_vision()
     data, status = _handle_extract(url, capture_vision)

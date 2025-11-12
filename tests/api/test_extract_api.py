@@ -4,8 +4,10 @@ import base64
 from typing import Any
 
 import pytest
+from flask import Flask
 
 from backend.app.api import extract as extract_mod
+from backend.app.api.extract import bp as extract_bp
 
 
 class _DummyPage:
@@ -115,7 +117,7 @@ def test_playwright_extract_returns_payload(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         extract_mod,
         "_extract_text",
-        lambda _html: ("", {}),
+        lambda _html, **_kwargs: ("", {}),
     )
 
     payload = extract_mod._playwright_extract(
@@ -128,3 +130,43 @@ def test_playwright_extract_returns_payload(monkeypatch: pytest.MonkeyPatch) -> 
     assert payload["lang"] == "en"
     expected_b64 = base64.b64encode(screenshot).decode("ascii")
     assert payload["screenshot_b64"] == expected_b64
+
+
+def _build_app() -> Flask:
+    app = Flask(__name__)
+    app.register_blueprint(extract_bp)
+    return app
+
+
+def test_extract_requires_source_url() -> None:
+    app = _build_app()
+    client = app.test_client()
+    response = client.post("/api/extract", json={"html": "<html></html>"})
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["error"] == "source_url_required"
+
+
+def test_extract_accepts_html_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _build_app()
+    client = app.test_client()
+    captured: dict[str, Any] = {}
+
+    def _fake_dom_extract(url: str, html: str, *, title_hint: str | None = None) -> dict[str, Any]:
+        captured["url"] = url
+        captured["html"] = html
+        captured["title_hint"] = title_hint
+        return {"url": url, "title": title_hint or "derived", "text": "hello world"}
+
+    monkeypatch.setattr(extract_mod, "_dom_extract", _fake_dom_extract)
+    response = client.post(
+        "/api/extract",
+        json={"source_url": "https://example.com/page", "html": "<html>hi</html>", "title": "Provided"},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["url"] == "https://example.com/page"
+    assert payload["title"] == "Provided"
+    assert payload["text"] == "hello world"
+    assert captured["url"] == "https://example.com/page"
+    assert captured["title_hint"] == "Provided"

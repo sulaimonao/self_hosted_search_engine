@@ -7,7 +7,7 @@ import "highlight.js/styles/github.css";
 import ClientOnly from "@/components/ClientOnly";
 import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { RenderLoopGuardProvider } from "@/components/providers/RenderLoopGuardProvider";
-import { StatusRibbon } from "@/components/status/StatusRibbon";
+import { StatusBar } from "@/components/status/StatusBar";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ErrorClientSetup from "@/components/ErrorClientSetup";
@@ -51,9 +51,11 @@ export default function RootLayout({
               <NavProgressProvider>
                 <ErrorBoundary>
                   <ErrorClientSetup />
-                  <StatusRibbon />
-                  <FirstRunWizard />
-                  {children}
+                  <div className="relative min-h-screen pb-16">
+                    <FirstRunWizard />
+                    {children}
+                    <StatusBar />
+                  </div>
                 </ErrorBoundary>
               </NavProgressProvider>
             </RenderLoopGuardProvider>

@@ -50,12 +50,14 @@ def stream_events() -> Response:
     app = current_app._get_current_object()
 
     def generate() -> Any:
-        token, stream = service.subscribe()
+        token: str | None = None
+        stream: queue.Queue[DiscoveryRecord | None] | None = None
         try:
             with app.app_context():
+                token, stream = service.subscribe()
                 while True:
                     try:
-                        record = stream.get(timeout=15)
+                        record = stream.get(timeout=15)  # type: ignore[union-attr]
                     except queue.Empty:
                         yield ": keep-alive\n\n"
                         continue
@@ -64,7 +66,8 @@ def stream_events() -> Response:
                     payload = json.dumps(_serialize(record, include_text=False, service=service))
                     yield f"data: {payload}\n\n"
         finally:
-            service.unsubscribe(token)
+            if token is not None:
+                service.unsubscribe(token)
 
     response = Response(generate(), mimetype="text/event-stream")
     response.headers["Cache-Control"] = "no-cache"

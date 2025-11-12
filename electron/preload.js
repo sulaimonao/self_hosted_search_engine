@@ -166,6 +166,11 @@ function createBrowserAPI() {
       ipcRenderer.invoke('permissions:set', { origin, permission, setting }),
     clearSiteData: (origin) => ipcRenderer.invoke('site:clear-data', { origin }),
     clearBrowsingData: (options) => ipcRenderer.invoke('browser:clear-data', options ?? {}),
+    getActiveTabInfo: () =>
+      ipcRenderer
+        .invoke('browser:get-active-tab-info')
+        .then((result) => (result && result.ok ? result.data ?? null : null))
+        .catch(() => null),
     runDiagnostics: () => ipcRenderer.invoke('browser:diagnostics-run'),
   };
 }
