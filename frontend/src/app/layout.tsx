@@ -7,6 +7,7 @@ import "highlight.js/styles/github.css";
 import ClientOnly from "@/components/ClientOnly";
 import { NavProgressProvider } from "@/app/nav-progress-provider";
 import { RenderLoopGuardProvider } from "@/components/providers/RenderLoopGuardProvider";
+import { ReactQueryProvider } from "@/components/providers/ReactQueryProvider";
 import { StatusBar } from "@/components/status/StatusBar";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -35,8 +36,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${inter.variable} ${robotoMono.variable} antialiased`}>
+    <html lang="en" className="h-full">
+      <body className={`${inter.variable} ${robotoMono.variable} h-full bg-background antialiased`}>
         <SWRConfig
           value={{
             revalidateOnFocus: false,
@@ -47,18 +48,22 @@ export default function RootLayout({
           {/* The ClientOnly wrapper prevents hydration mismatches and excessive render loops by waiting
              until the component mounts on the client before rendering children. */}
           <ClientOnly>
-            <RenderLoopGuardProvider>
-              <NavProgressProvider>
-                <ErrorBoundary>
-                  <ErrorClientSetup />
-                  <div className="relative min-h-screen pb-16">
-                    <FirstRunWizard />
-                    {children}
-                    <StatusBar />
-                  </div>
-                </ErrorBoundary>
-              </NavProgressProvider>
-            </RenderLoopGuardProvider>
+            <ReactQueryProvider>
+              <RenderLoopGuardProvider>
+                <NavProgressProvider>
+                  <ErrorBoundary>
+                    <ErrorClientSetup />
+                    <div className="relative flex h-screen flex-col bg-background">
+                      <FirstRunWizard />
+                      <main className="flex-1 min-h-0 overflow-y-auto pb-16">
+                        {children}
+                      </main>
+                      <StatusBar />
+                    </div>
+                  </ErrorBoundary>
+                </NavProgressProvider>
+              </RenderLoopGuardProvider>
+            </ReactQueryProvider>
           </ClientOnly>
         </SWRConfig>
       </body>

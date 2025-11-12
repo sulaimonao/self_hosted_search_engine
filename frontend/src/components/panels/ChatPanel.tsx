@@ -58,6 +58,26 @@ type ToolExecutionState = {
   detail?: string;
 };
 
+type ContextPayload = {
+  url: string | null;
+  title: string | null;
+  summary: unknown;
+  selection: string | null;
+  selection_word_count: number | null;
+  metadata: Record<string, unknown>;
+  history: unknown[];
+  memories: unknown[];
+};
+
+type ResolvedPageContext = {
+  contextMessage: ChatPayloadMessage | null;
+  contextPayload: ContextPayload | null;
+  selectionText: string | null;
+  selectionWordCount: number | null;
+  pageUrl: string | null;
+  pageTitle: string | null;
+};
+
 // Local type for proposed actions attached to messages in tests
 type ProposedAction = {
   id?: string;
@@ -422,12 +442,6 @@ export function ChatPanel(props: {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isBusy]);
 
-  useEffect(() => {
-    if (!usePageContext) {
-      setContextSummary(null);
-    }
-  }, [setContextSummary, usePageContext]);
-
   // persist selection when user changes via UI
 
   const statusBanner = useMemo((): Banner | null => {
@@ -555,15 +569,139 @@ export function ChatPanel(props: {
     return "Ask the copilot";
   }, [installing, inventory, llmReachable]);
 
-  const handleContextToggle = useCallback(
-    (value: boolean) => {
-      setUsePageContext(value);
-      if (!value) {
+  const resolvePageContext = useCallback(async (): Promise<ResolvedPageContext | null> => {
+    const browserUrl = typeof window !== "undefined" ? window.location.href : null;
+    const browserTitle = typeof document !== "undefined" ? document.title : null;
+    const contextUrl = activeTab?.url ?? browserUrl ?? undefined;
+    const contextTitle = activeTab?.title ?? browserTitle ?? undefined;
+
+    let selectionText: string | null = null;
+    try {
+      selectionText = captureWindowSelection();
+    } catch {
+      selectionText = null;
+    }
+
+    let contextData: ChatContextResponse | null = null;
+    if (contextUrl) {
+      contextData = await fetchChatContext(threadId, {
+        url: contextUrl,
+        include: ["selection", "history", "metadata"],
+        selection: selectionText ?? undefined,
+        title: contextTitle ?? undefined,
+        locale: clientLocale ?? undefined,
+        time: new Date().toISOString(),
+      });
+    }
+
+    const combinedSelection = contextData?.selection?.text ?? selectionText ?? null;
+    const selectionCount = contextData?.selection?.word_count ?? countWords(combinedSelection);
+    const payloadUrl = contextData?.url ?? contextUrl ?? null;
+    const payloadTitle =
+      contextTitle ?? (contextData?.metadata?.title as string | undefined) ?? browserTitle ?? null;
+
+    if (!payloadUrl && !payloadTitle && !combinedSelection) {
+      return {
+        contextMessage: null,
+        contextPayload: null,
+        selectionText: combinedSelection,
+        selectionWordCount: selectionCount,
+        pageUrl: null,
+        pageTitle: null,
+      } satisfies ResolvedPageContext;
+    }
+
+    const contextPayload: ContextPayload = {
+      url: payloadUrl,
+      title: payloadTitle,
+      summary: contextData?.summary ?? null,
+      selection: combinedSelection,
+      selection_word_count: selectionCount,
+      metadata: contextData?.metadata ?? {},
+      history: contextData?.history ?? [],
+      memories: contextData?.memories ?? [],
+    };
+
+    return {
+      contextMessage: {
+        role: "system",
+        content: JSON.stringify({ context: contextPayload }, null, 2),
+      },
+      contextPayload,
+      selectionText: combinedSelection,
+      selectionWordCount: selectionCount,
+      pageUrl: payloadUrl,
+      pageTitle: payloadTitle,
+    } satisfies ResolvedPageContext;
+  }, [activeTab?.title, activeTab?.url, clientLocale, threadId]);
+
+  const applyContextSummary = useCallback(
+    (snapshot: ResolvedPageContext | null) => {
+      if (!snapshot) {
+        setContextSummary(null);
+        return;
+      }
+      if (snapshot.pageUrl || typeof snapshot.selectionWordCount === "number") {
+        setContextSummary({
+          url: snapshot.pageUrl,
+          selectionWordCount: snapshot.selectionWordCount ?? null,
+        });
+      } else {
         setContextSummary(null);
       }
     },
     [setContextSummary],
   );
+
+  const prefetchPageContext = useCallback(async (): Promise<ResolvedPageContext | null> => {
+    try {
+      const snapshot = await resolvePageContext();
+      if (!mountedRef.current) {
+        return null;
+      }
+      applyContextSummary(snapshot);
+      return snapshot;
+    } catch (error) {
+      if (!mountedRef.current) {
+        return null;
+      }
+      applyContextSummary(null);
+      throw error;
+    }
+  }, [applyContextSummary, resolvePageContext]);
+
+  const handleContextToggle = useCallback(
+    (value: boolean) => {
+      setUsePageContext(value);
+      if (!value) {
+        applyContextSummary(null);
+      }
+    },
+    [applyContextSummary],
+  );
+
+  useEffect(() => {
+    if (!usePageContext) {
+      applyContextSummary(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        await prefetchPageContext();
+      } catch (error) {
+        if (cancelled || !mountedRef.current) {
+          return;
+        }
+        const messageText =
+          error instanceof Error ? error.message : "Failed to resolve page context";
+        setBanner({ intent: "error", text: messageText, actions: buildStreamErrorActions() });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyContextSummary, buildStreamErrorActions, prefetchPageContext, setBanner, usePageContext]);
 
   const updateMessage = useCallback((id: string, updater: (message: ChatMessage) => ChatMessage) => {
     let autopilotSteps: Verb[] | null | undefined;
@@ -751,65 +889,35 @@ export function ChatPanel(props: {
 
     let streamedModel: string | null = null;
     let streamedTrace: string | null = null;
-    let contextMessage: ChatPayloadMessage | null = null;
-    let contextData: ChatContextResponse | null = null;
-    let selectionText: string | null = null;
     const browserUrl = typeof window !== "undefined" ? window.location.href : null;
     const browserTitle = typeof document !== "undefined" ? document.title : null;
+    let contextSnapshot: ResolvedPageContext | null = null;
 
     if (usePageContext) {
-      const contextUrl = activeTab?.url ?? browserUrl ?? undefined;
-      const contextTitle = activeTab?.title ?? browserTitle ?? undefined;
       try {
-        selectionText = captureWindowSelection();
-        if (contextUrl) {
-          contextData = await fetchChatContext(threadId, {
-            url: contextUrl,
-            include: ["selection", "history", "metadata"],
-            selection: selectionText,
-            title: contextTitle,
-            locale: clientLocale ?? undefined,
-            time: new Date().toISOString(),
-          });
-        }
-        const combinedSelection = contextData?.selection?.text ?? selectionText ?? null;
-        const selectionCount = contextData?.selection?.word_count ?? countWords(combinedSelection);
-        const payloadUrl = contextData?.url ?? contextUrl ?? null;
-        const payloadTitle =
-          contextTitle ?? (contextData?.metadata?.title as string | undefined) ?? browserTitle ?? null;
-        if (payloadUrl || payloadTitle || combinedSelection) {
-          const contextPayload = {
-            url: payloadUrl,
-            title: payloadTitle,
-            summary: contextData?.summary ?? null,
-            selection: combinedSelection,
-            selection_word_count: selectionCount,
-            metadata: contextData?.metadata ?? {},
-            history: contextData?.history ?? [],
-            memories: contextData?.memories ?? [],
-          };
-          contextMessage = {
-            role: "system",
-            content: JSON.stringify({ context: contextPayload }, null, 2),
-          };
+        contextSnapshot = await resolvePageContext();
+        applyContextSummary(contextSnapshot);
+        if (contextSnapshot?.contextPayload) {
           void storeChatMessage(threadId, {
             role: "system",
-            content: JSON.stringify({ type: "context", data: contextPayload }),
+            content: JSON.stringify({ type: "context", data: contextSnapshot.contextPayload }),
           }).catch((error) => console.warn("[chat] failed to persist context", error));
-          setContextSummary({ url: payloadUrl, selectionWordCount: selectionCount });
-        } else {
-          setContextSummary({ url: payloadUrl, selectionWordCount: selectionCount });
         }
       } catch (error) {
+        contextSnapshot = null;
+        applyContextSummary(null);
         const messageText = error instanceof Error ? error.message : "Failed to resolve page context";
         setBanner({ intent: "error", text: messageText, actions: buildStreamErrorActions() });
       }
     }
 
-    const selectionContext = contextData?.selection?.text ?? selectionText ?? null;
+    const contextMessage = contextSnapshot?.contextMessage ?? null;
+    const selectionContext = contextSnapshot?.selectionText ?? null;
+    const contextTitleForText =
+      contextSnapshot?.pageTitle ?? (browserTitle && browserTitle.trim() ? browserTitle.trim() : null);
     const textContextParts: string[] = [];
-    if (usePageContext && browserTitle && browserTitle.trim()) {
-      textContextParts.push(browserTitle.trim());
+    if (usePageContext && contextTitleForText) {
+      textContextParts.push(contextTitleForText);
     }
     if (selectionContext && selectionContext.trim()) {
       textContextParts.push(selectionContext);
@@ -1019,22 +1127,21 @@ export function ChatPanel(props: {
   },
   [
     activeTab?.id,
-    activeTab?.title,
     activeTab?.url,
-    clientLocale,
+    applyContextSummary,
     clientTimezone,
     input,
     inventory,
     isBusy,
     llmReachable,
     llmStreamSupported,
+    resolvePageContext,
     selectedModel,
     serverTime,
     startLlmStream,
     threadId,
     updateMessage,
     usePageContext,
-    setContextSummary,
     buildStreamErrorActions,
   ],
 );

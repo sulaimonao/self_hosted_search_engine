@@ -653,7 +653,7 @@ function BrowserShellInner() {
   }, [activeTab?.url, browserAPI]);
 
   return (
-    <div className="flex h-full min-h-screen flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <header className="border-b bg-background/95">
         <div className="flex items-center justify-between px-4 py-2">
           <TabsBar />

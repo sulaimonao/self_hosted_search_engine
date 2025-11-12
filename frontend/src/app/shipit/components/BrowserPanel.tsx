@@ -138,9 +138,21 @@ export default function BrowserPanel(): JSX.Element {
   const [historyRange, setHistoryRange] = useState("all");
   const [supportsWebview, setSupportsWebview] = useState(false);
   const webviewRefs = useRef<Record<string, ElectronWebviewElement | null>>({});
+  const webviewRefCallbacks = useRef<Record<string, (node: ElectronWebviewElement | null) => void>>({});
   const attachWebview = useCallback((tabId: string, node: ElectronWebviewElement | null) => {
     webviewRefs.current[tabId] = node;
   }, []);
+  const getWebviewRef = useCallback(
+    (tabId: string) => {
+      if (!webviewRefCallbacks.current[tabId]) {
+        webviewRefCallbacks.current[tabId] = (node: ElectronWebviewElement | null) => {
+          attachWebview(tabId, node);
+        };
+      }
+      return webviewRefCallbacks.current[tabId];
+    },
+    [attachWebview],
+  );
 
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) ?? null, [tabs, activeTabId]);
 
@@ -193,6 +205,15 @@ export default function BrowserPanel(): JSX.Element {
 
   useEffect(() => {
   safeLocalStorage.set(TABS_STORAGE_KEY, JSON.stringify(tabs));
+  }, [tabs]);
+
+  useEffect(() => {
+    const activeIds = new Set(tabs.map((tab) => tab.id));
+    for (const key of Object.keys(webviewRefCallbacks.current)) {
+      if (!activeIds.has(key)) {
+        delete webviewRefCallbacks.current[key];
+      }
+    }
   }, [tabs]);
 
   useEffect(() => {
@@ -591,7 +612,7 @@ export default function BrowserPanel(): JSX.Element {
                 </div>
                 {supportsWebview ? (
                   <webview
-                    ref={(node) => attachWebview(tab.id, node)}
+                    ref={getWebviewRef(tab.id)}
                     src={tab.url}
                     title={tab.title}
                     className="h-[520px] w-full rounded-md border"

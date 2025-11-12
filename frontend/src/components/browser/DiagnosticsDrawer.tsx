@@ -2,9 +2,10 @@
 
 import "@/autopilot/executor";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AlertTriangle, Check, Clipboard, ClipboardCheck, Loader2, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -178,9 +179,7 @@ export function DiagnosticsDrawer({
   webviewRef,
   supportsWebview = false,
 }: DiagnosticsDrawerProps) {
-  const [report, setReport] = useState<BrowserDiagnosticsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState("snapshot");
   const [logEntries, setLogEntries] = useState<string[]>([]);
@@ -474,43 +473,59 @@ export function DiagnosticsDrawer({
     }
   }, [appendLog, fetchDirective, lastDirective]);
 
+  const fetchDiagnosticsReport = useCallback(async () => {
+    let payload: BrowserDiagnosticsReport | null = null;
+    if (browserAPI?.runDiagnostics) {
+      const response = await browserAPI.runDiagnostics();
+      if (!response?.ok) {
+        throw new Error(response?.error || "diagnostics_failed");
+      }
+      payload = response.data ?? null;
+    } else {
+      const webview = webviewRef.current;
+      if (!webview?.executeJavaScript) {
+        throw new Error(supportsWebview ? "webview_unavailable" : "diagnostics_unavailable");
+      }
+      payload = await webview.executeJavaScript<BrowserDiagnosticsReport>(BROWSER_DIAGNOSTICS_SCRIPT, true);
+    }
+    const rawIncidents =
+      payload && typeof payload === "object" && "incidents" in (payload as Record<string, unknown>)
+        ? (payload as Record<string, unknown>).incidents
+        : undefined;
+    if (Array.isArray(rawIncidents)) {
+      incidentBus.ingest(rawIncidents as Record<string, unknown>[]);
+    }
+    if (!payload) {
+      throw new Error("Diagnostics completed but returned no data.");
+    }
+    return payload;
+  }, [browserAPI, supportsWebview, webviewRef]);
+
+  const diagnosticsQuery = useQuery<BrowserDiagnosticsReport>({
+    queryKey: ["browser-diagnostics", supportsWebview ? "webview" : "tab"],
+    queryFn: fetchDiagnosticsReport,
+    enabled: false,
+    retry: 0,
+  });
+
+  const { data: report, error: diagnosticsError, isFetching: running, refetch: refetchDiagnostics } = diagnosticsQuery;
+
+  const diagnosticsErrorMessage = useMemo(() => {
+    if (!diagnosticsError) {
+      return null;
+    }
+    return diagnosticsError instanceof Error ? diagnosticsError.message : String(diagnosticsError);
+  }, [diagnosticsError]);
+
   const runChecks = useCallback(async () => {
     setError(null);
-    setRunning(true);
+    setCopied(false);
     autoPlanKeyRef.current = null;
-    try {
-      let payload: BrowserDiagnosticsReport | null = null;
-      if (browserAPI?.runDiagnostics) {
-        const response = await browserAPI.runDiagnostics();
-        if (!response?.ok) {
-          throw new Error(response?.error || "diagnostics_failed");
-        }
-        payload = response.data ?? null;
-      } else {
-        const webview = webviewRef.current;
-        if (!webview?.executeJavaScript) {
-          throw new Error(supportsWebview ? "webview_unavailable" : "diagnostics_unavailable");
-        }
-        payload = await webview.executeJavaScript<BrowserDiagnosticsReport>(BROWSER_DIAGNOSTICS_SCRIPT, true);
-      }
-      const rawIncidents =
-        payload && typeof payload === "object" && "incidents" in (payload as Record<string, unknown>)
-          ? (payload as Record<string, unknown>).incidents
-          : undefined;
-      if (Array.isArray(rawIncidents)) {
-        incidentBus.ingest(rawIncidents as Record<string, unknown>[]);
-      }
-      setReport(payload ?? null);
-      if (!payload) {
-        setError("Diagnostics completed but returned no data.");
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-    } finally {
-      setRunning(false);
-    }
-  }, [browserAPI, supportsWebview, webviewRef]);
+    appendLog("[diagnostics] run requested.");
+    await refetchDiagnostics({ throwOnError: false });
+  }, [appendLog, refetchDiagnostics]);
+
+  const uiError = diagnosticsErrorMessage ?? error;
 
   useEffect(() => {
     if (!report) {
@@ -787,10 +802,9 @@ export function DiagnosticsDrawer({
       }
       await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
       setError(null);
-  setCopied(true);
-  // one-shot UX timer: intentionally short to provide quick feedback to users
-  // one-shot UX timer: intentionally short to provide quick feedback to users
-  setTimeout(() => setCopied(false), 3000);
+      setCopied(true);
+      // One-shot UX timer: intentionally short to provide quick feedback to users.
+      setTimeout(() => setCopied(false), 3000);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -831,8 +845,8 @@ export function DiagnosticsDrawer({
                 Diagnostics require the desktop app or a compatible Electron webview environment.
               </p>
             ) : null}
-            {error ? (
-              <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
+            {uiError ? (
+              <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{uiError}</p>
             ) : null}
             {report ? (
               <ScrollArea className="flex-1 pr-4">
