@@ -125,17 +125,19 @@ export function useAgentTraceSubscription(chatId: string | null | undefined, ena
   }, [chatId, enabled, addStep, resetChat]);
 }
 
+const EMPTY_STEPS: AgentStep[] = [];
+
 export function useAgentTrace(chatId: string | null | undefined, messageId: string | null | undefined) {
   return useAgentTraceStore((state) => {
     if (!chatId) {
-      return [] as AgentStep[];
+      return EMPTY_STEPS;
     }
     const chatBucket = state.stepsByChat[chatId];
     if (!chatBucket) {
-      return [] as AgentStep[];
+      return EMPTY_STEPS;
     }
     const key = messageId && messageId.trim() ? messageId : DEFAULT_MESSAGE_ID;
-    return chatBucket[key] ?? [];
+    return chatBucket[key] ?? EMPTY_STEPS;
   });
 }
 

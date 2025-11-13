@@ -2,14 +2,14 @@
 
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { ModelInventory } from "@/lib/api";
+import type { ModelInventory, ChatContextResponse } from "@/lib/api";
 import { ChatMessageMarkdown } from "@/components/chat-message";
 import { CopilotHeader } from "@/components/copilot-header";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Loader2, StopCircle } from "lucide-react";
-import { runAutopilotTool, storeChatMessage } from "@/lib/api";
+import { runAutopilotTool, storeChatMessage, fetchChatContext } from "@/lib/api";
 import { chatClient, ChatRequestError, type ChatPayloadMessage } from "@/lib/chatClient";
 import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
 import ContextChips from "@/components/chat/ContextChips";
@@ -21,6 +21,20 @@ import {
   type ChatToolDefinition,
 } from "@/lib/types";
 import { useAppStore } from "@/state/useAppStore";
+import { useUIStore } from "@/state/ui";
+import { useSafeState } from "@/lib/react-safe";
+import { UsePageContextToggle } from "@/components/UsePageContextToggle";
+import { ReasoningToggle } from "@/components/ReasoningToggle";
+import { AgentModeToggle } from "@/components/AgentModeToggle";
+import { getConfig, type AppConfig } from "@/lib/configClient";
+import { buildResolvedPageContext, type ResolvedPageContext } from "@/lib/pageContext";
+
+type ChatMessagePart = {
+  type?: string;
+  text?: string;
+  content?: string;
+  data?: { text?: string };
+};
 
 type ChatViewMessage = {
   id: string;
@@ -30,6 +44,7 @@ type ChatViewMessage = {
   citations?: string[];
   traceId?: string | null;
   autopilot?: AutopilotDirective | null;
+  parts?: Array<ChatMessagePart | string>;
 };
 
 const createId = () => {
@@ -69,6 +84,51 @@ function summarizeToolResult(result: Record<string, unknown> | null | undefined)
     return truncateText(serialized, 400) || "OK";
   } catch {
     return String(result);
+  }
+}
+
+function extractMessageText(message: ChatViewMessage): string {
+  const direct = typeof message.content === "string" ? message.content : "";
+  if (direct && direct.trim()) {
+    return direct;
+  }
+  if (!Array.isArray(message.parts)) {
+    return "";
+  }
+  const flattened = message.parts
+    .map((part) => {
+      if (!part) return "";
+      if (typeof part === "string") return part;
+      if (typeof part.text === "string" && part.text.trim()) {
+        return part.text;
+      }
+      if (typeof part.content === "string" && part.content.trim()) {
+        return part.content;
+      }
+      if (part.data && typeof part.data.text === "string" && part.data.text.trim()) {
+        return part.data.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return flattened;
+}
+
+function captureWindowSelection(maxLength = 4000): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const selection = window.getSelection();
+    const text = selection?.toString()?.trim();
+    if (!text) {
+      return null;
+    }
+    return truncateText(text, maxLength);
+  } catch {
+    return null;
   }
 }
 
@@ -115,43 +175,71 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   const [pendingDirectives, setPendingDirectives] = useState<Record<string, Verb[]>>({});
   const [chatContext, setChatContext] = useState<ChatContext>(() => createDefaultChatContext());
   const contextRef = useRef<ChatContext>(chatContext);
+  const [usePageContext, setUsePageContext] = useState(false);
+  const [contextSummary, setContextSummary] = useSafeState<{
+    url?: string | null;
+    selectionWordCount?: number | null;
+  } | null>(null);
+  const contextSnapshotRef = useRef<ResolvedPageContext | null>(null);
+  const [agentModeEnabled, setAgentModeEnabled] = useState(true);
+  const agentModeTouchedRef = useRef(false);
+  const pageContextTouchedRef = useRef(false);
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
   const { activeTab } = useAppStore(
     useShallow((state) => ({
       activeTab: state.activeTab?.(),
     })),
   );
+  const showReasoning = useUIStore((state) => state.showReasoning);
   const toolDefinitions = useMemo<ChatToolDefinition[]>(
-    () => [
-      {
-        name: "diagnostics.run",
-        description: "Run end-to-end diagnostics and return a summary JSON payload.",
-        input_schema: {},
-      },
-      {
-        name: "index.snapshot",
-        description: "Queue a focused snapshot crawl for a single URL.",
-        input_schema: { url: "string" },
-      },
-      {
-        name: "index.site",
-        description: "Start a scoped site crawl using the indexing service.",
-        input_schema: { url: "string", scope: "domain|path" },
-      },
-      {
-        name: "db.query",
-        description: "Run a read-only SQL query against the application state database.",
-        input_schema: { sql: "string" },
-      },
-      {
-        name: "embeddings.add",
-        description: "Embed one or more raw texts into the vector store namespace.",
-        input_schema: { text: "string[]", namespace: "string?" },
-      },
-    ],
-    [],
+    () => {
+      if (!agentModeEnabled) {
+        return [];
+      }
+      return [
+        {
+          name: "diagnostics.run",
+          description: "Run end-to-end diagnostics and return a summary JSON payload.",
+          input_schema: {},
+        },
+        {
+          name: "index.snapshot",
+          description: "Queue a focused snapshot crawl for a single URL.",
+          input_schema: { url: "string" },
+        },
+        {
+          name: "index.site",
+          description: "Start a scoped site crawl using the indexing service.",
+          input_schema: { url: "string", scope: "domain|path" },
+        },
+        {
+          name: "db.query",
+          description: "Run a read-only SQL query against the application state database.",
+          input_schema: { sql: "string" },
+        },
+        {
+          name: "embeddings.add",
+          description: "Embed one or more raw texts into the vector store namespace.",
+          input_schema: { text: "string[]", namespace: "string?" },
+        },
+      ];
+    },
+    [agentModeEnabled],
   );
   const autopilotExecutor = useMemo(() => new AutopilotExecutor(), []);
+  const clientTimezone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return undefined;
+    }
+  }, []);
+  const clientLocale = useMemo(() => {
+    if (typeof navigator === "undefined" || typeof navigator.language !== "string") {
+      return undefined;
+    }
+    return navigator.language;
+  }, []);
 
   useEffect(() => {
     contextRef.current = chatContext;
@@ -224,6 +312,137 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       setActiveUrl(null);
     }
   }, [activeTab?.url, resolveActiveUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrateFromConfig = async () => {
+      try {
+        const config: AppConfig = await getConfig();
+        if (cancelled) {
+          return;
+        }
+        if (typeof config.features_agent_mode === "boolean" && !agentModeTouchedRef.current) {
+          setAgentModeEnabled(Boolean(config.features_agent_mode));
+        }
+        if (typeof config.chat_use_page_context_default === "boolean" && !pageContextTouchedRef.current) {
+          setUsePageContext(Boolean(config.chat_use_page_context_default));
+        }
+      } catch (error) {
+        console.warn("[chat] failed to load runtime config", error);
+      }
+    };
+    void hydrateFromConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const resolvePageContext = useCallback(async (): Promise<ResolvedPageContext | null> => {
+    const browserUrl = typeof window !== "undefined" ? window.location.href : null;
+    const browserTitle = typeof document !== "undefined" ? document.title : null;
+    const contextUrl = activeTab?.url ?? browserUrl ?? undefined;
+    const contextTitle = activeTab?.title ?? browserTitle ?? undefined;
+
+    let selectionText: string | null = null;
+    try {
+      selectionText = captureWindowSelection();
+    } catch {
+      selectionText = null;
+    }
+
+    let contextData: ChatContextResponse | null = null;
+    if (contextUrl) {
+      contextData = await fetchChatContext(threadId, {
+        url: contextUrl,
+        include: ["selection", "history", "metadata"],
+        selection: selectionText ?? undefined,
+        title: contextTitle ?? undefined,
+        locale: clientLocale ?? undefined,
+        time: new Date().toISOString(),
+      });
+    }
+
+    return buildResolvedPageContext({
+      contextData,
+      fallbackUrl: contextUrl ?? null,
+      fallbackTitle: contextTitle ?? null,
+      browserTitle,
+      selectionText,
+    });
+  }, [activeTab?.title, activeTab?.url, clientLocale, threadId]);
+
+  const applyContextSummary = useCallback(
+    (snapshot: ResolvedPageContext | null) => {
+      if (!snapshot) {
+        setContextSummary(null);
+        return;
+      }
+      if (snapshot.pageUrl || typeof snapshot.selectionWordCount === "number") {
+        setContextSummary({
+          url: snapshot.pageUrl,
+          selectionWordCount: snapshot.selectionWordCount ?? null,
+        });
+      } else {
+        setContextSummary(null);
+      }
+    },
+    [setContextSummary],
+  );
+
+  const prefetchPageContext = useCallback(async (): Promise<ResolvedPageContext | null> => {
+    try {
+      const snapshot = await resolvePageContext();
+      contextSnapshotRef.current = snapshot;
+      applyContextSummary(snapshot);
+      return snapshot;
+    } catch (error) {
+      contextSnapshotRef.current = null;
+      applyContextSummary(null);
+      throw error;
+    }
+  }, [applyContextSummary, resolvePageContext]);
+
+  const handleUsePageContextToggle = useCallback(
+    (value: boolean) => {
+      pageContextTouchedRef.current = true;
+      setUsePageContext(value);
+      if (!value) {
+        applyContextSummary(null);
+      }
+    },
+    [applyContextSummary],
+  );
+
+  const handleAgentModeToggle = useCallback((value: boolean) => {
+    agentModeTouchedRef.current = true;
+    setAgentModeEnabled(value);
+  }, []);
+
+  useEffect(() => {
+    if (!usePageContext) {
+      contextSnapshotRef.current = null;
+      applyContextSummary(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const snapshot = await prefetchPageContext();
+        if (cancelled) {
+          return;
+        }
+        contextSnapshotRef.current = snapshot;
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("[chat] page context prefetch failed", error);
+          setError((prev) => prev ?? (error instanceof Error ? error.message : String(error)));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyContextSummary, prefetchPageContext, setError, usePageContext]);
 
   const normalizeContext = useCallback((next: ChatContext): ChatContext => {
     return {
@@ -384,6 +603,8 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
       content: "",
     };
 
+    const browserUrl = typeof window !== "undefined" ? window.location.href : null;
+    const baseRequestUrl = usePageContext ? browserUrl ?? activeTab?.url ?? null : activeTab?.url ?? null;
     const baseHistory = appendUser ? [...historyBefore, userMessage!] : [...historyBefore];
     const updatedHistory = [...baseHistory, assistantMessage];
     messagesRef.current = updatedHistory;
@@ -394,6 +615,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         id: `local-${Date.now()}`,
         role: "user",
         content: trimmed,
+        page_url: baseRequestUrl,
       }).catch(() => undefined);
     }
 
@@ -407,14 +629,51 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
     let streamedCitations: string[] = [];
     let streamedTraceId: string | null = null;
     let streamedAutopilot: AutopilotDirective | null | undefined;
+    let contextSnapshot: ResolvedPageContext | null = contextSnapshotRef.current;
+    const browserTitle = typeof document !== "undefined" ? document.title : null;
+    if (usePageContext) {
+      try {
+        contextSnapshot = contextSnapshot ?? (await prefetchPageContext());
+        contextSnapshotRef.current = contextSnapshot;
+        if (contextSnapshot?.contextPayload) {
+          void storeChatMessage(threadId, {
+            role: "system",
+            content: JSON.stringify({ type: "context", data: contextSnapshot.contextPayload }),
+          }).catch(() => undefined);
+        }
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const contextTitle = contextSnapshot?.pageTitle ?? browserTitle ?? null;
+    const selectionText = contextSnapshot?.selectionText ?? null;
+    const textContextParts: string[] = [];
+    if (usePageContext && contextTitle) {
+      textContextParts.push(contextTitle);
+    }
+    if (selectionText && selectionText.trim()) {
+      textContextParts.push(selectionText);
+    }
+    const requestUrl = baseRequestUrl;
+    const textContextPayload = textContextParts.length > 0 ? textContextParts.join("\n\n") : null;
+
+    const finalMessages: ChatPayloadMessage[] = contextSnapshot?.contextMessage
+      ? [contextSnapshot.contextMessage, ...payloadMessages]
+      : [...payloadMessages];
+    if (!appendUser) {
+      finalMessages.push({ role: "user", content: trimmed });
+    }
 
     try {
       const result = await chatClient.send({
-        messages: payloadMessages,
+        messages: finalMessages,
         model,
         stream: true,
         context: contextRef.current,
-        tools: toolDefinitions,
+        tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+        url: requestUrl,
+        textContext: textContextPayload ?? undefined,
+        clientTimezone: clientTimezone ?? undefined,
         signal: controller.signal,
         onEvent: (event) => {
           if (event.type === "metadata") {
@@ -539,6 +798,13 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
   const handleRunAutopilotTool = useCallback(
     async (messageId: string, index: number, tool: AutopilotToolDirective) => {
       const key = `${messageId}:${index}`;
+      if (!agentModeEnabled) {
+        setToolExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: "Enable agent mode to run tools." },
+        }));
+        return;
+      }
       setToolExecutions((prev) => ({ ...prev, [key]: { status: "running" } }));
       try {
         const result = await runAutopilotTool(tool.endpoint, {
@@ -560,12 +826,19 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         }));
       }
     },
-    [threadId],
+    [agentModeEnabled, threadId],
   );
 
   const handleRunAutopilotPlan = useCallback(
     async (messageId: string, steps: Verb[]) => {
       const key = `${messageId}:directive`;
+      if (!agentModeEnabled) {
+        setPlanExecutions((prev) => ({
+          ...prev,
+          [key]: { status: "error", detail: "Enable agent mode to run plans." },
+        }));
+        return;
+      }
       const directiveSteps = pendingDirectives[messageId] ?? steps;
       if (!directiveSteps || directiveSteps.length === 0) {
         setPlanExecutions((prev) => ({
@@ -601,7 +874,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
         }));
       }
     },
-    [autopilotExecutor, pendingDirectives],
+    [agentModeEnabled, autopilotExecutor, pendingDirectives],
   );
 
   const handleSend = async () => {
@@ -619,10 +892,29 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
 
   return (
     <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
-  <CopilotHeader
+      <CopilotHeader
         chatModels={inventory?.chatModels ?? []}
         selectedModel={selectedModel ?? null}
         onModelChange={onModelChange ?? (() => {})}
+        controlsDisabled={isBusy || isStreaming}
+        contextControl={
+          <div className="flex flex-col gap-2">
+            <UsePageContextToggle
+              enabled={usePageContext}
+              disabled={isBusy || isStreaming}
+              onChange={handleUsePageContextToggle}
+              summary={contextSummary}
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <ReasoningToggle />
+              <AgentModeToggle
+                enabled={agentModeEnabled}
+                disabled={isBusy || isStreaming}
+                onChange={handleAgentModeToggle}
+              />
+            </div>
+          </div>
+        }
       />
       {error ? (
         <div className="flex items-center justify-between rounded-md border border-destructive px-3 py-2 text-xs text-destructive">
@@ -655,7 +947,7 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
           <div className="space-y-4 p-3 pr-1">
             {messages.map((m: ChatViewMessage, idx: number) => {
               const role = m.role ?? "assistant";
-              const content = typeof m.content === "string" ? m.content : "";
+              const content = extractMessageText(m);
               const isAssistant = role === "assistant";
               const autopilot = isAssistant ? m.autopilot ?? null : null;
               const directiveSteps = autopilot
@@ -667,6 +959,8 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
               const planSucceeded = planExecution?.status === "success";
               const planFailed = planExecution?.status === "error";
               const planDetail = planExecution?.detail;
+              const reasoningVisible = Boolean(isAssistant && showReasoning && m.reasoning);
+              const reasoningText = reasoningVisible ? m.reasoning ?? "" : "";
 
               return (
                 <div
@@ -675,7 +969,13 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
                 >
                   <div className="text-xs text-muted-foreground uppercase tracking-wide">{role}</div>
                   <div className="mt-2 space-y-3">
-                    <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} />
+                    {content ? <ChatMessageMarkdown text={content} onLinkClick={onLinkClick} /> : null}
+                    {reasoningVisible ? (
+                      <div className="rounded-md border border-dashed border-foreground/20 bg-muted/70 p-2 text-[11px] text-muted-foreground">
+                        <p className="font-semibold uppercase tracking-wide text-foreground/70">Reasoning</p>
+                        <pre className="mt-1 whitespace-pre-wrap text-xs text-foreground/80">{reasoningText}</pre>
+                      </div>
+                    ) : null}
                     {isAssistant && autopilot ? (
                       <div className="rounded-md border border-dashed border-primary/30 bg-primary/10 px-3 py-2 text-xs text-foreground">
                         <p className="font-semibold uppercase tracking-wide text-foreground/80">Autopilot suggestion</p>
@@ -722,13 +1022,13 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
                               type="button"
                               size="sm"
                               variant="secondary"
-                              disabled={planRunning}
+                              disabled={planRunning || !agentModeEnabled}
                               onClick={() => {
                                 void handleRunAutopilotPlan(m.id, directiveSteps);
                               }}
                             >
                               {planRunning ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
-                              {planRunning ? "Running" : "Run plan"}
+                              {planRunning ? "Running" : agentModeEnabled ? "Run plan" : "Enable agent mode"}
                             </Button>
                             {planSucceeded && planDetail ? (
                               <p className="text-[11px] text-foreground/80">{planDetail}</p>
@@ -761,13 +1061,13 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
                                         type="button"
                                         size="sm"
                                         variant="outline"
-                                        disabled={running}
+                                        disabled={running || !agentModeEnabled}
                                         onClick={() => {
                                           void handleRunAutopilotTool(m.id, toolIndex, tool);
                                         }}
                                       >
                                         {running ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                                        <span>{running ? "Running" : "Run"}</span>
+                                        <span>{running ? "Running" : agentModeEnabled ? "Run" : "Enable agent mode"}</span>
                                       </Button>
                                     </div>
                                     {success && execution?.detail ? (

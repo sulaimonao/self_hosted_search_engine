@@ -3,6 +3,7 @@
 import { Loader2, StopCircle } from "lucide-react";
 import { AutopilotExecutor, type AutopilotRunResult, type Verb } from "@/autopilot/executor";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -39,6 +40,7 @@ import { useUIStore } from "@/state/ui";
 import { useSafeState } from "@/lib/react-safe";
 import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 import { safeLocalStorage } from "@/utils/isomorphicStorage";
+import { buildResolvedPageContext, type ResolvedPageContext } from "@/lib/pageContext";
 
 const MODEL_STORAGE_KEY = "workspace:chat:model";
 const AUTOPULL_FALLBACK_CANDIDATES = ["gemma3", "gpt-oss"];
@@ -56,26 +58,6 @@ type Banner = { intent: "info" | "error"; text: string; actions?: BannerAction[]
 type ToolExecutionState = {
   status: "idle" | "running" | "success" | "error";
   detail?: string;
-};
-
-type ContextPayload = {
-  url: string | null;
-  title: string | null;
-  summary: unknown;
-  selection: string | null;
-  selection_word_count: number | null;
-  metadata: Record<string, unknown>;
-  history: unknown[];
-  memories: unknown[];
-};
-
-type ResolvedPageContext = {
-  contextMessage: ChatPayloadMessage | null;
-  contextPayload: ContextPayload | null;
-  selectionText: string | null;
-  selectionWordCount: number | null;
-  pageUrl: string | null;
-  pageTitle: string | null;
 };
 
 // Local type for proposed actions attached to messages in tests
@@ -180,16 +162,9 @@ function captureWindowSelection(maxLength = 4000): string | null {
   }
 }
 
-function countWords(text: string | null | undefined): number | null {
-  if (!text) {
-    return null;
-  }
-  const tokens = text.trim().split(/\s+/).filter(Boolean);
-  return tokens.length || null;
-}
-
 const INITIAL_ASSISTANT_GREETING =
   "Welcome! Paste a URL or ask me to search. I only crawl when you approve each step.";
+const MIN_STREAMING_HOLD_MS = 400;
 
 export function ChatPanel(props: {
   messages?: ChatMessage[];
@@ -251,7 +226,7 @@ export function ChatPanel(props: {
   const [serverTimeError, setServerTimeError] = useState<string | null>(null);
   const [usePageContext, setUsePageContext] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [rendererMode, _setRendererMode] = useState<"useChat" | "manual">(() => {
+  const [rendererMode, setRendererMode] = useState<"useChat" | "manual">(() => {
     try {
       const stored = typeof window !== "undefined" ? safeLocalStorage.get("chat:renderer") : null;
       return stored === "manual" ? "manual" : "useChat";
@@ -294,6 +269,7 @@ export function ChatPanel(props: {
   const endRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
   const refreshTimeoutRef = useRef<number | null>(null);
+  const streamingHoldRef = useRef<Map<string, number>>(new Map());
 
   const navigate = useBrowserNavigation();
   const { activeTab } = useAppStore(
@@ -362,6 +338,16 @@ export function ChatPanel(props: {
 
   useEffect(() => {
     mountedRef.current = true;
+    if (typeof window !== "undefined") {
+      try {
+        const storedMode = safeLocalStorage.get("chat:renderer");
+        if (storedMode === "manual" || storedMode === "useChat") {
+          setRendererMode(storedMode === "manual" ? "manual" : "useChat");
+        }
+      } catch {
+        // ignore storage read errors
+      }
+    }
     // Initialize storedModel from storage on client only. Read from safeLocalStorage
     // and set into state only when available to avoid SSR/TDZ issues.
     if (typeof window !== "undefined") {
@@ -594,45 +580,13 @@ export function ChatPanel(props: {
       });
     }
 
-    const combinedSelection = contextData?.selection?.text ?? selectionText ?? null;
-    const selectionCount = contextData?.selection?.word_count ?? countWords(combinedSelection);
-    const payloadUrl = contextData?.url ?? contextUrl ?? null;
-    const payloadTitle =
-      contextTitle ?? (contextData?.metadata?.title as string | undefined) ?? browserTitle ?? null;
-
-    if (!payloadUrl && !payloadTitle && !combinedSelection) {
-      return {
-        contextMessage: null,
-        contextPayload: null,
-        selectionText: combinedSelection,
-        selectionWordCount: selectionCount,
-        pageUrl: null,
-        pageTitle: null,
-      } satisfies ResolvedPageContext;
-    }
-
-    const contextPayload: ContextPayload = {
-      url: payloadUrl,
-      title: payloadTitle,
-      summary: contextData?.summary ?? null,
-      selection: combinedSelection,
-      selection_word_count: selectionCount,
-      metadata: contextData?.metadata ?? {},
-      history: contextData?.history ?? [],
-      memories: contextData?.memories ?? [],
-    };
-
-    return {
-      contextMessage: {
-        role: "system",
-        content: JSON.stringify({ context: contextPayload }, null, 2),
-      },
-      contextPayload,
-      selectionText: combinedSelection,
-      selectionWordCount: selectionCount,
-      pageUrl: payloadUrl,
-      pageTitle: payloadTitle,
-    } satisfies ResolvedPageContext;
+    return buildResolvedPageContext({
+      contextData,
+      fallbackUrl: contextUrl ?? null,
+      fallbackTitle: contextTitle ?? null,
+      browserTitle,
+      selectionText,
+    });
   }, [activeTab?.title, activeTab?.url, clientLocale, threadId]);
 
   const applyContextSummary = useCallback(
@@ -729,6 +683,30 @@ export function ChatPanel(props: {
       });
     }
   }, []);
+
+  const finalizeAssistantMessage = useCallback(
+    (messageId: string, recipe: (message: ChatMessage) => ChatMessage) => {
+      const apply = () => {
+        updateMessage(messageId, (message) => ({
+          ...recipe(message),
+          streaming: false,
+        }));
+        streamingHoldRef.current.delete(messageId);
+      };
+      const createdAt = streamingHoldRef.current.get(messageId);
+      if (typeof window === "undefined" || createdAt === undefined) {
+        apply();
+        return;
+      }
+      const elapsed = Date.now() - createdAt;
+      if (elapsed >= MIN_STREAMING_HOLD_MS) {
+        apply();
+      } else {
+        window.setTimeout(apply, MIN_STREAMING_HOLD_MS - elapsed);
+      }
+    },
+    [updateMessage],
+  );
 
   const handleRunAutopilotTool = useCallback(
     async (messageId: string, index: number, tool: AutopilotToolDirective) => {
@@ -897,7 +875,10 @@ export function ChatPanel(props: {
       citations: [],
     };
 
-    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    streamingHoldRef.current.set(assistantId, Date.now());
+    flushSync(() => {
+      setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    });
     setInput("");
 
     if (!postedEarly) {
@@ -1005,9 +986,8 @@ export function ChatPanel(props: {
             detail: { requestId, transport: "sse" },
           });
         }
-        updateMessage(assistantId, (message) => ({
+        finalizeAssistantMessage(assistantId, (message) => ({
           ...message,
-          streaming: false,
           content: message.content
             ? `${message.content}\n\n${messageText}`
             : `Error: ${messageText}`,
@@ -1063,9 +1043,8 @@ export function ChatPanel(props: {
       streamedModel = result.model ?? streamedModel;
       streamedTrace = result.traceId ?? streamedTrace;
 
-      updateMessage(assistantId, (message) => ({
+      finalizeAssistantMessage(assistantId, (message) => ({
         ...message,
-        streaming: false,
         content:
           result.payload.message ||
           result.payload.answer ||
@@ -1091,9 +1070,8 @@ export function ChatPanel(props: {
         controller?.signal.aborted ||
         (error instanceof DOMException && error.name === "AbortError")
       ) {
-        updateMessage(assistantId, (message) => ({
+        finalizeAssistantMessage(assistantId, (message) => ({
           ...message,
-          streaming: false,
           content: message.content || "(cancelled)",
         }));
         setBanner({ intent: "info", text: "Generation cancelled." });
@@ -1118,9 +1096,8 @@ export function ChatPanel(props: {
             },
           });
         }
-        updateMessage(assistantId, (message) => ({
+        finalizeAssistantMessage(assistantId, (message) => ({
           ...message,
-          streaming: false,
           content: message.content
             ? `${message.content}\n\n${messageText}`
             : `Error: ${messageText}`,
@@ -1130,9 +1107,8 @@ export function ChatPanel(props: {
       } else {
         const messageText =
           error instanceof Error ? error.message : String(error ?? "Unknown error");
-        updateMessage(assistantId, (message) => ({
+        finalizeAssistantMessage(assistantId, (message) => ({
           ...message,
-          streaming: false,
           content: message.content
             ? `${message.content}\n\n${messageText}`
             : `Error: ${messageText}`,
@@ -1383,7 +1359,7 @@ export function ChatPanel(props: {
   }, [autopullCandidates, handleRefreshInventory, installing]);
 
   return (
-    <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm">
+    <div className="flex h-full w-full max-w-[34rem] flex-col gap-4 p-4 text-sm" data-renderer-mode={rendererMode}>
   {rendererMode === "useChat" && process.env.NODE_ENV !== "test" ? (
         // Render the useChat-backed panel (client-only dynamic import)
         <ChatPanelUseChat
