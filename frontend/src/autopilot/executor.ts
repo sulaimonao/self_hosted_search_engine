@@ -9,7 +9,9 @@ export type Verb =
   | ({ type: "reload" } & BaseVerb)
   | ({ type: "click"; selector?: string; text?: string } & BaseVerb)
   | ({ type: "type"; selector: string; text: string } & BaseVerb)
-  | ({ type: "waitForStable"; ms?: number } & BaseVerb);
+  | ({ type: "waitForStable"; ms?: number } & BaseVerb)
+  | ({ type: "scroll"; selector?: string; behavior?: "smooth" | "auto"; x?: number; y?: number } & BaseVerb)
+  | ({ type: "hover"; selector?: string; text?: string } & BaseVerb);
 
 export type AutopilotRunOptions = {
   onHeadlessError?: (error: Error) => void;
@@ -109,6 +111,47 @@ export class AutopilotExecutor {
       element.value = step.text;
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    if (step.type === "scroll") {
+      const element = step.selector ? this.findBySelector(step.selector) : null;
+      if (element) {
+        element.scrollIntoView({
+          behavior: step.behavior || "smooth",
+          block: "center",
+          inline: "nearest",
+        });
+      } else if (typeof step.x === "number" || typeof step.y === "number") {
+        window.scrollTo({
+          left: step.x ?? window.scrollX,
+          top: step.y ?? window.scrollY,
+          behavior: step.behavior || "smooth",
+        });
+      } else {
+        console.warn(`[autopilot] scroll requires selector or coordinates`);
+      }
+      return;
+    }
+    if (step.type === "hover") {
+      const selectorTarget = this.findBySelector(step.selector);
+      const target = selectorTarget || this.findByText(step.text);
+      if (!target) {
+        console.warn(`[autopilot] hover target not found for ${step.selector ?? step.text ?? "hover"}`);
+        return;
+      }
+      const element = target as HTMLElement;
+      const mouseEnterEvent = new MouseEvent("mouseenter", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      });
+      const mouseOverEvent = new MouseEvent("mouseover", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+      });
+      element.dispatchEvent(mouseEnterEvent);
+      element.dispatchEvent(mouseOverEvent);
       return;
     }
     if (step.type === "waitForStable") {
