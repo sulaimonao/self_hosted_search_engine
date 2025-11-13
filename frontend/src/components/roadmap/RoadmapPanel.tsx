@@ -11,7 +11,7 @@ import { Loader2, RefreshCw, Pencil, Save } from "lucide-react";
 
 export function RoadmapPanel() {
   const { data: roadmap, mutate: mutateRoadmap, isLoading: loadingRoadmap } = useSWR("roadmap", fetchRoadmap, { refreshInterval: 60000 });
-  const { data: snapshot, mutate: mutateSnapshot, isLoading: loadingDiag } = useSWR("diagnostics-snapshot", () => fetchDiagnosticsSnapshot(false));
+  const { data: snapshot, mutate: mutateSnapshot, isLoading: loadingDiag } = useSWR("diagnostics-snapshot", fetchDiagnosticsSnapshot);
   const items = React.useMemo(() => decorateItems(roadmap?.items ?? [], snapshot ?? null), [roadmap, snapshot]);
 
   const [filter, setFilter] = React.useState("");

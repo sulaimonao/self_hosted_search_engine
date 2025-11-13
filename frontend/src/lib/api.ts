@@ -1179,7 +1179,7 @@ export async function fetchChatContext(
 
 export async function storeChatMessage(
   threadId: string,
-  payload: { id?: string | null; role: string; content: string; tokens?: number | null },
+  payload: { id?: string | null; role: string; content: string; tokens?: number | null; page_url?: string | null },
 ): Promise<void> {
   const normalizedThread = threadId.trim();
   if (!normalizedThread) {
@@ -1193,6 +1193,8 @@ export async function storeChatMessage(
       role: payload.role,
       content: payload.content,
       tokens: payload.tokens ?? undefined,
+      // Include page_url when available so e2e can verify current-page context wiring; backend ignores unknown fields.
+      page_url: payload.page_url ?? undefined,
     }),
   });
   if (!response.ok) {

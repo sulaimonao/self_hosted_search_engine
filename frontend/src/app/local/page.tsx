@@ -15,6 +15,8 @@ function JsonBlock({ data }: { data: JsonValue }) {
 
 export default function LocalHome() {
   const [q, setQ] = useState("");
+  const [chat, setChat] = useState("");
+  const [chatSending, setChatSending] = useState(false);
   const [host, setHost] = useState("");
   const [profile, setProfile] = useState<JsonValue>(null);
   const [searchResult, setSearchResult] = useState<JsonValue>(null);
@@ -77,6 +79,57 @@ export default function LocalHome() {
 
   return (
     <main className="p-4 grid gap-6 md:grid-cols-2">
+      <section className="md:col-span-2">
+        <h2 className="font-semibold mb-2">Quick chat</h2>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const text = chat.trim();
+            if (!text) return;
+            setChatSending(true);
+            setError(null);
+            try {
+              const threadId = (typeof crypto !== "undefined" && 'randomUUID' in crypto) ? crypto.randomUUID() : `local-${Date.now()}`;
+              const backend = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+              const endpoint = `${backend}/api/chat/${encodeURIComponent(threadId)}/message`;
+              const body = {
+                role: "user",
+                content: text,
+                page_url: typeof window !== 'undefined' ? window.location.href : undefined,
+              };
+              const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              });
+              if (!resp.ok) {
+                const detail = await resp.text();
+                throw new Error(detail || `Chat send failed (${resp.status})`);
+              }
+              setChat("");
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+            } finally {
+              setChatSending(false);
+            }
+          }}
+          className="flex gap-2"
+        >
+          <input
+            className="border p-2 flex-1 rounded"
+            value={chat}
+            onChange={(event) => setChat(event.target.value)}
+            placeholder="Ask the copilot…"
+          />
+          <button
+            type="submit"
+            className="border px-3 rounded disabled:opacity-50"
+            disabled={chatSending || !chat.trim()}
+          >
+            {chatSending ? "Sending…" : "Send"}
+          </button>
+        </form>
+      </section>
       <section>
         <h2 className="font-semibold mb-2">Local search</h2>
         <form

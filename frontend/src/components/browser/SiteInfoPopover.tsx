@@ -95,7 +95,9 @@ async function revokeNavigatorPermission(permission: string): Promise<void> {
   if (!descriptor) {
     return;
   }
-  const permissionsApi = navigator.permissions;
+  const permissionsApi = navigator.permissions as unknown as {
+    revoke?: (desc: PermissionDescriptor) => Promise<PermissionStatus>;
+  };
   if (!permissionsApi || typeof permissionsApi.revoke !== "function") {
     return;
   }

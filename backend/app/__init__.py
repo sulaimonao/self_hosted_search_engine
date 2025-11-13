@@ -100,6 +100,8 @@ def create_app() -> Flask:
     from .api import sources as sources_api
     from .api import runtime as runtime_api
     from .api import embeddings as embeddings_api
+    # Config routes (persisted app configuration)
+    from .routes import config as config_routes
     from .config import AppConfig
     from .embedding_manager import EmbeddingManager
     from .jobs.focused_crawl import FocusedCrawlManager
@@ -657,6 +659,7 @@ def create_app() -> Flask:
     app.register_blueprint(system_check_api.bp)
     app.register_blueprint(sources_api.bp)
     app.register_blueprint(runtime_api.bp)
+    app.register_blueprint(config_routes.bp)
 
     app.before_request(request_id_middleware.before_request)
     app.after_request(request_id_middleware.after_request)

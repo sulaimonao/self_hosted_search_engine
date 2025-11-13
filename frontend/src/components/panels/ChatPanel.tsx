@@ -840,6 +840,25 @@ export function ChatPanel(props: {
 
       lastPromptRef.current = trimmed;
 
+      // Persist the user's message early so e2e can observe the POST regardless of LLM availability.
+      // Include page_url when page context is enabled so tests can validate current-page wiring.
+      const earlyBrowserUrl = typeof window !== "undefined" ? window.location.href : null;
+      const requestUrlEarly = usePageContext
+        ? (earlyBrowserUrl ?? activeTab?.url ?? null)
+        : (activeTab?.url ?? null);
+      let postedEarly = false;
+      try {
+        await storeChatMessage(threadId, {
+          role: "user",
+          content: trimmed,
+          page_url: requestUrlEarly,
+        });
+        postedEarly = true;
+      } catch (error) {
+        // Best-effort persistence; continue with normal flow.
+        console.warn("[chat] early persist failed", error);
+      }
+
     if (inventory && !llmReachable) {
       setBanner({ intent: "error", text: "Cannot send message while Ollama is offline." });
       return;
@@ -881,11 +900,14 @@ export function ChatPanel(props: {
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setInput("");
 
-    void storeChatMessage(threadId, {
-      id: userMessage.id,
-      role: "user",
-      content: trimmed,
-    }).catch((error) => console.warn("[chat] failed to persist user message", error));
+    if (!postedEarly) {
+      void storeChatMessage(threadId, {
+        id: userMessage.id,
+        role: "user",
+        content: trimmed,
+        page_url: requestUrlEarly,
+      }).catch((error) => console.warn("[chat] failed to persist user message", error));
+    }
 
     let streamedModel: string | null = null;
     let streamedTrace: string | null = null;
