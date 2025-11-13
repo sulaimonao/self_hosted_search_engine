@@ -186,3 +186,4 @@ codex_task_shadow_desktop.md
 !tools/diag/manifest.json
 !tools/e2e_diag.py
 !tools/__init__.py
+/frontend/test-results

@@ -30,15 +30,20 @@ async function dismissFirstRunWizardIfPresent(page) {
 async function openChatPanel(page) {
   await page.goto('/browser', { waitUntil: 'domcontentloaded' });
   await dismissFirstRunWizardIfPresent(page);
-  // The browser shell is temporarily wrapped with aria-hidden while the setup dialog is open,
-  // so fall back to a direct aria-label locator instead of getByRole.
-  const chatButton = page.locator('[aria-label="Open chat panel"]');
-  await chatButton.first().waitFor();
-  await page.waitForFunction(() => {
-    const target = document.querySelector('[aria-label="Open chat panel"]');
-    if (!target) return false;
-    return !target.closest('[aria-hidden="true"]');
-  });
+  // Prefer the accessible name lookup; if the button is temporarily
+  // hidden behind an aria-hidden wrapper, fall back to the aria-label
+  // locator once the wrapper is removed.
+  let chatButton = page.getByRole('button', { name: /open chat panel/i });
+  try {
+    await chatButton.first().waitFor({ state: 'visible', timeout: 5_000 });
+  } catch {
+    chatButton = page.locator('[aria-label="Open chat panel"]');
+    await page.waitForFunction(() => {
+      const target = document.querySelector('[aria-label="Open chat panel"]');
+      if (!target) return false;
+      return !target.closest('[aria-hidden="true"]');
+    });
+  }
   await chatButton.first().click();
   await page.waitForSelector('textarea');
 }
