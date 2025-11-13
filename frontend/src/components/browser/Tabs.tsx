@@ -7,7 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state/useAppStore";
-import { DEFAULT_NEW_TAB_URL } from "@/components/browser/constants";
+import { getDefaultNewTabUrl } from "@/components/browser/getDefaultNewTabUrl";
 
 export function TabsBar() {
   const { tabs, activeTabId, setActive, closeTab, addTab, incognitoMode, setIncognitoMode } = useAppStore(
@@ -88,7 +88,7 @@ export function TabsBar() {
       <Button
         size="icon"
         variant="outline"
-        onClick={() => addTab(DEFAULT_NEW_TAB_URL)}
+        onClick={() => addTab(getDefaultNewTabUrl())}
         title="New tab"
         aria-label="Open a new tab"
         aria-describedby={newTabDescriptionId}

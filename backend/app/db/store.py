@@ -569,9 +569,11 @@ class AppStateDB:
         category: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
+        indexed_only: bool = False,
     ) -> list[dict[str, Any]]:
         sql = [
-            "SELECT id, url, site, title, first_seen, last_seen, topics",
+            # expose whether a page has an embedding to reflect vector index presence
+            "SELECT id, url, site, title, first_seen, last_seen, topics, (embedding IS NOT NULL) AS indexed",
             "FROM pages",
         ]
         clauses: list[str] = []
@@ -588,6 +590,8 @@ class AppStateDB:
         if category:
             clauses.append("topics LIKE ?")
             params.append(f"%{category}%")
+        if indexed_only:
+            clauses.append("embedding IS NOT NULL")
         if clauses:
             sql.append("WHERE " + " AND ".join(clauses))
         sql.append("ORDER BY last_seen DESC")
@@ -600,6 +604,12 @@ class AppStateDB:
         for row in rows:
             record = dict(row)
             record["topics"] = self._decode_tags(row["topics"])
+            # coerce SQLite boolean to real bool
+            if "indexed" in record:
+                try:
+                    record["indexed"] = bool(record["indexed"])
+                except Exception:
+                    record["indexed"] = False
             if min_degree > 0:
                 degree = self._page_degree(row["url"])
                 if degree < min_degree:
@@ -621,23 +631,131 @@ class AppStateDB:
         *,
         site: str | None = None,
         limit: int = 200,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        category: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = [
-            "SELECT src_url, dst_url, relation",
-            "FROM link_edges",
+            "SELECT e.src_url, e.dst_url, e.relation",
+            "FROM link_edges AS e",
+            "LEFT JOIN pages AS ps ON ps.url = e.src_url",
+            "LEFT JOIN pages AS pd ON pd.url = e.dst_url",
         ]
+        clauses: list[str] = []
         params: list[Any] = []
         if site:
-            sql.append(
-                "WHERE src_url IN (SELECT url FROM pages WHERE site = ?) OR dst_url IN (SELECT url FROM pages WHERE site = ?)"
-            )
+            clauses.append("(ps.site = ? OR pd.site = ?)")
             params.extend([site, site])
+        if start:
+            clauses.append("((ps.last_seen IS NOT NULL AND ps.last_seen >= ?) OR (pd.last_seen IS NOT NULL AND pd.last_seen >= ?))")
+            params.extend([start.isoformat(), start.isoformat()])
+        if end:
+            clauses.append("((ps.last_seen IS NOT NULL AND ps.last_seen <= ?) OR (pd.last_seen IS NOT NULL AND pd.last_seen <= ?))")
+            params.extend([end.isoformat(), end.isoformat()])
+        if category:
+            clauses.append("((ps.topics IS NOT NULL AND ps.topics LIKE ?) OR (pd.topics IS NOT NULL AND pd.topics LIKE ?))")
+            like = f"%{category}%"
+            params.extend([like, like])
+        if clauses:
+            sql.append("WHERE " + " AND ".join(clauses))
         sql.append("LIMIT ?")
         params.append(max(1, min(limit, 2000)))
         query_sql = " ".join(sql)
         with self._lock, self._conn:
             rows = self._conn.execute(query_sql, params).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {"src_url": row["src_url"], "dst_url": row["dst_url"], "relation": row["relation"]}
+            for row in rows
+        ]
+
+    # -------------------------------
+    # Site-level graph (overview)
+    # -------------------------------
+    def graph_site_nodes(
+        self,
+        *,
+        limit: int = 200,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        min_degree: int = 0,
+    ) -> list[dict[str, Any]]:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        page_sql = [
+            "SELECT site, COUNT(*) AS pages, MAX(last_seen) AS last_seen,",
+            "SUM(CASE WHEN last_seen IS NOT NULL AND last_seen >= ? THEN 1 ELSE 0 END) AS fresh_7d",
+            "FROM pages WHERE site IS NOT NULL",
+        ]
+        params: list[Any] = [seven_days_ago.isoformat()]
+        if start:
+            page_sql.append("AND last_seen >= ?")
+            params.append(start.isoformat())
+        if end:
+            page_sql.append("AND last_seen <= ?")
+            params.append(end.isoformat())
+        page_sql.append("GROUP BY site ORDER BY pages DESC LIMIT ?")
+        params.append(max(1, min(limit, 2000)))
+        page_query = " ".join(page_sql)
+
+        degree_query = (
+            "SELECT p.site AS site, COUNT(*) AS degree "
+            "FROM link_edges AS e JOIN pages AS p ON (p.url = e.src_url OR p.url = e.dst_url) "
+            "WHERE p.site IS NOT NULL GROUP BY p.site"
+        )
+
+        with self._lock, self._conn:
+            page_rows = self._conn.execute(page_query, params).fetchall()
+            degree_rows = self._conn.execute(degree_query).fetchall()
+
+        degree_map: dict[str, int] = {str(r["site"]): int(r["degree"]) for r in degree_rows}
+        results: list[dict[str, Any]] = []
+        for row in page_rows:
+            site = str(row["site"])
+            degree = int(degree_map.get(site, 0))
+            if min_degree > 0 and degree < min_degree:
+                continue
+            results.append(
+                {
+                    "id": site,
+                    "site": site,
+                    "pages": int(row["pages"] or 0),
+                    "degree": degree,
+                    "fresh_7d": int(row["fresh_7d"] or 0),
+                    "last_seen": row["last_seen"],
+                }
+            )
+        return results
+
+    def graph_site_edges(
+        self,
+        *,
+        limit: int = 1000,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        min_weight: int = 1,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            "SELECT ps.site AS src_site, pd.site AS dst_site, COUNT(*) AS weight",
+            "FROM link_edges AS e",
+            "JOIN pages AS ps ON ps.url = e.src_url",
+            "JOIN pages AS pd ON pd.url = e.dst_url",
+            "WHERE ps.site IS NOT NULL AND pd.site IS NOT NULL AND ps.site != pd.site",
+        ]
+        params: list[Any] = []
+        if start:
+            sql.append("AND ps.last_seen >= ?")
+            params.append(start.isoformat())
+        if end:
+            sql.append("AND ps.last_seen <= ?")
+            params.append(end.isoformat())
+        sql.append("GROUP BY ps.site, pd.site HAVING COUNT(*) >= ? ORDER BY weight DESC LIMIT ?")
+        params.extend([max(1, min_weight), max(1, min(limit, 5000))])
+        query_sql = " ".join(sql)
+        with self._lock, self._conn:
+            rows = self._conn.execute(query_sql, params).fetchall()
+        return [
+            {"src_site": row["src_site"], "dst_site": row["dst_site"], "weight": int(row["weight"] or 0)}
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------
     # Crawl jobs

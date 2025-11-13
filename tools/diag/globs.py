@@ -54,6 +54,7 @@ FILE_GLOBS: Dict[str, Sequence[str]] = {
     "images": ("**/*.svg", "**/*.ico"),
     "artifacts": (
         "**/*.log",
+        "**/*.log.*",
         "**/*.jsonl",
         "**/*.ndjson",
         "**/*.duckdb",
@@ -67,12 +68,15 @@ FILE_GLOBS: Dict[str, Sequence[str]] = {
         "**/*.toc",
         "**/*.bin",
         "**/*.tsbuildinfo",
+        "**/*.pid",
         "*.log",
+        "*.log.*",
         "*.jsonl",
         "*.sqlite3",
         "*.sqlite3-shm",
         "*.sqlite3-wal",
         "*.tsbuildinfo",
+        "*.pid",
     ),
     "lockfiles": (
         "**/package-lock.json",

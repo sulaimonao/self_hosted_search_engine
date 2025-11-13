@@ -253,7 +253,7 @@ const RESOLVED_USER_AGENT = (() => {
   }
   return DESKTOP_USER_AGENT;
 })();
-const DEFAULT_TAB_URL = 'https://wikipedia.org';
+const DEFAULT_TAB_URL = `${FRONTEND_URL}/graph`;
 const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
 const NAV_STATE_CHANNEL = 'nav:state';

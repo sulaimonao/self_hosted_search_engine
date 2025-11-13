@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Verb } from "@/autopilot/executor";
 
 interface AutopilotStatusProps {

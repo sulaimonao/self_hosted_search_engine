@@ -39,7 +39,7 @@ import { DiagnosticsDrawer } from "@/components/browser/DiagnosticsDrawer";
 import { useSafeState, useEvent } from "@/lib/react-safe";
 import { useRenderLoopGuard } from "@/lib/useRenderLoopGuard";
 import { useSafeNavigate } from "@/lib/useSafeNavigate";
-import { DEFAULT_NEW_TAB_URL } from "@/components/browser/constants";
+import { getDefaultNewTabUrl } from "@/components/browser/getDefaultNewTabUrl";
 
 const ChatPanel = dynamic(
   () =>
@@ -511,7 +511,7 @@ function BrowserShellInner() {
 
     if (key === "t" && !event.shiftKey && !event.altKey) {
       prevent();
-      store.addTab(DEFAULT_NEW_TAB_URL);
+      store.addTab(getDefaultNewTabUrl());
       return;
     }
 

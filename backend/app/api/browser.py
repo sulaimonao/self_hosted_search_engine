@@ -375,6 +375,11 @@ def get_graph_nodes():
     category = request.args.get("category")
     start = _parse_iso_ts(request.args.get("from"))
     end = _parse_iso_ts(request.args.get("to"))
+    indexed_only = False
+    raw_indexed = request.args.get("indexed")
+    if isinstance(raw_indexed, str):
+        val = raw_indexed.strip().lower()
+        indexed_only = val in {"1", "true", "yes", "on"}
     nodes = state_db.graph_nodes(
         site=site,
         limit=limit,
@@ -382,6 +387,7 @@ def get_graph_nodes():
         category=category,
         start=start,
         end=end,
+        indexed_only=indexed_only,
     )
     return jsonify({"nodes": nodes})
 
@@ -391,7 +397,32 @@ def get_graph_edges():
     state_db = _state_db()
     site = request.args.get("site")
     limit = request.args.get("limit", type=int) or 200
-    edges = state_db.graph_edges(site=site, limit=limit)
+    category = request.args.get("category")
+    start = _parse_iso_ts(request.args.get("from"))
+    end = _parse_iso_ts(request.args.get("to"))
+    edges = state_db.graph_edges(site=site, limit=limit, start=start, end=end, category=category)
+    return jsonify({"edges": edges})
+
+
+@bp.get("/graph/sites")
+def get_graph_sites():
+    state_db = _state_db()
+    limit = request.args.get("limit", type=int) or 200
+    min_degree = request.args.get("min_degree", type=int) or 0
+    start = _parse_iso_ts(request.args.get("from"))
+    end = _parse_iso_ts(request.args.get("to"))
+    nodes = state_db.graph_site_nodes(limit=limit, start=start, end=end, min_degree=min_degree)
+    return jsonify({"nodes": nodes})
+
+
+@bp.get("/graph/site_edges")
+def get_graph_site_edges():
+    state_db = _state_db()
+    limit = request.args.get("limit", type=int) or 1000
+    min_weight = request.args.get("min_weight", type=int) or 1
+    start = _parse_iso_ts(request.args.get("from"))
+    end = _parse_iso_ts(request.args.get("to"))
+    edges = state_db.graph_site_edges(limit=limit, start=start, end=end, min_weight=min_weight)
     return jsonify({"edges": edges})
 
 

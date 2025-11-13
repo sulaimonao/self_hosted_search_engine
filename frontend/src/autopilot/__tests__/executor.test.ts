@@ -49,7 +49,6 @@ describe("AutopilotExecutor - New Verbs", () => {
   });
 
   it("accepts directive with new verbs", () => {
-    const executor = new AutopilotExecutor();
     const directive = {
       steps: [
         { type: "scroll" as const, selector: "#top" },
