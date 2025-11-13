@@ -559,7 +559,8 @@ def crawl_validation_endpoint():
             "queued": False,
             "detail": "URL validated; queue long-running crawls via /api/seeds or the Crawl Manager UI.",
         }
-        return jsonify(response), 204
+        # Return 200 to indicate successful validation with a JSON payload
+        return jsonify(response), 200
 
 
 @bp.get("/search")

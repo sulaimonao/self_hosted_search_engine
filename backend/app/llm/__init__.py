@@ -6,4 +6,3 @@ from __future__ import annotations
 # namespace shared LLM helpers such as the Ollama client.
 
 __all__: list[str] = []
-

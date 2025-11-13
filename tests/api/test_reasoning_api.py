@@ -52,7 +52,9 @@ def test_reasoning_requires_query():
 def test_reasoning_returns_autopilot_payload():
     app = _build_app()
     client = app.test_client()
-    response = client.post("/api/reasoning", json={"query": "browser test", "use_browser": True})
+    response = client.post(
+        "/api/reasoning", json={"query": "browser test", "use_browser": True}
+    )
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["use_browser"] is True

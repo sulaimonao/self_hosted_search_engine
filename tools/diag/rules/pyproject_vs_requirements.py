@@ -1,4 +1,5 @@
 """Check dependency drift between pyproject.toml and requirements.txt."""
+
 from __future__ import annotations
 
 import re

@@ -40,7 +40,10 @@ def _progress_bus() -> ProgressBus | None:
 
 def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
     if isinstance(value, Mapping):
-        return {str(k): _shrink_payload(v, max_string=max_string, max_items=max_items) for k, v in value.items()}
+        return {
+            str(k): _shrink_payload(v, max_string=max_string, max_items=max_items)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [
             _shrink_payload(item, max_string=max_string, max_items=max_items)
@@ -138,7 +141,11 @@ def _filter_directive_steps(directive: Directive) -> Dict[str, Any]:
                     break
                 selected.add(prefix_idx)
                 prefix_idx -= 1
-        elif step_type == "waitForStable" and last_headless_idx is not None and idx >= last_headless_idx:
+        elif (
+            step_type == "waitForStable"
+            and last_headless_idx is not None
+            and idx >= last_headless_idx
+        ):
             selected.add(idx)
 
     filtered = [steps[i].as_payload() for i in sorted(selected)]
@@ -247,7 +254,11 @@ def execute_headless():
             directive=filtered_directive,
             mode="headless",
             outcome="success" if result.ok else "fail",
-            details={"failed_step": result.failed_step} if result.failed_step is not None else {},
+            details=(
+                {"failed_step": result.failed_step}
+                if result.failed_step is not None
+                else {}
+            ),
             meta=meta,
         )
     except Exception:  # pragma: no cover
@@ -309,7 +320,11 @@ def headless_apply():
     context = body.get("context") if isinstance(body.get("context"), Mapping) else {}
 
     filtered_directive = _filter_directive_steps(directive)
-    steps = filtered_directive.get("steps") if isinstance(filtered_directive.get("steps"), list) else []
+    steps = (
+        filtered_directive.get("steps")
+        if isinstance(filtered_directive.get("steps"), list)
+        else []
+    )
     if not steps:
         return jsonify({"ok": False, "events": [], "error": "no_headless_steps"}), 400
 

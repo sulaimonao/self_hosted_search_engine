@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import queue
-import time
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
@@ -28,7 +27,6 @@ def stream_agent_logs() -> Response:
     def _generator():
         try:
             yield sse_format("{}", retry=2500)
-            idle_since = time.time()
             while True:
                 try:
                     event = queue_ref.get(timeout=25)
@@ -40,7 +38,10 @@ def stream_agent_logs() -> Response:
                     continue
                 if event.get("type") != "agent_step":
                     continue
-                if requested_chat and coerce_chat_identifier(event.get("chat_id")) != requested_chat:
+                if (
+                    requested_chat
+                    and coerce_chat_identifier(event.get("chat_id")) != requested_chat
+                ):
                     continue
                 payload = {
                     "type": "agent_step",
@@ -61,7 +62,6 @@ def stream_agent_logs() -> Response:
                 except (TypeError, ValueError):
                     chunk = json.dumps({"error": "serialization_failed"})
                 yield sse_format(chunk)
-                idle_since = time.time()
         finally:
             bus.unsubscribe(queue_ref)
 

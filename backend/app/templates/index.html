@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Control Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 2rem; }
+      .panel { border: 1px solid #ddd; padding: 1rem; border-radius: 8px; }
+      button { padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer; }
+      button:hover { background: #efefef; }
+    </style>
+  </head>
+  <body>
+    <h1>Self-Hosted Search Control Center</h1>
+    <div id="diagnostics-panel" class="panel">
+      <h2>Diagnostics</h2>
+      <p>Run backend diagnostics and download results.</p>
+      <p>
+        <button id="diagnostics-run" type="button">Run diagnostics</button>
+        <a id="diagnostics-download" href="#">Download Report</a>
+        <a id="diagnostics-log-download" href="#">Download Logs</a>
+      </p>
+    </div>
+  </body>
+</html>

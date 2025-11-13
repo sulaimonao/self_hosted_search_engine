@@ -1,4 +1,5 @@
 """Check package.json scripts for required desktop wiring."""
+
 from __future__ import annotations
 
 import json

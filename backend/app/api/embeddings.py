@@ -6,7 +6,10 @@ from typing import Sequence
 
 from flask import Blueprint, current_app, jsonify, request
 
-from backend.app.services.vector_index import EmbedderUnavailableError, VectorIndexService
+from backend.app.services.vector_index import (
+    EmbedderUnavailableError,
+    VectorIndexService,
+)
 
 bp = Blueprint("embeddings_api", __name__, url_prefix="/api/embeddings")
 
@@ -58,15 +61,19 @@ def build_embeddings():
         title = f"{namespace} snippet {index}"
         metadata = {"namespace": namespace, "source": "embeddings_api"}
         try:
-            result = service.upsert_document(text=text, url=doc_url, title=title, metadata=metadata)
+            result = service.upsert_document(
+                text=text, url=doc_url, title=title, metadata=metadata
+            )
         except EmbedderUnavailableError as exc:
             return (
-                jsonify({
-                    "error": "embedding_unavailable",
-                    "detail": exc.detail,
-                    "model": exc.model,
-                    "autopull_started": exc.autopull_started,
-                }),
+                jsonify(
+                    {
+                        "error": "embedding_unavailable",
+                        "detail": exc.detail,
+                        "model": exc.model,
+                        "autopull_started": exc.autopull_started,
+                    }
+                ),
                 503,
             )
         except ValueError as exc:

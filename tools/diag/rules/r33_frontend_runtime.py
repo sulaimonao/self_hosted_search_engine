@@ -1,5 +1,5 @@
-"""Detect runtime frontend errors in logs that indicate TDZ or React render loops.
-"""
+"""Detect runtime frontend errors in logs that indicate TDZ or React render loops."""
+
 from __future__ import annotations
 
 import re
@@ -22,7 +22,9 @@ def rule_frontend_runtime(context: RuleContext) -> Iterable[Finding]:
         "diagnostics/run_latest/frontend.log",
     ]
     # Also include any .log under logs/ or frontend/ that might be produced by runs
-    for relative in context.iter_patterns("logs/**/*.log", "frontend/**/*.log", "diagnostics/run_latest/**/*.log"):
+    for relative in context.iter_patterns(
+        "logs/**/*.log", "frontend/**/*.log", "diagnostics/run_latest/**/*.log"
+    ):
         candidates.append(relative)
 
     seen = set()

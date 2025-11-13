@@ -104,7 +104,9 @@ def _coerce_steps(raw: Any) -> List[Mapping[str, Any]]:
             prefix_idx = idx - 1
             while prefix_idx >= 0:
                 prev = candidates[prefix_idx]
-                step_type = str(prev.get("type") or prev.get("verb") or prev.get("action") or "").strip()
+                step_type = str(
+                    prev.get("type") or prev.get("verb") or prev.get("action") or ""
+                ).strip()
                 if step_type not in _PREFIX_TYPES:
                     break
                 selected_indices.add(prefix_idx)
@@ -113,7 +115,9 @@ def _coerce_steps(raw: Any) -> List[Mapping[str, Any]]:
     return [candidates[i] for i in sorted(selected_indices)]
 
 
-def _http_post(session: requests.Session, url: str, payload: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
+def _http_post(
+    session: requests.Session, url: str, payload: Dict[str, Any], *, timeout: float
+) -> Dict[str, Any]:
     response = session.post(url, json=payload, timeout=timeout)
     response.raise_for_status()
     try:
@@ -205,7 +209,10 @@ def run(
                 return _manager_call(manager, path, payload)
             except Exception as exc:
                 if path == "/session/start":
-                    LOGGER.warning("Agent browser manager unavailable; falling back to HTTP executor: %s", exc)
+                    LOGGER.warning(
+                        "Agent browser manager unavailable; falling back to HTTP executor: %s",
+                        exc,
+                    )
                     _emit(
                         {
                             "status": "warn",
@@ -251,10 +258,12 @@ def run(
             payload = _call("/session/start", {})
             sid = str(payload.get("sid") or payload.get("session_id") or "").strip()
             if not sid:
-                raise HeadlessExecutionError("agent browser did not return a session identifier")
+                raise HeadlessExecutionError(
+                    "agent browser did not return a session identifier"
+                )
             own_session = True
             result.session_id = sid
-            _emit({"status": "info", "message": f"Session started", "sid": sid})
+            _emit({"status": "info", "message": "Session started", "sid": sid})
         else:
             result.session_id = sid
 
@@ -275,7 +284,9 @@ def run(
                 if alias not in args and alias in raw_step:
                     args[alias] = raw_step[alias]
 
-            effective_args = {key: value for key, value in args.items() if value is not None}
+            effective_args = {
+                key: value for key, value in args.items() if value is not None
+            }
             _emit(
                 {
                     "status": "start",
@@ -313,7 +324,9 @@ def run(
                         # Reload failures should not block the planner; treat as best-effort.
                         response_payload = None
                     if isinstance(response_payload, dict):
-                        last_url = str(response_payload.get("url") or last_url or "") or None
+                        last_url = (
+                            str(response_payload.get("url") or last_url or "") or None
+                        )
                     result.last_state = {"url": last_url, "action": "reload"}
                 elif step_type == "click":
                     selector = str(effective_args.get("selector") or "").strip()
@@ -321,7 +334,9 @@ def run(
                     if not selector and not text:
                         raise ValueError("click requires selector or text")
 
-                    def _click_payload(*, selector_value: Optional[str], text_value: Optional[str]) -> Dict[str, Any]:
+                    def _click_payload(
+                        *, selector_value: Optional[str], text_value: Optional[str]
+                    ) -> Dict[str, Any]:
                         payload: Dict[str, Any] = {"sid": sid}
                         if selector_value:
                             payload["selector"] = selector_value
@@ -336,7 +351,9 @@ def run(
                     click_error: Optional[BaseException] = None
 
                     if selector:
-                        payload = _click_payload(selector_value=selector, text_value=text or None)
+                        payload = _click_payload(
+                            selector_value=selector, text_value=text or None
+                        )
                         response_payload = _call(
                             "/click",
                             payload,
@@ -345,19 +362,23 @@ def run(
                         # Text-only clicks attempt robust selectors before falling back
                         fallback_selectors = []
                         if text:
-                            safe_text = text.replace("\"", "\\\"")
+                            safe_text = text.replace('"', '\\"')
                             fallback_selectors = [
                                 f'button[aria-label*="{safe_text}"]',
                                 f'[role="button"]:has-text("{safe_text}")',
                             ]
                         for candidate in fallback_selectors:
                             try:
-                                payload = _click_payload(selector_value=candidate, text_value=text or None)
+                                payload = _click_payload(
+                                    selector_value=candidate, text_value=text or None
+                                )
                                 response_payload = _call(
                                     "/click",
                                     payload,
                                 )
-                            except Exception as exc:  # pragma: no cover - fallback progression
+                            except (
+                                Exception
+                            ) as exc:  # pragma: no cover - fallback progression
                                 click_error = exc
                                 _emit(
                                     {
@@ -373,7 +394,9 @@ def run(
                                 break
 
                         if response_payload is None:
-                            payload = _click_payload(selector_value=None, text_value=text or None)
+                            payload = _click_payload(
+                                selector_value=None, text_value=text or None
+                            )
                             response_payload = _call(
                                 "/click",
                                 payload,
@@ -384,7 +407,9 @@ def run(
                         if click_error is not None:
                             raise click_error
 
-                    last_url = str(response_payload.get("url") or last_url or "") or None
+                    last_url = (
+                        str(response_payload.get("url") or last_url or "") or None
+                    )
                     result.last_state = {
                         "url": last_url,
                         "action": "click",
@@ -402,7 +427,9 @@ def run(
                         "/type",
                         payload,
                     )
-                    last_url = str(response_payload.get("url") or last_url or "") or None
+                    last_url = (
+                        str(response_payload.get("url") or last_url or "") or None
+                    )
                     result.last_state = {
                         "url": last_url,
                         "action": "type",

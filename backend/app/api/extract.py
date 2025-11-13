@@ -26,7 +26,9 @@ def _should_capture_vision() -> bool:
     return flag in {"1", "true", "yes", "on"}
 
 
-def _extract_text(html: str, *, source_url: str | None = None) -> tuple[str, dict[str, Any]]:
+def _extract_text(
+    html: str, *, source_url: str | None = None
+) -> tuple[str, dict[str, Any]]:
     metadata: dict[str, Any] = {}
     with suppress(Exception):
         meta_json = trafilatura.extract(
@@ -77,7 +79,9 @@ def _dom_title(html: str) -> str | None:
     return None
 
 
-def _dom_extract(source_url: str, html: str, *, title_hint: str | None = None) -> dict[str, Any]:
+def _dom_extract(
+    source_url: str, html: str, *, title_hint: str | None = None
+) -> dict[str, Any]:
     text, meta = _extract_text(html, source_url=source_url)
     cleaned_text = text.strip() or _fallback_dom_text(html)
     payload: dict[str, Any] = {
@@ -207,12 +211,16 @@ def extract() -> Any:
     source_url = str(source_url_raw).strip() if isinstance(source_url_raw, str) else ""
     if not source_url:
         return (
-            jsonify({"error": "source_url_required", "message": "source_url is required"}),
+            jsonify(
+                {"error": "source_url_required", "message": "source_url is required"}
+            ),
             400,
         )
 
     title_hint_raw = payload.get("title")
-    title_hint = str(title_hint_raw).strip() if isinstance(title_hint_raw, str) else None
+    title_hint = (
+        str(title_hint_raw).strip() if isinstance(title_hint_raw, str) else None
+    )
     html_raw = payload.get("html")
     html_value = html_raw if isinstance(html_raw, str) and html_raw.strip() else None
 

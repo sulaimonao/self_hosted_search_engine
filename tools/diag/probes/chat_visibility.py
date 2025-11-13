@@ -5,6 +5,7 @@ model picker onModelChange is wired through ChatPanel -> ChatPanelUseChat -> Cop
 
 This helps detect cases where assistant/user messages render as empty strings.
 """
+
 from __future__ import annotations
 
 import re
@@ -46,9 +47,16 @@ def probe_chat_visibility(context: RuleContext) -> Iterable[Finding]:
         ]
 
     # Ensure parts[].text concatenation exists
-    parts_concat_present = bool(
-        re.search(r"parts\s*\?\s*parts\s*\.map\(.*text\s*\?\s*String\(p\.text", usechat_text, re.DOTALL)
-    ) or "textFromParts" in usechat_text
+    parts_concat_present = (
+        bool(
+            re.search(
+                r"parts\s*\?\s*parts\s*\.map\(.*text\s*\?\s*String\(p\.text",
+                usechat_text,
+                re.DOTALL,
+            )
+        )
+        or "textFromParts" in usechat_text
+    )
     if not parts_concat_present:
         findings.append(
             Finding(
@@ -56,7 +64,8 @@ def probe_chat_visibility(context: RuleContext) -> Iterable[Finding]:
                 rule_id="probe_chat_visibility",
                 severity=Severity.HIGH,
                 summary="ChatPanelUseChat does not join UIMessage.parts[].text before rendering.",
-                suggestion="Prefer parts.map(p => p.text).join("") and fallback to content/text.",
+                suggestion="Prefer parts.map(p => p.text).join("
+                ") and fallback to content/text.",
                 file=PANEL_USECHAT,
                 line_hint=_line(usechat_text, "parts"),
             )
@@ -79,7 +88,10 @@ def probe_chat_visibility(context: RuleContext) -> Iterable[Finding]:
     parent_text = context.read_text(PANEL_PARENT)
     if parent_text:
         # Ensure ChatPanel.tsx passes onModelChange to <ChatPanelUseChat />
-        if "<ChatPanelUseChat" in parent_text and "onModelChange={handleModelChange}" not in parent_text:
+        if (
+            "<ChatPanelUseChat" in parent_text
+            and "onModelChange={handleModelChange}" not in parent_text
+        ):
             findings.append(
                 Finding(
                     id=f"{PANEL_PARENT}:missing-onModelChange",
@@ -93,7 +105,10 @@ def probe_chat_visibility(context: RuleContext) -> Iterable[Finding]:
             )
 
         # Ensure send fallback model logic exists in ChatPanelUseChat
-    if usechat_text and not re.search(r"selectedModel\s*\|\|\s*inventory\?\.configured\?\.primary\s*\|\|\s*inventory\?\.configured\?\.fallback", usechat_text):
+    if usechat_text and not re.search(
+        r"selectedModel\s*\|\|\s*inventory\?\.configured\?\.primary\s*\|\|\s*inventory\?\.configured\?\.fallback",
+        usechat_text,
+    ):
         findings.append(
             Finding(
                 id=f"{PANEL_USECHAT}:missing-fallback-model",

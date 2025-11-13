@@ -1,4 +1,5 @@
 """Playwright parity probe for render loop guard diagnostics."""
+
 from __future__ import annotations
 
 import os
@@ -9,7 +10,9 @@ from ..engine import Finding, RuleContext, Severity
 from . import register_probe
 
 
-def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedProcess[str]:
+def _run_playwright(
+    root: os.PathLike[str], url: str
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PLAYWRIGHT_APP_URL"] = url
     command = [
@@ -17,11 +20,11 @@ def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedPro
         "--prefix",
         "frontend",
         "exec",
-    "--",
+        "--",
         "playwright",
         "test",
-    "-c",
-    "frontend/playwright.config.ts",
+        "-c",
+        "frontend/playwright.config.ts",
         "frontend/tests/e2e/render-loop.spec.ts",
         "--reporter",
         "line",
@@ -45,7 +48,9 @@ def probe_render_loop_guard(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []
 
     default_url = os.environ.get("PLAYWRIGHT_WEB_URL", "http://127.0.0.1:3100")
-    desktop_url = os.environ.get("DESKTOP_RENDERER_URL") or os.environ.get("RENDERER_URL")
+    desktop_url = os.environ.get("DESKTOP_RENDERER_URL") or os.environ.get(
+        "RENDERER_URL"
+    )
 
     targets = [("web", default_url)]
     if desktop_url and desktop_url.strip() and desktop_url.strip() != default_url:

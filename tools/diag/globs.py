@@ -4,6 +4,7 @@ This module centralises the default repository globs and file type metadata
 used by the diagnostics engine. The meta-rule relies on this list to detect new
 file types so keep it in sync when adding technologies to the project.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,4 +1,5 @@
 """Electron BrowserWindow preference checks."""
+
 from __future__ import annotations
 
 import re
@@ -79,7 +80,10 @@ def rule_webview_tag(context: RuleContext) -> Iterable[Finding]:
                         line_hint=line_no,
                     )
                 )
-            elif "webviewTag" in block and "true" not in block.split("webviewTag", 1)[1].split(",", 1)[0]:
+            elif (
+                "webviewTag" in block
+                and "true" not in block.split("webviewTag", 1)[1].split(",", 1)[0]
+            ):
                 line_no = text.count("\n", 0, pos) + 1
                 findings.append(
                     Finding(
@@ -147,8 +151,14 @@ def rule_node_integration(context: RuleContext) -> Iterable[Finding]:
     for relative in context.iter_patterns(*BROWSER_PATTERNS):
         text = context.read_text(relative)
         for pos, block in _iter_web_preferences(text):
-            node_enabled = "nodeIntegration" in block and "true" in block.split("nodeIntegration", 1)[1].split(",", 1)[0]
-            isolation_disabled = "contextIsolation" in block and "false" in block.split("contextIsolation", 1)[1].split(",", 1)[0]
+            node_enabled = (
+                "nodeIntegration" in block
+                and "true" in block.split("nodeIntegration", 1)[1].split(",", 1)[0]
+            )
+            isolation_disabled = (
+                "contextIsolation" in block
+                and "false" in block.split("contextIsolation", 1)[1].split(",", 1)[0]
+            )
             if node_enabled and isolation_disabled:
                 line_no = text.count("\n", 0, pos) + 1
                 findings.append(

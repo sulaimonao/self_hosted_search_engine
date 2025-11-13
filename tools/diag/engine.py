@@ -1,4 +1,5 @@
 """Diagnostics engine orchestrating the self-upgrading rule registry."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,18 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import yaml
 
@@ -110,7 +122,10 @@ def register(
     severity: Severity,
     smoke_only: bool = False,
     doc: Optional[str] = None,
-) -> Callable[[Callable[["RuleContext"], Iterable[Finding]]], Callable[["RuleContext"], Iterable[Finding]]]:
+) -> Callable[
+    [Callable[["RuleContext"], Iterable[Finding]]],
+    Callable[["RuleContext"], Iterable[Finding]],
+]:
     """Register a rule with the diagnostics engine."""
 
     def decorator(func: Callable[["RuleContext"], Iterable[Finding]]):
@@ -181,9 +196,17 @@ class SuppressionIndex:
             if not rule_id:
                 continue
             patterns = tuple(str(p) for p in raw.get("paths", []) if isinstance(p, str))
-            lines = tuple(int(l) for l in raw.get("lines", []) if isinstance(l, int))
+            lines = tuple(
+                int(line_no)
+                for line_no in raw.get("lines", [])
+                if isinstance(line_no, int)
+            )
             reason = str(raw.get("reason")) if raw.get("reason") else None
-            entries.append(SuppressionEntry(rule_id=rule_id, patterns=patterns, lines=lines, reason=reason))
+            entries.append(
+                SuppressionEntry(
+                    rule_id=rule_id, patterns=patterns, lines=lines, reason=reason
+                )
+            )
         return entries
 
     def _inline_for(self, relative_path: str) -> Dict[int, Set[str]]:
@@ -289,14 +312,19 @@ class Results:
         return {
             "schema_version": SCHEMA_VERSION,
             "summary": {
-                "counts": {severity.value: count for severity, count in self.counts_by_severity().items()},
+                "counts": {
+                    severity.value: count
+                    for severity, count in self.counts_by_severity().items()
+                },
                 "suppressed": len(self.suppressed),
                 "baseline": len(self.baseline_ignored),
                 "errors": len(self.errors),
             },
             "findings": [finding.to_dict() for finding in self.findings],
             "suppressed_findings": [finding.to_dict() for finding in self.suppressed],
-            "baseline_findings": [finding.to_dict() for finding in self.baseline_ignored],
+            "baseline_findings": [
+                finding.to_dict() for finding in self.baseline_ignored
+            ],
             "errors": self.errors,
         }
 
@@ -315,7 +343,9 @@ class Results:
         detail_lines: List[str] = []
         for finding in self.findings:
             location = f" ({finding.file}:{finding.line_hint})" if finding.file else ""
-            detail_lines.append(f"[{finding.rule_id}][{finding.severity.value}] {finding.summary}{location}")
+            detail_lines.append(
+                f"[{finding.rule_id}][{finding.severity.value}] {finding.summary}{location}"
+            )
             detail_lines.append(f"    Suggestion: {finding.suggestion}")
             if finding.evidence:
                 detail_lines.append(f"    Evidence: {finding.evidence}")
@@ -346,8 +376,14 @@ class Results:
         if self.findings:
             lines.append("## Findings")
             for finding in self.findings:
-                location = f" (`{finding.file}` line {finding.line_hint})" if finding.file else ""
-                lines.append(f"- **{finding.rule_id}** ({finding.severity.value}){location}: {finding.summary}")
+                location = (
+                    f" (`{finding.file}` line {finding.line_hint})"
+                    if finding.file
+                    else ""
+                )
+                lines.append(
+                    f"- **{finding.rule_id}** ({finding.severity.value}){location}: {finding.summary}"
+                )
                 lines.append(f"  - Suggestion: {finding.suggestion}")
                 if finding.evidence:
                     lines.append(f"  - Evidence: `{finding.evidence}`")
@@ -394,7 +430,9 @@ class RuleContext:
 
     def iter_patterns(self, *patterns: str) -> Iterator[str]:
         for relative in self.discovery.files:
-            if patterns and not any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
+            if patterns and not any(
+                fnmatch.fnmatch(relative, pattern) for pattern in patterns
+            ):
                 continue
             yield relative
 

@@ -1,4 +1,5 @@
 """Self-heal orchestrator: accepts BrowserIncident and returns an AutopilotDirective."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,7 @@ import logging
 import os
 import time
 from time import perf_counter
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping
 
 from flask import Blueprint, current_app, g, jsonify, request
 
@@ -30,14 +31,20 @@ bp = Blueprint("self_heal_api", __name__, url_prefix="/api")
 LOGGER = logging.getLogger(__name__)
 DEFAULT_VARIANT = "lite"
 _VALID_VARIANTS = {"lite", "fallback", "full"}
-_FULL_VARIANT_ALIASES = {"full", "deep", "repair", "plan", "apply", "default", "headless"}
+_FULL_VARIANT_ALIASES = {
+    "full",
+    "deep",
+    "repair",
+    "plan",
+    "apply",
+    "default",
+    "headless",
+}
 _DIAGNOSTIC_JOB_ID = "__diagnostics__"
 _PLAN_TIMEOUT_S = float(os.getenv("SELF_HEAL_PLAN_TIMEOUT_S", "20"))
 _FALLBACK_REASON = "fallback: reload"
 _TRUE_FLAGS = {"1", "true", "yes", "on"}
-_MODEL_FRIENDLY_HINT = (
-    "Self-heal model unavailable. Run `ollama pull gpt-oss:20b` or choose an installed Gemma3/GPT-OSS model."
-)
+_MODEL_FRIENDLY_HINT = "Self-heal model unavailable. Run `ollama pull gpt-oss:20b` or choose an installed Gemma3/GPT-OSS model."
 
 _OLLAMA_CLIENT = OllamaClient()
 
@@ -70,7 +77,10 @@ def _progress_bus() -> ProgressBus | None:
 
 def _shrink_payload(value: Any, *, max_string: int = 512, max_items: int = 20) -> Any:
     if isinstance(value, Mapping):
-        return {str(k): _shrink_payload(v, max_string=max_string, max_items=max_items) for k, v in value.items()}
+        return {
+            str(k): _shrink_payload(v, max_string=max_string, max_items=max_items)
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [
             _shrink_payload(item, max_string=max_string, max_items=max_items)
@@ -93,7 +103,9 @@ def _payload_preview(payload: Any, *, limit: int = 900) -> str:
     return rendered
 
 
-def _emit(stage: str, message: str, *, payload: Any | None = None, **extra: Any) -> None:
+def _emit(
+    stage: str, message: str, *, payload: Any | None = None, **extra: Any
+) -> None:
     bus = _progress_bus()
     if bus is None:
         return
@@ -132,7 +144,9 @@ def _flag(value: str | None) -> bool:
     return value.strip().lower() in _TRUE_FLAGS
 
 
-def _fallback_directive(reason: str | None = None, *, incident: Incident | None = None) -> DirectiveClampResult:
+def _fallback_directive(
+    reason: str | None = None, *, incident: Incident | None = None
+) -> DirectiveClampResult:
     final_reason = reason or _FALLBACK_REASON
     if incident is not None:
         url = (incident.url or "").strip()
@@ -141,7 +155,9 @@ def _fallback_directive(reason: str | None = None, *, incident: Incident | None 
         elif not reason:
             final_reason = "Reload current page"
     directive = Directive(reason=final_reason, steps=[Step(type="reload")])
-    return DirectiveClampResult(directive=directive, dropped_steps=[], fallback_applied=True)
+    return DirectiveClampResult(
+        directive=directive, dropped_steps=[], fallback_applied=True
+    )
 
 
 def _plan_with_llm(
@@ -168,7 +184,11 @@ def _plan_with_llm(
 
     preferred_env = os.getenv("SELF_HEAL_MODEL")
     try:
-        preferred_model = normalize_model_alias(preferred_env) if preferred_env else normalize_model_alias(None)
+        preferred_model = (
+            normalize_model_alias(preferred_env)
+            if preferred_env
+            else normalize_model_alias(None)
+        )
     except ValueError:
         preferred_model = normalize_model_alias(None)
 
@@ -224,12 +244,18 @@ def self_heal():
     variant = _coerce_variant(request.args.get("variant"))
     incident_model = clamp_incident(request.get_json(silent=True) or {})
     incident_payload = incident_model.as_payload()
-    trace_id = getattr(g, "trace_id", None) or request.headers.get("X-Trace-Id") or request.headers.get("X-Request-Id")
+    trace_id = (
+        getattr(g, "trace_id", None)
+        or request.headers.get("X-Trace-Id")
+        or request.headers.get("X-Request-Id")
+    )
     if trace_id and getattr(g, "trace_id", None) != trace_id:
         g.trace_id = trace_id
         g.request_id = trace_id
 
-    _emit("payload.pre", "incident captured", payload=incident_payload, trace_id=trace_id)
+    _emit(
+        "payload.pre", "incident captured", payload=incident_payload, trace_id=trace_id
+    )
     _emit(
         "planner.start",
         f"Planner invoked (variant={variant}, apply={apply_flag})",
@@ -255,10 +281,20 @@ def self_heal():
                 "steps": raw_steps,
             }
         )
-        planner_meta = {"status": "rule", "rule_id": rule_id, "model": None, "took_ms": 0}
+        planner_meta = {
+            "status": "rule",
+            "rule_id": rule_id,
+            "model": None,
+            "took_ms": 0,
+        }
         _emit("planner.ok", f"rule_hit:{rule_id}", rule_id=rule_id, trace_id=trace_id)
         if directive_result.fallback_applied:
-            _emit("planner.fallback", "Rulepack produced fallback reload().", rule_id=rule_id, trace_id=trace_id)
+            _emit(
+                "planner.fallback",
+                "Rulepack produced fallback reload().",
+                rule_id=rule_id,
+                trace_id=trace_id,
+            )
             try:
                 record_event("planner_fallback_count", bus=bus)
             except Exception:  # pragma: no cover - metrics best effort
@@ -270,7 +306,9 @@ def self_heal():
     else:
         plan_started = perf_counter()
         planner_timeout = _planner_timeout()
-        force_fallback = variant in {"lite", "fallback"} or _flag(os.getenv("SELF_HEAL_FORCE_FALLBACK"))
+        force_fallback = variant in {"lite", "fallback"} or _flag(
+            os.getenv("SELF_HEAL_FORCE_FALLBACK")
+        )
 
         if force_fallback:
             directive_result = _fallback_directive(incident=incident_model)
@@ -289,7 +327,9 @@ def self_heal():
                 "Planner prompts prepared.",
                 system_chars=len(system_prompt),
                 user_chars=len(user_prompt),
-                preview=_payload_preview({"system": system_prompt, "user": user_prompt}),
+                preview=_payload_preview(
+                    {"system": system_prompt, "user": user_prompt}
+                ),
                 trace_id=trace_id,
             )
             directive_result, planner_meta = _plan_with_llm(
@@ -438,7 +478,9 @@ def self_heal():
     if episode_id:
         response_meta["episode_id"] = episode_id
 
-    _emit("payload.post", f"directive ready ({mode})", payload=response, trace_id=trace_id)
+    _emit(
+        "payload.post", f"directive ready ({mode})", payload=response, trace_id=trace_id
+    )
     return jsonify(response), 200
 
 

@@ -190,7 +190,11 @@ def _check_llm() -> dict[str, Any]:
 
     payload_summary: dict[str, Any] = {
         "host": health_payload.get("host")
-        or (models_payload.get("ollama_host") if isinstance(models_payload, dict) else None),
+        or (
+            models_payload.get("ollama_host")
+            if isinstance(models_payload, dict)
+            else None
+        ),
         "health": health_payload,
         "reachable": reachable,
     }

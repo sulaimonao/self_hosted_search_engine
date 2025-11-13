@@ -44,7 +44,9 @@ def test_accumulator_appends_incremental_tokens() -> None:
         (("A", "B", "C"), "ABC"),
     ],
 )
-def test_accumulator_retains_full_answer(sequence: tuple[str, ...], expected: str) -> None:
+def test_accumulator_retains_full_answer(
+    sequence: tuple[str, ...], expected: str
+) -> None:
     accumulator = _StreamAccumulator()
 
     for chunk in sequence:

@@ -1,4 +1,5 @@
 """Flag hot polling loops that can overwhelm the renderer or backend."""
+
 from __future__ import annotations
 
 import re
@@ -7,7 +8,12 @@ from typing import Iterable, List
 from ..engine import Finding, RuleContext, Severity, register
 from ._react_utils import position_to_line, split_call_arguments
 
-TARGET_PATTERNS = ("frontend/**/*.tsx", "frontend/**/*.ts", "frontend/**/*.jsx", "frontend/**/*.js")
+TARGET_PATTERNS = (
+    "frontend/**/*.tsx",
+    "frontend/**/*.ts",
+    "frontend/**/*.jsx",
+    "frontend/**/*.js",
+)
 INTERVAL_CALL_RE = re.compile(r"\bset(?P<kind>Interval|Timeout)\s*\(")
 REFRESH_INTERVAL_RE = re.compile(r"refreshInterval\s*:\s*(\d+)")
 MIN_SAFE_INTERVAL_MS = 3000

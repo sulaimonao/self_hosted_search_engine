@@ -1,4 +1,5 @@
 """Probe registration helpers for targeted diagnostics."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,7 +27,10 @@ def register_probe(
     description: str,
     severity: Severity = Severity.HIGH,
     smoke_only: bool = False,
-) -> Callable[[Callable[[RuleContext], Iterable[Finding]]], Callable[[RuleContext], Iterable[Finding]]]:
+) -> Callable[
+    [Callable[[RuleContext], Iterable[Finding]]],
+    Callable[[RuleContext], Iterable[Finding]],
+]:
     """Register a probe and expose it as a diagnostic rule.
 
     Probes can be marked smoke_only so they're only executed when the engine
@@ -34,7 +38,9 @@ def register_probe(
     """
 
     def decorator(func: Callable[[RuleContext], Iterable[Finding]]):
-        register(probe_id, description=description, severity=severity, smoke_only=smoke_only)(func)
+        register(
+            probe_id, description=description, severity=severity, smoke_only=smoke_only
+        )(func)
         if probe_id in _PROBES:
             raise ValueError(f"Probe '{probe_id}' already registered")
         _PROBES[probe_id] = Probe(

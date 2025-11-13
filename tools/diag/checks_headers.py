@@ -1,4 +1,5 @@
 """Header manipulation diagnostics."""
+
 from __future__ import annotations
 
 import re
@@ -33,7 +34,9 @@ def rule_headers_preserved(context: RuleContext) -> Iterable[Finding]:
             segment = text[match.start() : match.start() + 400]
             if "requestHeaders" not in segment:
                 continue
-            has_accept_language = "Accept-Language" in segment or "accept-language" in segment
+            has_accept_language = (
+                "Accept-Language" in segment or "accept-language" in segment
+            )
             has_ua_ch = "sec-ch-ua" in segment.lower()
             if has_accept_language and has_ua_ch:
                 continue

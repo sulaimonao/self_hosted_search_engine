@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, request
 
-from ..services.agent_browser import AgentBrowserManager, BrowserActionError, SessionNotFoundError
+from ..services.agent_browser import (
+    AgentBrowserManager,
+    BrowserActionError,
+    SessionNotFoundError,
+)
 
 bp = Blueprint("agent_browser", __name__, url_prefix="/api/agent")
 
@@ -13,7 +17,9 @@ def _manager() -> AgentBrowserManager:
     if not current_app.config.get("AGENT_BROWSER_ENABLED", False):
         raise RuntimeError("Agent browser manager unavailable")
 
-    manager: AgentBrowserManager | None = current_app.config.get("AGENT_BROWSER_MANAGER")
+    manager: AgentBrowserManager | None = current_app.config.get(
+        "AGENT_BROWSER_MANAGER"
+    )
     if manager is None:
         timeout_value = current_app.config.get("AGENT_BROWSER_DEFAULT_TIMEOUT_S", 15)
         try:
@@ -27,19 +33,25 @@ def _manager() -> AgentBrowserManager:
         else:
             headless_flag = bool(headless_value)
 
-        action_timeout_value = current_app.config.get("AGENT_BROWSER_ACTION_TIMEOUT_MS", 5_000)
+        action_timeout_value = current_app.config.get(
+            "AGENT_BROWSER_ACTION_TIMEOUT_MS", 5_000
+        )
         try:
             action_timeout_ms = int(action_timeout_value)
         except (TypeError, ValueError):
             action_timeout_ms = 5_000
 
-        navigation_timeout_value = current_app.config.get("AGENT_BROWSER_NAV_TIMEOUT_MS", 15_000)
+        navigation_timeout_value = current_app.config.get(
+            "AGENT_BROWSER_NAV_TIMEOUT_MS", 15_000
+        )
         try:
             navigation_timeout_ms = int(navigation_timeout_value)
         except (TypeError, ValueError):
             navigation_timeout_ms = 15_000
 
-        idle_timeout_value = current_app.config.get("AGENT_BROWSER_IDLE_TIMEOUT_S", 120.0)
+        idle_timeout_value = current_app.config.get(
+            "AGENT_BROWSER_IDLE_TIMEOUT_S", 120.0
+        )
         try:
             idle_timeout_s = float(idle_timeout_value)
         except (TypeError, ValueError):

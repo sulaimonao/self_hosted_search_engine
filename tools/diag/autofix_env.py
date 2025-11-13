@@ -1,4 +1,5 @@
 """Autofix helpers for documenting environment variables."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -105,7 +106,9 @@ def apply_autofix(root: Path) -> List[AutofixEntry]:
     app_config_keys = load_app_config_keys(root)
 
     missing = sorted(
-        key for key, paths in references.items() if key not in documented and key not in app_config_keys
+        key
+        for key, paths in references.items()
+        if key not in documented and key not in app_config_keys
     )
     if not missing:
         return []
@@ -124,7 +127,9 @@ def apply_autofix(root: Path) -> List[AutofixEntry]:
             hint = _format_reference_hint(refs)
             handle.write(f"# Added by diagnostics auto-fix: referenced in {hint}\n")
             handle.write(f"{key}=changeme\n")
-            appended.append(AutofixEntry(key=key, target=target, references=tuple(sorted(refs))))
+            appended.append(
+                AutofixEntry(key=key, target=target, references=tuple(sorted(refs)))
+            )
     return appended
 
 

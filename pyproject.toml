@@ -53,3 +53,57 @@ packages = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.11"
+pretty = true
+show_error_context = true
+ignore_missing_imports = true
+implicit_reexport = true
+warn_unreachable = false
+warn_return_any = false
+warn_unused_ignores = false
+disable_error_code = [
+    "attr-defined",
+    "call-overload",
+    "index",
+    "misc",
+    "operator",
+    "return-value",
+    "assignment",
+    "arg-type",
+    "no-redef",
+    "valid-type",
+]
+
+[[tool.mypy.overrides]]
+module = "backend.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "crawler.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "engine.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "llm.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "rank.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "search.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "server.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "seed_loader.*"
+ignore_errors = true

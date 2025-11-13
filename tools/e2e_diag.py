@@ -1,4 +1,5 @@
 """CLI entry point for repository diagnostics."""
+
 from __future__ import annotations
 
 import argparse
@@ -18,9 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.diag import DiagnosticsEngine, ExitCode, Severity, parse_fail_on
-from tools.diag.autofix_env import apply_autofix as apply_env_autofix
-from tools.diag.globs import ALL_PATTERNS, EXCLUDE_DIRS
+from tools.diag import (
+    DiagnosticsEngine,
+    ExitCode,
+    Severity,
+    parse_fail_on,
+)  # noqa: E402
+from tools.diag.autofix_env import apply_autofix as apply_env_autofix  # noqa: E402
+from tools.diag.globs import ALL_PATTERNS, EXCLUDE_DIRS  # noqa: E402
 
 
 def _collect_mtimes(root: Path) -> Dict[str, float]:
@@ -29,7 +35,9 @@ def _collect_mtimes(root: Path) -> Dict[str, float]:
         dirnames[:] = [name for name in dirnames if name not in EXCLUDE_DIRS]
         for filename in filenames:
             relative = Path(dirpath, filename).relative_to(root).as_posix()
-            if not ALL_PATTERNS or any(fnmatch.fnmatch(relative, pattern) for pattern in ALL_PATTERNS):
+            if not ALL_PATTERNS or any(
+                fnmatch.fnmatch(relative, pattern) for pattern in ALL_PATTERNS
+            ):
                 try:
                     mtimes[relative] = (Path(dirpath) / filename).stat().st_mtime
                 except FileNotFoundError:
@@ -37,7 +45,9 @@ def _collect_mtimes(root: Path) -> Dict[str, float]:
     return mtimes
 
 
-def _render_output(format_name: str, artefacts: Dict[str, str], results_dict: Dict[str, object]) -> str:
+def _render_output(
+    format_name: str, artefacts: Dict[str, str], results_dict: Dict[str, object]
+) -> str:
     if format_name == "text":
         return artefacts.get("summary.txt", "")
     if format_name == "md":
@@ -74,10 +84,14 @@ def run_once(
     if results.errors:
         for error in results.errors:
             print(f"[diag:error] {error}", file=sys.stderr)
+
     # Extra runtime log checks: scan frontend logs for TDZ or React update-depth errors
     def _scan_frontend_logs() -> ExitCode:
         patterns = [
-            (r"Cannot access '[^']+' before initialization", "TDZ (Temporal Dead Zone) error"),
+            (
+                r"Cannot access '[^']+' before initialization",
+                "TDZ (Temporal Dead Zone) error",
+            ),
             (r"Maximum update depth exceeded", "React maximum update depth error"),
         ]
         candidates = [
@@ -101,7 +115,10 @@ def run_once(
                 for m in re.finditer(regex, text):
                     loc = m.start()
                     snippet = text[max(0, loc - 80) : min(len(text), loc + 80)].strip()
-                    print(f"[diag:frontend-runtime] {desc} in {path}: {m.group(0)}", file=sys.stderr)
+                    print(
+                        f"[diag:frontend-runtime] {desc} in {path}: {m.group(0)}",
+                        file=sys.stderr,
+                    )
                     print(snippet, file=sys.stderr)
                     found_any = True
         return ExitCode.ERROR if found_any else exit_code
@@ -120,7 +137,11 @@ def _run_stream_probe() -> None:
         import requests
 
         url = "http://127.0.0.1:3100/api/chat"
-        payload = {"model": "gpt-oss", "messages": [{"role": "user", "content": "Hello from diag probe"}], "stream": True}
+        payload = {
+            "model": "gpt-oss",
+            "messages": [{"role": "user", "content": "Hello from diag probe"}],
+            "stream": True,
+        }
         # fire-and-forget: attempt to read a small portion then close
         resp = requests.post(url, json=payload, stream=True, timeout=5)
         try:
@@ -160,7 +181,9 @@ def _enforce_timeout(seconds: Optional[int]) -> Iterator[None]:
 
     triggered = {"value": False}
 
-    def _handle_alarm(signum: int, frame: object) -> None:  # pragma: no cover - signal path
+    def _handle_alarm(
+        signum: int, frame: object
+    ) -> None:  # pragma: no cover - signal path
         raise DiagnosticsTimeout(f"Diagnostics timed out after {seconds} seconds")
 
     if hasattr(signal, "SIGALRM"):
@@ -173,6 +196,7 @@ def _enforce_timeout(seconds: Optional[int]) -> Iterator[None]:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, previous)
     else:  # pragma: no cover - non-POSIX fallback
+
         def _interrupt() -> None:
             triggered["value"] = True
             threading.interrupt_main()
@@ -243,8 +267,12 @@ def _normalise_paths(lines: Iterable[str]) -> Set[str]:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run repository diagnostics")
-    parser.add_argument("--smoke", action="store_true", help="Enable optional runtime smoke checks")
-    parser.add_argument("--watch", action="store_true", help="Re-run diagnostics on file changes")
+    parser.add_argument(
+        "--smoke", action="store_true", help="Enable optional runtime smoke checks"
+    )
+    parser.add_argument(
+        "--watch", action="store_true", help="Re-run diagnostics on file changes"
+    )
     parser.add_argument(
         "--fail-on",
         default=Severity.HIGH,
@@ -258,7 +286,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--only", help="Comma separated list of rule IDs to run")
     parser.add_argument("--skip", help="Comma separated list of rule IDs to skip")
-    parser.add_argument("--baseline", type=Path, help="Baseline JSON file to ignore historical findings")
+    parser.add_argument(
+        "--baseline", type=Path, help="Baseline JSON file to ignore historical findings"
+    )
     parser.add_argument(
         "--format",
         choices=("text", "md", "json", "sarif"),
@@ -282,7 +312,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"[diag:error] {exc}", file=sys.stderr)
             return 2
         if not scope:
-            print("[diag] No files changed since the provided reference; exiting early.")
+            print(
+                "[diag] No files changed since the provided reference; exiting early."
+            )
             return 0
 
     if args.autofix:
@@ -295,7 +327,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                     target_relative = target.relative_to(Path.cwd())
                 except ValueError:
                     target_relative = target
-                refs = ", ".join(entry.references) if entry.references else "unknown reference"
+                refs = (
+                    ", ".join(entry.references)
+                    if entry.references
+                    else "unknown reference"
+                )
                 print(f"- `{entry.key}` → `{target_relative}` (refs: {refs})")
         else:
             print("- No missing environment keys detected.")
@@ -345,7 +381,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             time.sleep(1.0)
             current_mtimes = _collect_mtimes(Path.cwd())
             if current_mtimes != previous_mtimes:
-                print("\n[diag] Change detected; re-running diagnostics...", file=sys.stderr)
+                print(
+                    "\n[diag] Change detected; re-running diagnostics...",
+                    file=sys.stderr,
+                )
                 try:
                     with _enforce_timeout(timeout_seconds):
                         exit_code = execute()

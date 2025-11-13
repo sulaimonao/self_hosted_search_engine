@@ -1,4 +1,5 @@
 """Meta diagnostics that keep the rule engine evolving with the repo."""
+
 from __future__ import annotations
 
 import os

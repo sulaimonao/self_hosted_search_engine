@@ -17,7 +17,9 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []
 
     decoder_ok = False
-    for relative in context.iter_patterns("desktop/**/main.ts", "desktop/**/main.js", "electron/main.js"):
+    for relative in context.iter_patterns(
+        "desktop/**/main.ts", "desktop/**/main.js", "electron/main.js"
+    ):
         text = context.read_text(relative)
         if "TextDecoder" in text and "stream: true" in text:
             decoder_ok = True
@@ -34,7 +36,9 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
         )
 
     preload_ok = False
-    for relative in context.iter_patterns("desktop/**/preload.ts", "desktop/**/preload.js", "electron/preload.js"):
+    for relative in context.iter_patterns(
+        "desktop/**/preload.ts", "desktop/**/preload.js", "electron/preload.js"
+    ):
         text = context.read_text(relative)
         if "exposeInMainWorld('llm'" in text and "onFrame" in text and "stream" in text:
             preload_ok = True
@@ -76,7 +80,9 @@ def rule_stream_integrity(context: RuleContext) -> Iterable[Finding]:
 
     if context.smoke and hook_text:
         if "frames" not in hook_text or (
-            "frames" in hook_text and "frames + 1" not in hook_text and "frames++" not in hook_text
+            "frames" in hook_text
+            and "frames + 1" not in hook_text
+            and "frames++" not in hook_text
         ):
             findings.append(
                 Finding(
@@ -183,7 +189,10 @@ def rule_chat_message_guard(_: RuleContext) -> Iterable[Finding]:
     chat_module.requests.post = _fake_post
     try:
         with app.test_client() as client:
-            response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "hi"}], "stream": False})
+            response = client.post(
+                "/api/chat",
+                json={"messages": [{"role": "user", "content": "hi"}], "stream": False},
+            )
     finally:
         chat_module.requests.post = original_post
 
@@ -246,7 +255,9 @@ def rule_llm_models_alias(_: RuleContext) -> Iterable[Finding]:
 
     engine_config = SimpleNamespace(
         ollama=SimpleNamespace(base_url="http://ollama"),
-        models=SimpleNamespace(llm_primary="mock-primary", llm_fallback="mock-fallback", embed="mock-embed"),
+        models=SimpleNamespace(
+            llm_primary="mock-primary", llm_fallback="mock-fallback", embed="mock-embed"
+        ),
     )
     app.config.update(
         RAG_ENGINE_CONFIG=engine_config,

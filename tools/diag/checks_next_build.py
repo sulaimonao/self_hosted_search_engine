@@ -1,4 +1,5 @@
 """Next.js build configuration diagnostics."""
+
 from __future__ import annotations
 
 import re
@@ -8,7 +9,9 @@ from .engine import Finding, RuleContext, Severity, register
 
 XFO_RE = re.compile(r"X-Frame-Options", re.IGNORECASE)
 CSP_RE = re.compile(r"Content-Security-Policy", re.IGNORECASE)
-FRAME_DENY_RE = re.compile(r"frame-ancestors[^;]*('none'|none|deny|DENY)", re.IGNORECASE)
+FRAME_DENY_RE = re.compile(
+    r"frame-ancestors[^;]*('none'|none|deny|DENY)", re.IGNORECASE
+)
 IMAGES_RE = re.compile(r"images\s*:\s*\{[^}]*domains\s*:\s*\[", re.DOTALL)
 REMOTE_IMAGE_RE = re.compile(r"<Image[^>]*src=\s*['\"]https?://([a-zA-Z0-9.-]+)")
 
@@ -25,7 +28,9 @@ def rule_next_config(context: RuleContext) -> Iterable[Finding]:
         "frontend/**/next.config.*",
     )
     remote_domains: set[str] = set()
-    for relative in context.iter_patterns("frontend/src/**/*.tsx", "frontend/src/**/*.ts", "frontend/src/**/*.jsx"):
+    for relative in context.iter_patterns(
+        "frontend/src/**/*.tsx", "frontend/src/**/*.ts", "frontend/src/**/*.jsx"
+    ):
         text = context.read_text(relative)
         for match in REMOTE_IMAGE_RE.finditer(text):
             remote_domains.add(match.group(1))
@@ -47,7 +52,9 @@ def rule_next_config(context: RuleContext) -> Iterable[Finding]:
                     )
                 )
         if CSP_RE.search(text) and FRAME_DENY_RE.search(text):
-            line_no = text.count("\n", 0, text.find("Content-Security-Policy")) + line_base
+            line_no = (
+                text.count("\n", 0, text.find("Content-Security-Policy")) + line_base
+            )
             findings.append(
                 Finding(
                     id=f"{relative}:csp:{line_no}",

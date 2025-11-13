@@ -1,4 +1,5 @@
 """Flag render-time access to browser-only globals that break hydration."""
+
 from __future__ import annotations
 
 import re
@@ -7,7 +8,12 @@ from typing import Iterable, List
 from ..engine import Finding, RuleContext, Severity, register
 from ._react_utils import inside_effect, iter_effect_blocks, position_to_line
 
-TARGET_PATTERNS = ("frontend/**/*.tsx", "frontend/**/*.ts", "frontend/**/*.jsx", "frontend/**/*.js")
+TARGET_PATTERNS = (
+    "frontend/**/*.tsx",
+    "frontend/**/*.ts",
+    "frontend/**/*.jsx",
+    "frontend/**/*.js",
+)
 TOKEN_RE = re.compile(r"\b(window|document|navigator|localStorage|sessionStorage)\b")
 
 
@@ -38,6 +44,7 @@ def rule_hydration_risks(context: RuleContext) -> Iterable[Finding]:
             # skip if inside a React effect block (we expect guarded runtime use there)
             if inside_effect(index, blocks):
                 continue
+
             # simple heuristic: skip if this occurrence is inside a string literal
             # by checking for a matching quote before and after the index
             def _inside_string(idx: int) -> bool:

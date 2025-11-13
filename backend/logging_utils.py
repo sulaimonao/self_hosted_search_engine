@@ -22,8 +22,7 @@ except ImportError:
 LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "10485760"))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "7"))
 
-LOG_DIR = os.getenv("LOG_DIR", "data/telemetry")
-LOG_PATH = os.path.join(LOG_DIR, "events.ndjson")
+DEFAULT_LOG_DIR = os.getenv("LOG_DIR", "data/telemetry")
 MAX_FIELD_BYTES = int(os.getenv("LOG_MAX_FIELD_BYTES", "4096"))
 LOG_SPLIT_BY_FEATURE = os.getenv("LOG_SPLIT_BY_FEATURE", "1").lower() in {"1", "true", "yes", "on"}
 LOG_ROTATE_DAILY = os.getenv("LOG_ROTATE_DAILY", "1").lower() in {"1", "true", "yes", "on"}
@@ -42,7 +41,7 @@ SENSITIVE_KEYS = {
 }
 NOISY_KEYS = {"html", "body", "content", "text", "embedding", "stack"}
 
-os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(DEFAULT_LOG_DIR, exist_ok=True)
 
 _lock = threading.Lock()
 
@@ -160,9 +159,19 @@ def _emit_console(ev: Dict[str, Any]) -> None:
 
 
 def _emit_file(ev: Dict[str, Any]) -> None:
+    # Resolve log dir dynamically so tests can override LOG_DIR at runtime
+    log_dir = os.getenv("LOG_DIR", DEFAULT_LOG_DIR)
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception:
+        # Fall back to default location if override invalid
+        log_dir = DEFAULT_LOG_DIR
+        os.makedirs(log_dir, exist_ok=True)
+
+    log_path = os.path.join(log_dir, "events.ndjson")
     line = json.dumps(ev, ensure_ascii=False)
     with _lock:
-        with io.open(LOG_PATH, "a", encoding="utf-8") as handle:
+        with io.open(log_path, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
 
     # Optionally mirror to a per-feature file to keep files smaller and easier to scan
@@ -178,7 +187,7 @@ def _emit_file(ev: Dict[str, Any]) -> None:
                     feature = event_name
                 else:
                     feature = "app"
-            feature_dir = os.path.join(LOG_DIR, feature)
+            feature_dir = os.path.join(log_dir, feature)
             os.makedirs(feature_dir, exist_ok=True)
             if LOG_ROTATE_DAILY:
                 # daily file naming: YYYY-MM-DD.ndjson

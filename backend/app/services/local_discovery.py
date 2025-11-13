@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 from pdfminer.high_level import extract_text as pdf_extract_text
@@ -47,6 +47,7 @@ def _safe_log(level: str, msg: str, *args, **kwargs) -> None:
         except Exception:
             # Best-effort restore; ignore on failure.
             pass
+
 
 SUPPORTED_EXTENSIONS = {
     ".pdf",

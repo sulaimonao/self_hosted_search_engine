@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import time
-from pathlib import Path
-from types import SimpleNamespace
-
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,7 +26,9 @@ def app_context(tmp_path):
     import sqlite3
 
     conn = sqlite3.connect(sqlite_path)
-    conn.execute("CREATE TABLE documents(id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT)")
+    conn.execute(
+        "CREATE TABLE documents(id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT)"
+    )
     conn.execute("INSERT INTO documents(url) VALUES('https://example.com')")
     conn.commit()
     conn.close()

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import types
-
 import pytest
 
 from backend.app.services import fallbacks
@@ -45,7 +43,7 @@ def test_smart_fetch_prefers_rss(stub_requests):
 def test_smart_fetch_uses_site_search(stub_requests):
     base = "https://news.test"
     search_url = f"{base}/search?q=hello"
-    html = "<html><body><a href=\"/story\">Story</a></body></html>"
+    html = '<html><body><a href="/story">Story</a></body></html>'
     stub_requests[f"{base}/feed"] = DummyResponse(f"{base}/feed", 404, "not found")
     stub_requests[base] = DummyResponse(base, 200, "<html></html>")
     stub_requests[search_url] = DummyResponse(search_url, 200, html)
@@ -56,7 +54,7 @@ def test_smart_fetch_uses_site_search(stub_requests):
 
 def test_smart_fetch_homepage_fallback(stub_requests):
     base = "https://fallback.local"
-    homepage = "<html><body><a href=\"https://fallback.local/doc\">Doc</a></body></html>"
+    homepage = '<html><body><a href="https://fallback.local/doc">Doc</a></body></html>'
     stub_requests[f"{base}/feed"] = DummyResponse(f"{base}/feed", 404, "not found")
     stub_requests[base] = DummyResponse(base, 200, homepage)
     result = fallbacks.smart_fetch(base)

@@ -603,8 +603,11 @@ def _coerce_autopilot(payload: Any) -> dict[str, Any] | None:
     result: dict[str, Any] = {"mode": mode}
     if query:
         result["query"] = query
-    if reason:
+    # Always include reason key to ensure stable schema for clients/tests
+    if isinstance(reason, str) and reason.strip():
         result["reason"] = reason
+    else:
+        result["reason"] = None
     if directive:
         result["directive"] = directive
     if steps:

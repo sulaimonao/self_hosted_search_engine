@@ -75,14 +75,20 @@ def chat_context(thread_id: str):
 
     if request.method == "POST":
         payload = request.get_json(silent=True) or {}
-        user_id = _normalize_string(payload.get("user") or payload.get("user_id")) or "local"
+        user_id = (
+            _normalize_string(payload.get("user") or payload.get("user_id")) or "local"
+        )
         query = _normalize_string(payload.get("q") or payload.get("query"))
         url = _normalize_string(payload.get("url"))
         include_raw = payload.get("include")
         selection = _normalize_string(payload.get("selection"))
         title = _normalize_string(payload.get("title"))
-        locale = _normalize_string(payload.get("locale") or payload.get("client_locale"))
-        client_time = _normalize_string(payload.get("time") or payload.get("client_time"))
+        locale = _normalize_string(
+            payload.get("locale") or payload.get("client_locale")
+        )
+        client_time = _normalize_string(
+            payload.get("time") or payload.get("client_time")
+        )
         history_limit = _coerce_int(payload.get("history_limit"), fallback=10)
         metadata_payload = payload.get("metadata")
         if isinstance(metadata_payload, dict):
@@ -98,8 +104,12 @@ def chat_context(thread_id: str):
         include_raw = request.args.get("include", "")
         selection = _normalize_string(request.args.get("selection"))
         title = _normalize_string(request.args.get("title"))
-        locale = _normalize_string(request.args.get("locale") or request.args.get("client_locale"))
-        client_time = _normalize_string(request.args.get("time") or request.args.get("client_time"))
+        locale = _normalize_string(
+            request.args.get("locale") or request.args.get("client_locale")
+        )
+        client_time = _normalize_string(
+            request.args.get("time") or request.args.get("client_time")
+        )
         history_limit = request.args.get("history_limit", type=int) or 10
 
     include_tokens = _normalize_include(include_raw)

@@ -63,7 +63,9 @@ def stream_events() -> Response:
                         continue
                     if record is None:
                         break
-                    payload = json.dumps(_serialize(record, include_text=False, service=service))
+                    payload = json.dumps(
+                        _serialize(record, include_text=False, service=service)
+                    )
                     yield f"data: {payload}\n\n"
         finally:
             if token is not None:

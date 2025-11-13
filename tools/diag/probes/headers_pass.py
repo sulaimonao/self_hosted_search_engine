@@ -1,4 +1,5 @@
 """Probe Electron request header pass-through in desktop/main.ts."""
+
 from __future__ import annotations
 
 import re
@@ -73,7 +74,10 @@ def probe_headers_pass(context: RuleContext) -> Iterable[Finding]:
         return findings
 
     segment = _hook_segment(text)
-    if "...details.requestHeaders" not in segment and "Object.assign({}, details.requestHeaders" not in segment:
+    if (
+        "...details.requestHeaders" not in segment
+        and "Object.assign({}, details.requestHeaders" not in segment
+    ):
         findings.append(
             Finding(
                 id=f"{TARGET}:missing-spread",

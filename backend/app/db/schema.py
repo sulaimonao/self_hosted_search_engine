@@ -81,7 +81,9 @@ def _backfill_legacy_ledger(connection: sqlite3.Connection) -> None:
     inserts: list[tuple[str, str]] = []
     for filename, applied_at in legacy.items():
         migration_id = filename.rsplit(".", 1)[0]
-        if migration_id not in MIGRATION_IDS or _already_applied(connection, migration_id):
+        if migration_id not in MIGRATION_IDS or _already_applied(
+            connection, migration_id
+        ):
             continue
         LOGGER.debug("Backfilling legacy migration %s", migration_id)
         inserts.append((migration_id, _coerce_epoch_to_iso(applied_at)))
@@ -129,14 +131,17 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
 
 def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
     return any(
-        row[1] == column
-        for row in connection.execute(f"PRAGMA table_info({table})")
+        row[1] == column for row in connection.execute(f"PRAGMA table_info({table})")
     )
 
 
 def _column_type(connection: sqlite3.Connection, table: str, column: str) -> str | None:
     row = next(
-        (info for info in connection.execute(f"PRAGMA table_info({table})") if info[1] == column),
+        (
+            info
+            for info in connection.execute(f"PRAGMA table_info({table})")
+            if info[1] == column
+        ),
         None,
     )
     if row is None:
@@ -148,7 +153,9 @@ def _column_type(connection: sqlite3.Connection, table: str, column: str) -> str
 def _index_exists(connection: sqlite3.Connection, table: str, name: str) -> bool:
     if not _table_exists(connection, table):
         return False
-    return any(row[1] == name for row in connection.execute(f"PRAGMA index_list({table})"))
+    return any(
+        row[1] == name for row in connection.execute(f"PRAGMA index_list({table})")
+    )
 
 
 def _migration_001_init(connection: sqlite3.Connection) -> None:
@@ -278,11 +285,15 @@ def _migration_002_pending_vectors(connection: sqlite3.Connection) -> None:
 
 
 def _migration_003_job_status_settings(connection: sqlite3.Connection) -> None:
-    needs_settings = not _table_exists(connection, "app_settings") or not _table_exists(connection, "job_status")
-    needs_columns = not _column_exists(connection, "pending_documents", "last_error") or not _column_exists(
-        connection, "pending_documents", "retry_count"
+    needs_settings = not _table_exists(connection, "app_settings") or not _table_exists(
+        connection, "job_status"
     )
-    needs_indexes = not _index_exists(connection, "pending_chunks", "idx_pending_chunks_doc_seq")
+    needs_columns = not _column_exists(
+        connection, "pending_documents", "last_error"
+    ) or not _column_exists(connection, "pending_documents", "retry_count")
+    needs_indexes = not _index_exists(
+        connection, "pending_chunks", "idx_pending_chunks_doc_seq"
+    )
     if not (needs_settings or needs_columns or needs_indexes):
         return
     sql_path = _MIGRATIONS_DIR / "003_job_status_settings.sql"
@@ -318,17 +329,11 @@ def _migration_005_browser_features(connection: sqlite3.Connection) -> None:
                 f"ALTER TABLE {table} ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
             )
         if not _column_exists(connection, table, "reason"):
-            connection.execute(
-                f"ALTER TABLE {table} ADD COLUMN reason TEXT"
-            )
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN reason TEXT")
         if not _column_exists(connection, table, "enqueued_at"):
-            connection.execute(
-                f"ALTER TABLE {table} ADD COLUMN enqueued_at TEXT"
-            )
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN enqueued_at TEXT")
         if not _column_exists(connection, table, "finished_at"):
-            connection.execute(
-                f"ALTER TABLE {table} ADD COLUMN finished_at TEXT"
-            )
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN finished_at TEXT")
 
     with connection:
         connection.execute(
@@ -443,9 +448,7 @@ def _migration_006_sources(connection: sqlite3.Connection) -> None:
     table = "crawl_jobs"
     with connection:
         if not _column_exists(connection, table, "parent_url"):
-            connection.execute(
-                f"ALTER TABLE {table} ADD COLUMN parent_url TEXT"
-            )
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN parent_url TEXT")
         if not _column_exists(connection, table, "is_source"):
             connection.execute(
                 f"ALTER TABLE {table} ADD COLUMN is_source INTEGER NOT NULL DEFAULT 0"

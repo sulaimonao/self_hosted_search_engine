@@ -152,7 +152,9 @@ def test_extract_accepts_html_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     client = app.test_client()
     captured: dict[str, Any] = {}
 
-    def _fake_dom_extract(url: str, html: str, *, title_hint: str | None = None) -> dict[str, Any]:
+    def _fake_dom_extract(
+        url: str, html: str, *, title_hint: str | None = None
+    ) -> dict[str, Any]:
         captured["url"] = url
         captured["html"] = html
         captured["title_hint"] = title_hint
@@ -161,7 +163,11 @@ def test_extract_accepts_html_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(extract_mod, "_dom_extract", _fake_dom_extract)
     response = client.post(
         "/api/extract",
-        json={"source_url": "https://example.com/page", "html": "<html>hi</html>", "title": "Provided"},
+        json={
+            "source_url": "https://example.com/page",
+            "html": "<html>hi</html>",
+            "title": "Provided",
+        },
     )
     assert response.status_code == 200
     payload = response.get_json()

@@ -1,4 +1,5 @@
 """Probe Electron BrowserWindow hardening in desktop/electron/src/main.ts."""
+
 from __future__ import annotations
 
 import re

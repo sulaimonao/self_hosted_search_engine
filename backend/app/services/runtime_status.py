@@ -47,7 +47,10 @@ def _normalise_family(name: str) -> str:
         canonical_key = "".join(ch for ch in canonical.lower() if ch.isalnum())
         if key == canonical_key:
             return canonical
-        if any(key == "".join(ch for ch in alias.lower() if ch.isalnum()) for alias in aliases):
+        if any(
+            key == "".join(ch for ch in alias.lower() if ch.isalnum())
+            for alias in aliases
+        ):
             return canonical
     return base.lower()
 
@@ -66,7 +69,9 @@ def _llm_health() -> HealthComponent:
     available = ollama_client.list_models(base_url=base_url, chat_only=False)
     chat_models = ollama_client.list_models(base_url=base_url, chat_only=True)
     chat_families = {_normalise_family(model) for model in chat_models}
-    missing = [family for family in REQUIRED_CHAT_FAMILIES if family not in chat_families]
+    missing = [
+        family for family in REQUIRED_CHAT_FAMILIES if family not in chat_families
+    ]
     embedding_available = any(
         _normalise_family(model) == REQUIRED_EMBED_MODEL for model in available
     )
@@ -187,7 +192,9 @@ def build_capability_snapshot() -> dict[str, Any]:
         "search": {
             "bm25": search_service is not None,
             "vector": bool(vector_status and vector_status.get("ready")),
-            "hybrid": bool(vector_status and vector_status.get("ready") and search_service),
+            "hybrid": bool(
+                vector_status and vector_status.get("ready") and search_service
+            ),
             "embedding": vector_status or {},
         },
         "shadow": {
@@ -228,7 +235,8 @@ def diagnostics_snapshot() -> dict[str, Any]:
             "ui_to_api": True,
             "api_to_llm": health["components"]["llm"]["status"] != "error",
             "crawler_to_index": health["components"]["index"]["status"] != "error",
-            "desktop_bridge": health["components"].get("desktop", {}).get("status") == "ok",
+            "desktop_bridge": health["components"].get("desktop", {}).get("status")
+            == "ok",
         },
     }
 
@@ -242,13 +250,19 @@ def run_repairs() -> dict[str, Any]:
             results["actions"].append({"name": "vector_warmup", "ok": True})
         except Exception as exc:  # pragma: no cover - defensive guard
             results.setdefault("errors", []).append(str(exc))
-            results["actions"].append({"name": "vector_warmup", "ok": False, "error": str(exc)})
+            results["actions"].append(
+                {"name": "vector_warmup", "ok": False, "error": str(exc)}
+            )
     try:
         rebuild = index_health.rebuild()
-        results["actions"].append({"name": "index_rebuild", "ok": bool(rebuild.get("accepted"))})
+        results["actions"].append(
+            {"name": "index_rebuild", "ok": bool(rebuild.get("accepted"))}
+        )
     except Exception as exc:  # pragma: no cover
         results.setdefault("errors", []).append(str(exc))
-        results["actions"].append({"name": "index_rebuild", "ok": False, "error": str(exc)})
+        results["actions"].append(
+            {"name": "index_rebuild", "ok": False, "error": str(exc)}
+        )
     return results
 
 

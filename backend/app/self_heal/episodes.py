@@ -103,7 +103,9 @@ def iter_episodes(
                 return
 
 
-def get_episode_by_id(ep_id: str, *, episodes_dir: Path = EPISODES_DIR) -> Optional[Dict[str, Any]]:
+def get_episode_by_id(
+    ep_id: str, *, episodes_dir: Path = EPISODES_DIR
+) -> Optional[Dict[str, Any]]:
     for item in iter_episodes(episodes_dir=episodes_dir, limit=None, reverse=True):
         if item.get("id") == ep_id:
             return item

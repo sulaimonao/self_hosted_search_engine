@@ -1,7 +1,17 @@
 """Diagnostics package initialisation."""
+
 from __future__ import annotations
 
-from .engine import DiagnosticsEngine, ExitCode, Finding, Results, RuleContext, Severity, register, parse_fail_on
+from .engine import (
+    DiagnosticsEngine,
+    ExitCode,
+    Finding,
+    Results,
+    RuleContext,
+    Severity,
+    register,
+    parse_fail_on,
+)
 from .probes import Probe, iter_probes
 
 # Import rule packs so the decorators execute at import time.

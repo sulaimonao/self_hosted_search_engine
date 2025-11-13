@@ -1,4 +1,5 @@
 """Diagnostics-scoped aliases and utilities for self-heal planner and executor."""
+
 from __future__ import annotations
 
 import difflib
@@ -36,7 +37,9 @@ def diagnostics_self_heal():
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive fallback
-        LOGGER.exception("diagnostics self-heal proxy failed; returning fallback reload directive")
+        LOGGER.exception(
+            "diagnostics self-heal proxy failed; returning fallback reload directive"
+        )
         emit = getattr(self_heal_module, "_emit", None)
         if callable(emit):
             try:
@@ -74,11 +77,13 @@ def diagnostics_self_heal_execute():
 def diagnostics_rulepack_summary():
     rules = load_rulepack()
     yaml_text = read_rulepack_text()
-    return jsonify({
-        "rules": rules,
-        "yaml": yaml_text,
-        "metrics": metrics_snapshot(),
-    })
+    return jsonify(
+        {
+            "rules": rules,
+            "yaml": yaml_text,
+            "metrics": metrics_snapshot(),
+        }
+    )
 
 
 @bp.get("/rules/episodes")
@@ -107,11 +112,13 @@ def diagnostics_rulepack_update():
         rules = enable_rule(rule_id, enabled)
     else:
         return jsonify({"error": "unsupported_operation"}), 400
-    return jsonify({
-        "rules": rules,
-        "yaml": read_rulepack_text(),
-        "metrics": metrics_snapshot(),
-    })
+    return jsonify(
+        {
+            "rules": rules,
+            "yaml": read_rulepack_text(),
+            "metrics": metrics_snapshot(),
+        }
+    )
 
 
 @bp.post("/rules/promote")
@@ -147,15 +154,17 @@ def diagnostics_rulepack_promote():
             lineterm="",
         )
     )
-    return jsonify({
-        "rule_id": rule_id,
-        "rule": rule,
-        "yaml_diff": diff,
-        "rules": rules,
-        "enabled": False,
-        "yaml": after,
-        "metrics": metrics_snapshot(),
-    })
+    return jsonify(
+        {
+            "rule_id": rule_id,
+            "rule": rule,
+            "yaml_diff": diff,
+            "rules": rules,
+            "enabled": False,
+            "yaml": after,
+            "metrics": metrics_snapshot(),
+        }
+    )
 
 
 __all__ = ["bp"]

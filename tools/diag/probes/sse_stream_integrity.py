@@ -1,4 +1,5 @@
 """Probe renderer SSE handling in frontend/src/hooks/useLlmStream.ts."""
+
 from __future__ import annotations
 
 import re

@@ -1,4 +1,5 @@
 """Browser shell diagnostics focusing on iframe/webview usage."""
+
 from __future__ import annotations
 
 import re
@@ -15,7 +16,12 @@ WINDOW_HISTORY_RE = re.compile(r"window\.history\.(back|forward)\s*\(", re.IGNOR
 WEBVIEW_RE = re.compile(r"<webview", re.IGNORECASE)
 
 THIRD_PARTY_HOSTS = ("http://", "https://", "//")
-LOCAL_HOST_PREFIXES = ("http://localhost", "https://localhost", "http://127.", "https://127.")
+LOCAL_HOST_PREFIXES = (
+    "http://localhost",
+    "https://localhost",
+    "http://127.",
+    "https://127.",
+)
 
 
 @register(
@@ -119,7 +125,10 @@ def rule_window_history(context: RuleContext) -> Iterable[Finding]:
     severity=Severity.MEDIUM,
 )
 def rule_webview_presence(context: RuleContext) -> Iterable[Finding]:
-    has_browser_component = any("browser" in relative.lower() for relative in context.iter_patterns("frontend/**", "desktop/**"))
+    has_browser_component = any(
+        "browser" in relative.lower()
+        for relative in context.iter_patterns("frontend/**", "desktop/**")
+    )
     if not has_browser_component:
         return []
     for relative in context.iter_files(".tsx", ".ts", ".jsx", ".js", ".html"):

@@ -187,8 +187,10 @@ def test_page_context_flag(page: Page) -> None:
     except Exception:
         payload = {}
 
-    assert "page_url" in payload, f"Missing `page_url` in chat payload for {request.url}"
+    assert (
+        "page_url" in payload
+    ), f"Missing `page_url` in chat payload for {request.url}"
     page_url = payload.get("page_url")
-    assert isinstance(page_url, str) and page_url.strip(), (
-        f"`page_url` empty in chat payload for {request.url}: {page_url!r}"
-    )
+    assert (
+        isinstance(page_url, str) and page_url.strip()
+    ), f"`page_url` empty in chat payload for {request.url}: {page_url!r}"

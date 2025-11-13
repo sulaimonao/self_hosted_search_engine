@@ -1,4 +1,5 @@
 """Python backend health diagnostics."""
+
 from __future__ import annotations
 
 import re
@@ -10,7 +11,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback for older interpreters
     try:
         import tomli as tomllib  # type: ignore[import]
-    except ModuleNotFoundError as exc:  # pragma: no cover - guidance for misconfigured envs
+    except (
+        ModuleNotFoundError
+    ) as exc:  # pragma: no cover - guidance for misconfigured envs
         raise ModuleNotFoundError(
             "tomllib is unavailable. Run the diagnostics under Python 3.11+ or install 'tomli'."
         ) from exc
@@ -102,7 +105,9 @@ def rule_python_backend(context: RuleContext) -> Iterable[Finding]:
             )
 
     # Search for Flask debug toggles.
-    for relative in context.iter_patterns("backend/**/*.py", "scripts/**/*.sh", "scripts/**/*.py"):
+    for relative in context.iter_patterns(
+        "backend/**/*.py", "scripts/**/*.sh", "scripts/**/*.py"
+    ):
         text = context.read_text(relative)
         debug_match = DEBUG_RE.search(text)
         env_match = FLASK_ENV_RE.search(text)

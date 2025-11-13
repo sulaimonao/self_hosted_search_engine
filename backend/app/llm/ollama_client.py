@@ -77,7 +77,9 @@ class OllamaClient:
                     cached.update({"name": candidate, "ts": now})
                     return candidate
 
-        raise RuntimeError("No allowed Ollama model available (need gemma3:* or gpt-oss:*)")
+        raise RuntimeError(
+            "No allowed Ollama model available (need gemma3:* or gpt-oss:*)"
+        )
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -106,7 +108,9 @@ class OllamaClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise OllamaClientError("ollama chat returned invalid JSON response") from exc
+            raise OllamaClientError(
+                "ollama chat returned invalid JSON response"
+            ) from exc
         message = payload.get("message") or {}
         content = message.get("content")
         if not isinstance(content, str) or not content:
@@ -147,7 +151,9 @@ class OllamaClient:
         last_error: Optional[Exception] = None
 
         for attempt in range(1, remaining + 1):
-            prompt_system = system_base if attempt == 1 else f"{strict_prefix}{system_base}"
+            prompt_system = (
+                system_base if attempt == 1 else f"{strict_prefix}{system_base}"
+            )
             payload = {
                 "model": model_name,
                 "stream": False,
@@ -173,12 +179,16 @@ class OllamaClient:
                         except json.JSONDecodeError as exc:
                             last_error = exc
                     else:
-                        last_error = ValueError("no JSON object found in Ollama response")
+                        last_error = ValueError(
+                            "no JSON object found in Ollama response"
+                        )
             except Exception as exc:  # pragma: no cover - network issues / parse errors
                 last_error = exc
             time.sleep(min(0.2 * attempt, 1.0))
 
-        raise OllamaClientError(f"ollama chat_json failed after {remaining} attempt(s): {last_error}")
+        raise OllamaClientError(
+            f"ollama chat_json failed after {remaining} attempt(s): {last_error}"
+        )
 
 
 __all__ = [

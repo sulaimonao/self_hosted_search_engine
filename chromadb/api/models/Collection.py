@@ -81,7 +81,9 @@ class Collection:
         return clauses
 
     @staticmethod
-    def _entry_matches(entry: Mapping[str, Any], clauses: Sequence[Mapping[str, Any]]) -> bool:
+    def _entry_matches(
+        entry: Mapping[str, Any], clauses: Sequence[Mapping[str, Any]]
+    ) -> bool:
         if not clauses:
             return True
         metadata = entry.get("metadata")
@@ -135,7 +137,9 @@ class Collection:
             else:
                 clauses = self._normalise_where(where)
                 self._entries = [
-                    entry for entry in self._entries if not self._entry_matches(entry, clauses)
+                    entry
+                    for entry in self._entries
+                    if not self._entry_matches(entry, clauses)
                 ]
             self._persist()
 
@@ -148,7 +152,9 @@ class Collection:
         embeddings: Sequence[Sequence[float]],
     ) -> None:
         if not (len(ids) == len(documents) == len(metadatas) == len(embeddings)):
-            raise ValueError("ids, documents, metadatas, and embeddings must be the same length")
+            raise ValueError(
+                "ids, documents, metadatas, and embeddings must be the same length"
+            )
         new_entries: list[dict[str, Any]] = []
         for identifier, document, metadata, embedding in zip(
             ids, documents, metadatas, embeddings
@@ -161,7 +167,9 @@ class Collection:
             }
             new_entries.append(entry)
         with self._lock:
-            existing_ids = {entry["id"]: index for index, entry in enumerate(self._entries)}
+            existing_ids = {
+                entry["id"]: index for index, entry in enumerate(self._entries)
+            }
             for entry in new_entries:
                 idx = existing_ids.get(entry["id"])
                 if idx is not None:
@@ -254,11 +262,15 @@ class Collection:
             if "distances" in include:
                 response["distances"].append(distances)
             if "embeddings" in include:
-                response["embeddings"].append([entries[idx].get("embedding") for idx in indices])
+                response["embeddings"].append(
+                    [entries[idx].get("embedding") for idx in indices]
+                )
         return response
 
     @staticmethod
-    def _empty_query_response(query_count: int, include: Sequence[str]) -> dict[str, Any]:
+    def _empty_query_response(
+        query_count: int, include: Sequence[str]
+    ) -> dict[str, Any]:
         response: dict[str, Any] = {"ids": [[] for _ in range(query_count)]}
         if "documents" in include:
             response["documents"] = [[] for _ in range(query_count)]

@@ -77,7 +77,9 @@ class SmartFetcher:
             result = strategy()
             if result is not None and result.items:
                 return result
-        return FallbackResult("none", normalized, None, [], diagnostics or ["no_results"])
+        return FallbackResult(
+            "none", normalized, None, [], diagnostics or ["no_results"]
+        )
 
     # ------------------------------------------------------------------
     def _request(self, url: str) -> requests.Response | None:
@@ -95,9 +97,7 @@ class SmartFetcher:
             return None
         return resp
 
-    def _discover_feed(
-        self, url: str, diagnostics: list[str]
-    ) -> FallbackResult | None:
+    def _discover_feed(self, url: str, diagnostics: list[str]) -> FallbackResult | None:
         for path in FEED_PATHS:
             candidate = urljoin(url, path)
             resp = self._request(candidate)
@@ -106,7 +106,13 @@ class SmartFetcher:
             if self._looks_like_feed(resp.text):
                 items = self._extract_feed_items(resp.text)
                 if items:
-                    return FallbackResult("rss", candidate, self._page_title(resp.text), items, diagnostics)
+                    return FallbackResult(
+                        "rss",
+                        candidate,
+                        self._page_title(resp.text),
+                        items,
+                        diagnostics,
+                    )
         # check <link rel="alternate">
         resp = self._request(url)
         if resp is None:
@@ -212,7 +218,10 @@ class SmartFetcher:
     @staticmethod
     def _extract_feed_items(xml_text: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        pattern = re.compile(r"<item[\s\S]*?<title>(?P<title>[^<]+)</title>[\s\S]*?<link>(?P<link>[^<]+)</link>", re.I)
+        pattern = re.compile(
+            r"<item[\s\S]*?<title>(?P<title>[^<]+)</title>[\s\S]*?<link>(?P<link>[^<]+)</link>",
+            re.I,
+        )
         for match in pattern.finditer(xml_text or ""):
             title = match.group("title").strip()
             link = match.group("link").strip()
@@ -244,7 +253,9 @@ class SmartFetcher:
         return discovered
 
     @staticmethod
-    def _extract_structured_links(soup: BeautifulSoup, base_url: str) -> list[dict[str, Any]]:
+    def _extract_structured_links(
+        soup: BeautifulSoup, base_url: str
+    ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         # JSON-LD articles
         for script in soup.select("script[type='application/ld+json']"):
@@ -272,7 +283,9 @@ class SmartFetcher:
         return items
 
     @staticmethod
-    def _collect_ld_items(payload: Any, base_url: str, items: list[dict[str, Any]]) -> None:
+    def _collect_ld_items(
+        payload: Any, base_url: str, items: list[dict[str, Any]]
+    ) -> None:
         if isinstance(payload, list):
             for entry in payload:
                 SmartFetcher._collect_ld_items(entry, base_url, items)

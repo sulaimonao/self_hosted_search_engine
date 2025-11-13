@@ -11,7 +11,9 @@ from flask import current_app
 from .log_bus import AgentLogBus
 
 
-SENSITIVE_KEY_PATTERN = re.compile(r"(token|key|secret|password|authorization)", re.IGNORECASE)
+SENSITIVE_KEY_PATTERN = re.compile(
+    r"(token|key|secret|password|authorization)", re.IGNORECASE
+)
 SENSITIVE_VALUE_PATTERN = re.compile(r"(sk-|eyJhbGci|AIza|Bearer\s+[A-Za-z0-9_-]{10,})")
 
 

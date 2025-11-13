@@ -331,7 +331,12 @@ def index_site() -> tuple[Any, int]:
 
     payload = {
         "jobId": job_id,
-        "status": (status_snapshot.get("state") if isinstance(status_snapshot, Mapping) else None) or "queued",
+        "status": (
+            status_snapshot.get("state")
+            if isinstance(status_snapshot, Mapping)
+            else None
+        )
+        or "queued",
         "created": created,
         "scope": scope,
         "query": query,

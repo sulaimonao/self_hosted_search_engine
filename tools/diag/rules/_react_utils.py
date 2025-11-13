@@ -1,9 +1,10 @@
 """Shared helpers for React-oriented diagnostics."""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence, Set, Tuple
+from typing import List, Sequence, Set, Tuple
 
 
 EFFECT_CALL_RE = re.compile(r"(?:React\.)?use(?:Layout)?Effect\s*\(")
@@ -58,7 +59,9 @@ def _skip_block_comment(text: str, index: int, limit: int) -> int:
     return close + 2
 
 
-def _consume_balanced(text: str, start: int, open_char: str, close_char: str, limit: int | None = None) -> Tuple[str, int]:
+def _consume_balanced(
+    text: str, start: int, open_char: str, close_char: str, limit: int | None = None
+) -> Tuple[str, int]:
     """Return the substring enclosed by matching delimiters starting at index."""
 
     limit = limit if limit is not None else len(text)
@@ -194,7 +197,9 @@ def iter_effect_blocks(text: str) -> List[EffectBlock]:
             while scan_start < callback_end and text[scan_start].isspace():
                 scan_start += 1
             if scan_start < callback_end and text[scan_start] == "{":
-                body_content, body_closure = _consume_balanced(text, scan_start, "{", "}")
+                body_content, body_closure = _consume_balanced(
+                    text, scan_start, "{", "}"
+                )
                 body_text = body_content
                 body_start = scan_start + 1
                 body_end = body_closure - 1
@@ -213,7 +218,11 @@ def iter_effect_blocks(text: str) -> List[EffectBlock]:
         if body_start is None or body_end is None:
             continue
         line = text.count("\n", 0, call_start) + 1
-        kind = "layout" if "useLayoutEffect" in text[call_start:match.end()] else "effect"
+        kind = (
+            "layout"
+            if "useLayoutEffect" in text[call_start : match.end()]
+            else "effect"
+        )
         blocks.append(
             EffectBlock(
                 deps=deps,
@@ -227,7 +236,9 @@ def iter_effect_blocks(text: str) -> List[EffectBlock]:
     return blocks
 
 
-def split_call_arguments(text: str, paren_index: int) -> Tuple[List[Tuple[str, int, int]], int]:
+def split_call_arguments(
+    text: str, paren_index: int
+) -> Tuple[List[Tuple[str, int, int]], int]:
     """Return top-level arguments for a call starting at the provided '('."""
 
     content, end_index = _consume_balanced(text, paren_index, "(", ")")

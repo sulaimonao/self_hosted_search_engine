@@ -7,8 +7,16 @@ test.describe('Control Center Roadmap', () => {
 
     const uiBase = process.env.UI_BASE_URL ?? 'http://127.0.0.1:3100';
     await page.goto(`${uiBase}/control-center/roadmap`);
-    await expect(page.getByRole('heading', { name: 'Roadmap' })).toBeVisible();
+  // The Roadmap is available both at /control-center and /control-center/roadmap
+  // Try the tab first; if not present, the dedicated route will still render the heading.
+  const heading = page.getByRole('heading', { name: /Roadmap/i });
+  await expect(heading).toBeVisible();
     const runButton = page.getByRole('button', { name: /Run Diagnostics/i });
     await expect(runButton).toBeVisible();
+
+    // Basic assertion that at least one roadmap card hint is present
+    // (manual or diag-mapped label rendered by the panel)
+    const manualOrDiag = page.locator('text=/manual|diag-mapped/i');
+    await expect(manualOrDiag.first()).toBeVisible();
   });
 });

@@ -39,7 +39,9 @@ def _format_data_lines(payload: str) -> Iterator[str]:
         yield f"data: {line}" if line else "data:"
 
 
-def sse_format(data: str, *, event: str | None = None, retry: int | None = None) -> bytes:
+def sse_format(
+    data: str, *, event: str | None = None, retry: int | None = None
+) -> bytes:
     """Render a Server-Sent Event frame.
 
     Flask's streaming responses accept either ``str`` or ``bytes``

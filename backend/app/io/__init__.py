@@ -10,7 +10,14 @@ from .adapters import (
     normalize_model,
     normalize_model_alias,
 )
-from .models import ALLOWED_VERBS, Directive, Incident, Step, VERB_EXECUTION_METADATA, VERB_MAP
+from .models import (
+    ALLOWED_VERBS,
+    Directive,
+    Incident,
+    Step,
+    VERB_EXECUTION_METADATA,
+    VERB_MAP,
+)
 from .schemas import chat_schema, self_heal_schema
 
 __all__ = [

@@ -108,7 +108,9 @@ def probe_all() -> dict[str, Any]:
         }
     )
 
-    duck_count = _count_duckdb(Path(config.agent_data_dir) / "vector" / "vectors.duckdb")
+    duck_count = _count_duckdb(
+        Path(config.agent_data_dir) / "vector" / "vectors.duckdb"
+    )
     stores.append(
         {
             "name": "vector_duckdb",

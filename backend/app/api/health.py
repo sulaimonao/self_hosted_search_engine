@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify
 
-from backend.app.llm.ollama_client import OllamaClient, OllamaClientError, DEFAULT_OLLAMA_HOST
+from backend.app.llm.ollama_client import OllamaClient, OllamaClientError
 
 bp = Blueprint("health_api", __name__, url_prefix="/api/health")
 

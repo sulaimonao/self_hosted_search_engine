@@ -126,7 +126,9 @@ def _truncate_incident(payload: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_prompts(incident: Mapping[str, Any], variant: str = "lite") -> Tuple[str, str]:
+def build_prompts(
+    incident: Mapping[str, Any], variant: str = "lite"
+) -> Tuple[str, str]:
     """Return the (system_prompt, user_message) pair for the planner."""
 
     ev = _truncate_incident(incident)

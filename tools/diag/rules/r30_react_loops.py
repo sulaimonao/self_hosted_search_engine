@@ -1,4 +1,5 @@
 """Detect React effects that are guaranteed to re-trigger themselves."""
+
 from __future__ import annotations
 
 import re
@@ -7,7 +8,12 @@ from typing import Iterable, List
 from ..engine import Finding, RuleContext, Severity, register
 from ._react_utils import collect_state_setters, iter_effect_blocks
 
-TARGET_PATTERNS = ("frontend/**/*.tsx", "frontend/**/*.ts", "frontend/**/*.jsx", "frontend/**/*.js")
+TARGET_PATTERNS = (
+    "frontend/**/*.tsx",
+    "frontend/**/*.ts",
+    "frontend/**/*.jsx",
+    "frontend/**/*.js",
+)
 
 
 @register(
@@ -35,7 +41,9 @@ def rule_react_loops(context: RuleContext) -> Iterable[Finding]:
             for setter, state in setters.items():
                 if not re.search(rf"\b{re.escape(setter)}\s*\(", block.body):
                     continue
-                if any(dep == state or dep.startswith(f"{state}.") for dep in block.deps):
+                if any(
+                    dep == state or dep.startswith(f"{state}.") for dep in block.deps
+                ):
                     triggered_states.append(state)
             if not triggered_states:
                 continue

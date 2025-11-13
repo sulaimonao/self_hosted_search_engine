@@ -1,4 +1,5 @@
 """Playwright probe to ensure chat messages render in both renderers."""
+
 from __future__ import annotations
 
 import os
@@ -9,7 +10,9 @@ from ..engine import Finding, RuleContext, Severity
 from . import register_probe
 
 
-def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedProcess[str]:
+def _run_playwright(
+    root: os.PathLike[str], url: str
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PLAYWRIGHT_APP_URL"] = url
     command = [
@@ -17,7 +20,7 @@ def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedPro
         "--prefix",
         "frontend",
         "exec",
-    "--",
+        "--",
         "playwright",
         "test",
         "-c",
@@ -26,7 +29,9 @@ def _run_playwright(root: os.PathLike[str], url: str) -> subprocess.CompletedPro
         "--reporter",
         "line",
     ]
-    return subprocess.run(command, cwd=root, text=True, capture_output=True, check=False, env=env)
+    return subprocess.run(
+        command, cwd=root, text=True, capture_output=True, check=False, env=env
+    )
 
 
 @register_probe(
@@ -42,7 +47,9 @@ def probe_chat_visibility_e2e(context: RuleContext) -> Iterable[Finding]:
         return findings
 
     default_url = os.environ.get("PLAYWRIGHT_WEB_URL", "http://127.0.0.1:3100")
-    desktop_url = os.environ.get("DESKTOP_RENDERER_URL") or os.environ.get("RENDERER_URL")
+    desktop_url = os.environ.get("DESKTOP_RENDERER_URL") or os.environ.get(
+        "RENDERER_URL"
+    )
 
     targets = [("web", default_url)]
     if desktop_url and desktop_url.strip() and desktop_url.strip() != default_url:

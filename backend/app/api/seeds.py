@@ -255,18 +255,18 @@ def _success_payload(registry: dict[str, Any], revision: str) -> Response:
 
 @bp.get("")
 def get_seeds():
-    """Return all seeds from the registry."""
+    """Return all seeds from the registry with a deterministic revision."""
     try:
-        registry, _ = _read_registry()
+        registry, revision = _read_registry()
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 500
     results = _collect_seeds(registry)
-    return jsonify({"ok": True, "data": results})
+    return jsonify({"revision": revision, "seeds": results}), 200
 
 
 @bp.post("")
 def create_seed():
-    """Create a new seed."""
+    """Create a new seed, enforcing optimistic concurrency via registry revision."""
     payload = request.get_json(silent=True) or {}
     raw_entrypoints = payload.get("entrypoints")
     if not isinstance(raw_entrypoints, list):
@@ -293,17 +293,21 @@ def create_seed():
     notes = payload.get("notes")
 
     with _LOCK:
-        registry, _ = _read_registry()
+        registry, current_revision = _read_registry()
+        client_revision = payload.get("revision")
+        if isinstance(client_revision, str) and client_revision != current_revision:
+            # Revision mismatch; surface conflict with latest revision so client can retry
+            return _conflict_response("Seed registry has been modified", current_revision)
         workspace = _workspace_directory()
         if workspace not in registry["directories"]:
             registry["directories"][workspace] = {"sources": []}
         new_entry = _create_seed_entry(entrypoints, scope, notes)
         registry["directories"][workspace]["sources"].insert(0, new_entry)
-        _write_registry(registry)
+        new_revision = _write_registry(registry)
 
     response_payload = {
-        "ok": True,
-        "data": _serialize_seed(workspace, new_entry),
+        "revision": new_revision,
+        "seeds": _collect_seeds(registry),
     }
     if errors:
         response_payload["errors"] = errors
@@ -340,6 +344,7 @@ def update_seed(seed_id: str) -> Response:
             return _conflict_response("Seed registry has been modified", current_revision)
         sources = _ensure_workspace(registry)
         target = None
+        changed = False
         for source in sources:
             if source.get("id") == seed_id:
                 target = source
@@ -363,9 +368,11 @@ def update_seed(seed_id: str) -> Response:
             target["notes"] = new_notes.strip()
             changed = True
 
+        # Persist changes only when something actually changed, and capture the revision
+        new_revision = current_revision
         if changed:
             target["updated_at"] = datetime.now(timezone.utc).isoformat()
-            _write_registry(registry)
+            new_revision = _write_registry(registry)
 
         directory = next(
             (
@@ -382,10 +389,9 @@ def update_seed(seed_id: str) -> Response:
             ),
             "unknown",
         )
-        response_payload = {
-            "ok": True,
-            "data": _serialize_seed(directory, target),
-        }
+        # Align response shape with GET/POST/DELETE: return seeds and current revision
+        seeds = _collect_seeds(registry)
+        response_payload = {"revision": new_revision, "seeds": seeds}
         if "validation_errors" in locals() and validation_errors:
             response_payload["errors"] = validation_errors
         return jsonify(response_payload)

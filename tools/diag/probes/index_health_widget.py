@@ -40,8 +40,12 @@ def probe_index_health_widget(context: RuleContext) -> Iterable[Finding]:
             )
         )
 
-    badge = context.read_text("frontend/src/components/index-health/IndexHealthBadge.tsx")
-    panel = context.read_text("frontend/src/components/index-health/IndexHealthPanel.tsx")
+    badge = context.read_text(
+        "frontend/src/components/index-health/IndexHealthBadge.tsx"
+    )
+    panel = context.read_text(
+        "frontend/src/components/index-health/IndexHealthPanel.tsx"
+    )
     if not badge or "/api/index/health" not in badge:
         findings.append(
             Finding(

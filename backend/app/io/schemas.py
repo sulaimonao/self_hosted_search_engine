@@ -3,7 +3,14 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, Mapping
 
-from .models import ALLOWED_VERBS, Directive, Incident, Step, VERB_EXECUTION_METADATA, VERB_MAP
+from .models import (
+    ALLOWED_VERBS,
+    Directive,
+    Incident,
+    Step,
+    VERB_EXECUTION_METADATA,
+    VERB_MAP,
+)
 
 
 def _ordered(mapping: Mapping[str, Any]) -> dict[str, Any]:
@@ -58,7 +65,8 @@ def self_heal_schema() -> dict[str, Any]:
         "allowedVerbs": sorted(ALLOWED_VERBS),
         "verbMap": _ordered(VERB_MAP),
         "verbMetadata": [
-            {"verb": verb, **VERB_EXECUTION_METADATA.get(verb, {})} for verb in sorted(ALLOWED_VERBS)
+            {"verb": verb, **VERB_EXECUTION_METADATA.get(verb, {})}
+            for verb in sorted(ALLOWED_VERBS)
         ],
     }
 

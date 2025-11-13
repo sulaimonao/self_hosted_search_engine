@@ -180,7 +180,9 @@ class Step(BaseModel):
         return self
 
     def as_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"type": self.type if self.type in ALLOWED_VERBS else "reload"}
+        payload: dict[str, Any] = {
+            "type": self.type if self.type in ALLOWED_VERBS else "reload"
+        }
         if self.selector:
             payload["selector"] = self.selector
         if self.text:
@@ -206,7 +208,9 @@ class Directive(BaseModel):
     reason: str = _DEFAULT_REASON
     steps: list[Step] = Field(default_factory=list)
     plan_confidence: str | None = Field(default=None, alias="planConfidence")
-    needs_user_permission: bool | None = Field(default=None, alias="needsUserPermission")
+    needs_user_permission: bool | None = Field(
+        default=None, alias="needsUserPermission"
+    )
     ask_user: list[str] = Field(default_factory=list, alias="askUser")
     fallback: dict[str, Any] | None = None
 
@@ -276,7 +280,9 @@ class Directive(BaseModel):
             payload["enabled"] = enabled
         hints = payload.get("headless_hint")
         if isinstance(hints, (list, tuple)):
-            payload["headless_hint"] = [str(item).strip() for item in hints if str(item).strip()]
+            payload["headless_hint"] = [
+                str(item).strip() for item in hints if str(item).strip()
+            ]
         return payload or None
 
     @model_validator(mode="after")
@@ -303,7 +309,8 @@ class Directive(BaseModel):
     def as_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "reason": self.reason,
-            "steps": [step.as_payload() for step in self.steps] or [Step(type="reload").as_payload()],
+            "steps": [step.as_payload() for step in self.steps]
+            or [Step(type="reload").as_payload()],
         }
         if self.plan_confidence in _ALLOWED_CONFIDENCE:
             payload["plan_confidence"] = self.plan_confidence
@@ -312,7 +319,9 @@ class Directive(BaseModel):
         if self.ask_user:
             payload["ask_user"] = self.ask_user
         if self.fallback:
-            fallback_clean = {k: v for k, v in self.fallback.items() if v not in (None, [], {})}
+            fallback_clean = {
+                k: v for k, v in self.fallback.items() if v not in (None, [], {})
+            }
             if fallback_clean:
                 payload["fallback"] = fallback_clean
         return payload
@@ -363,14 +372,19 @@ class Incident(BaseModel):
                 if isinstance(entry, str):
                     text_value = entry.strip()
                 elif isinstance(entry, Mapping):
-                    candidate = entry.get("message") or entry.get("error") or entry.get("text")
+                    candidate = (
+                        entry.get("message") or entry.get("error") or entry.get("text")
+                    )
                     if isinstance(candidate, str):
                         candidate_text = candidate.strip()
                         if candidate_text:
                             text_value = candidate_text
                 elif entry is not None:
                     text_value = str(entry).strip()
-                if text_value and any(token in text_value.lower() for token in ("error", "exception", "fail")):
+                if text_value and any(
+                    token in text_value.lower()
+                    for token in ("error", "exception", "fail")
+                ):
                     cleaned.append(text_value)
             if cleaned:
                 data["consoleErrors"] = cleaned[-5:]

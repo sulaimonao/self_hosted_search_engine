@@ -17,11 +17,13 @@ def _fts_safe(text: str) -> str:
     quoted: list[str] = []
     for token in tokens:
         escaped = token.replace('"', '""')
-        quoted.append(f"\"{escaped}\"")
+        quoted.append(f'"{escaped}"')
     return " ".join(quoted)
 
 
-def search_docs(db_path: str | Path, text: str, *, limit: int = 20) -> list[dict[str, Any]]:
+def search_docs(
+    db_path: str | Path, text: str, *, limit: int = 20
+) -> list[dict[str, Any]]:
     sanitized = _fts_safe(text)
     if not sanitized:
         return []

@@ -21,7 +21,9 @@ LOGIN_REDIRECT_HINTS = ("/login", "/signin", "/account", "auth", "authorize")
 ANTI_BOT_HINTS = ("cf-chl-", "__cf_bm", "captcha", "challenge-platform")
 
 
-def detect_clearance(response, html: str | None, url: str | None = None) -> dict[str, Any]:
+def detect_clearance(
+    response, html: str | None, url: str | None = None
+) -> dict[str, Any]:
     info = {
         "requires_login": False,
         "paywall_vendor": None,
@@ -33,7 +35,9 @@ def detect_clearance(response, html: str | None, url: str | None = None) -> dict
     if response is None:
         return info
 
-    location = response.headers.get("Location", "") if hasattr(response, "headers") else ""
+    location = (
+        response.headers.get("Location", "") if hasattr(response, "headers") else ""
+    )
     status = getattr(response, "status_code", 0) or 0
     html_text = html or ""
 

@@ -42,7 +42,9 @@ def _safe_dump(path: Path, rules: Sequence[Dict[str, Any]]) -> None:
                 encoding="utf-8",
             )
         else:
-            path.write_text(json.dumps(list(rules), ensure_ascii=False, indent=2), encoding="utf-8")
+            path.write_text(
+                json.dumps(list(rules), ensure_ascii=False, indent=2), encoding="utf-8"
+            )
     except Exception:
         pass
 
@@ -80,7 +82,11 @@ def _match_network(signature: Dict[str, Any], symptoms: Dict[str, Any]) -> bool:
                     url_ok = re.search(url_rx, str(entry.get("url") or "")) is not None
                 except re.error:
                     url_ok = False
-            status_ok = True if status is None else int(entry.get("status") or -1) == int(status)
+            status_ok = (
+                True
+                if status is None
+                else int(entry.get("status") or -1) == int(status)
+            )
             if url_ok and status_ok:
                 return True
     return False
@@ -180,7 +186,10 @@ def try_rules_first(
         steps = _sanitize_steps(directive_payload.get("steps"))
         if not steps:
             continue
-        reason = str(directive_payload.get("reason") or f"Rule {rule.get('id') or 'matched'} applied").strip()
+        reason = str(
+            directive_payload.get("reason")
+            or f"Rule {rule.get('id') or 'matched'} applied"
+        ).strip()
         payload = {"reason": reason, "steps": steps}
         return str(rule.get("id") or "unknown"), payload
     return None
@@ -190,13 +199,20 @@ def _escape_regex_literal(value: str) -> str:
     return re.escape(value or "")
 
 
-def propose_rule_from_episode(ep: Dict[str, Any], *, default_enabled: bool = False) -> Dict[str, Any]:
+def propose_rule_from_episode(
+    ep: Dict[str, Any], *, default_enabled: bool = False
+) -> Dict[str, Any]:
     symptoms = dict(ep.get("symptoms") or {})
     directive = dict(ep.get("directive") or {})
     banner = str(symptoms.get("bannerText") or "")
     network_errors = list(symptoms.get("networkErrors") or [])
     meta = dict(ep.get("meta") or {})
-    dom_snippet = str(ep.get("domSnippet") or symptoms.get("domSnippet") or meta.get("domSnippet") or "")
+    dom_snippet = str(
+        ep.get("domSnippet")
+        or symptoms.get("domSnippet")
+        or meta.get("domSnippet")
+        or ""
+    )
 
     signature: Dict[str, Any] = {}
     if banner:
@@ -207,17 +223,21 @@ def propose_rule_from_episode(ep: Dict[str, Any], *, default_enabled: bool = Fal
             url = str(entry.get("url") or "").split("?")[0]
             if not url:
                 continue
-            entries.append({
-                "url_regex": _escape_regex_literal(url),
-                "status": entry.get("status"),
-            })
+            entries.append(
+                {
+                    "url_regex": _escape_regex_literal(url),
+                    "status": entry.get("status"),
+                }
+            )
         if entries:
             signature["network_any"] = entries
-    if "role=\"alert\"" in dom_snippet:
+    if 'role="alert"' in dom_snippet:
         signature["dom_regex"] = r'role="alert"'
 
     steps = _sanitize_steps(directive.get("steps"))
-    reason = str(directive.get("reason") or "Deterministic replay of a successful fix").strip()
+    reason = str(
+        directive.get("reason") or "Deterministic replay of a successful fix"
+    ).strip()
 
     rule_id = f"rule_{str(ep.get('id') or '')[:8]}" if ep.get("id") else None
     return {
@@ -231,7 +251,9 @@ def propose_rule_from_episode(ep: Dict[str, Any], *, default_enabled: bool = Fal
     }
 
 
-def add_rule(rule: Dict[str, Any], *, path: Path = RULEPACK_PATH) -> Tuple[str, List[Dict[str, Any]]]:
+def add_rule(
+    rule: Dict[str, Any], *, path: Path = RULEPACK_PATH
+) -> Tuple[str, List[Dict[str, Any]]]:
     rules = load_rulepack(path)
     rule_id = str(rule.get("id") or f"rule_{len(rules) + 1}")
     rule["id"] = rule_id
@@ -243,7 +265,9 @@ def add_rule(rule: Dict[str, Any], *, path: Path = RULEPACK_PATH) -> Tuple[str, 
     return rule_id, filtered
 
 
-def enable_rule(rule_id: str, enabled: bool, *, path: Path = RULEPACK_PATH) -> List[Dict[str, Any]]:
+def enable_rule(
+    rule_id: str, enabled: bool, *, path: Path = RULEPACK_PATH
+) -> List[Dict[str, Any]]:
     rules = load_rulepack(path)
     changed = False
     for rule in rules:
@@ -256,9 +280,13 @@ def enable_rule(rule_id: str, enabled: bool, *, path: Path = RULEPACK_PATH) -> L
     return rules
 
 
-def reorder_rule(rule_id: str, new_index: int, *, path: Path = RULEPACK_PATH) -> List[Dict[str, Any]]:
+def reorder_rule(
+    rule_id: str, new_index: int, *, path: Path = RULEPACK_PATH
+) -> List[Dict[str, Any]]:
     rules = load_rulepack(path)
-    current_index = next((idx for idx, item in enumerate(rules) if item.get("id") == rule_id), None)
+    current_index = next(
+        (idx for idx, item in enumerate(rules) if item.get("id") == rule_id), None
+    )
     if current_index is None:
         return rules
     rule = rules.pop(current_index)
@@ -268,7 +296,9 @@ def reorder_rule(rule_id: str, new_index: int, *, path: Path = RULEPACK_PATH) ->
     return rules
 
 
-def apply_order(order: Sequence[str], *, path: Path = RULEPACK_PATH) -> List[Dict[str, Any]]:
+def apply_order(
+    order: Sequence[str], *, path: Path = RULEPACK_PATH
+) -> List[Dict[str, Any]]:
     rules = load_rulepack(path)
     lookup = {rule.get("id"): rule for rule in rules}
     ordered: List[Dict[str, Any]] = []

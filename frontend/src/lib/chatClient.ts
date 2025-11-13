@@ -127,6 +127,7 @@ async function consumeChatStream(
       buffer = buffer.slice(newlineIndex + 1);
       if (chunk) {
         try {
+          const parsed = JSON.parse(chunk);
           const normalized = normalizeChatStreamChunk(parsed);
           if (normalized) {
             if (normalized.type === "metadata") {
@@ -163,6 +164,7 @@ async function consumeChatStream(
   const trimmed = buffer.trim();
   if (trimmed) {
     try {
+      const parsed = JSON.parse(trimmed);
       const normalized = normalizeChatStreamChunk(parsed);
       if (normalized) {
         if (normalized.type === "metadata") {

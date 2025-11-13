@@ -90,7 +90,9 @@ class _BrowserSession:
 
         return self._run(_go)
 
-    def click(self, selector: str | None = None, text: str | None = None) -> Dict[str, Any]:
+    def click(
+        self, selector: str | None = None, text: str | None = None
+    ) -> Dict[str, Any]:
         clean_selector = (selector or "").strip()
         clean_text = (text or "").strip()
         if not clean_selector and not clean_text:
@@ -98,7 +100,9 @@ class _BrowserSession:
 
         def _click() -> Dict[str, Any]:
             if clean_selector:
-                self.page.wait_for_selector(clean_selector, timeout=self.action_timeout_ms)
+                self.page.wait_for_selector(
+                    clean_selector, timeout=self.action_timeout_ms
+                )
                 target = self.page.locator(clean_selector)
             else:
                 locator = self.page.get_by_text(clean_text, exact=False)
@@ -253,9 +257,9 @@ class _BrowserWorker(threading.Thread):
         super().__init__(name="AgentBrowserWorker", daemon=True)
         self._default_timeout_s = max(1, int(default_timeout_s))
         self._headless = bool(headless)
-        self._queue: "queue.Queue[tuple[str, Dict[str, Any], queue.Queue[Dict[str, Any]]]]" = (
-            queue.Queue()
-        )
+        self._queue: (
+            "queue.Queue[tuple[str, Dict[str, Any], queue.Queue[Dict[str, Any]]]]"
+        ) = queue.Queue()
         self._stop_evt = threading.Event()
         self._sessions: dict[str, _BrowserSession] = {}
         self._playwright: Any | None = None
@@ -297,7 +301,9 @@ class _BrowserWorker(threading.Thread):
             error = message.get("error")
             if isinstance(error, Exception):
                 raise error
-            raise BrowserActionError(str(error) if error else "browser worker failed to start")
+            raise BrowserActionError(
+                str(error) if error else "browser worker failed to start"
+            )
 
     def run(self) -> None:
         handshake_sent = False
@@ -345,10 +351,12 @@ class _BrowserWorker(threading.Thread):
         finally:
             if not handshake_sent:
                 with suppress(Exception):
-                    self._ready.put({
-                        "ok": False,
-                        "error": RuntimeError("browser worker failed to start"),
-                    })
+                    self._ready.put(
+                        {
+                            "ok": False,
+                            "error": RuntimeError("browser worker failed to start"),
+                        }
+                    )
             self._shutdown()
 
     def _dispatch(self, op: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -412,7 +420,9 @@ class _BrowserWorker(threading.Thread):
 
         threshold = time.monotonic() - self._idle_timeout
         expired = [
-            sid for sid, session in self._sessions.items() if session.last_active < threshold
+            sid
+            for sid, session in self._sessions.items()
+            if session.last_active < threshold
         ]
         for sid in expired:
             session = self._sessions.pop(sid, None)

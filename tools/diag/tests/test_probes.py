@@ -13,10 +13,14 @@ def _write_files(root: Path, files: Sequence[tuple[str, str]]) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def _run_probes(tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]) -> list[str]:
+def _run_probes(
+    tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]
+) -> list[str]:
     _write_files(tmp_path, files)
     engine = DiagnosticsEngine(tmp_path)
-    results, _, _ = engine.run(smoke=False, fail_on=Severity.HIGH, only=set(only), write_artifacts=False)
+    results, _, _ = engine.run(
+        smoke=False, fail_on=Severity.HIGH, only=set(only), write_artifacts=False
+    )
     return [finding.rule_id for finding in results.findings]
 
 

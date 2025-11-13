@@ -15,10 +15,10 @@ def test_coerce_chat_identifier_normalises_values():
 
 
 def test_sse_format_renders_event_frame():
-    payload = sse_format("{\"ok\":true}", event="ping", retry=1000).decode()
+    payload = sse_format('{"ok":true}', event="ping", retry=1000).decode()
     assert "retry: 1000" in payload
     assert "event: ping" in payload
-    assert "data: {\"ok\":true}" in payload
+    assert 'data: {"ok":true}' in payload
     assert payload.endswith("\n\n")
 
 

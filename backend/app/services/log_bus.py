@@ -48,7 +48,9 @@ class AgentLogBus:
     def publish(self, event: dict[str, Any]) -> None:
         payload = self._prepare_event(event)
         with self._lock:
-            subscribers: Iterable[queue.Queue[dict[str, Any]]] = tuple(self._subscribers)
+            subscribers: Iterable[queue.Queue[dict[str, Any]]] = tuple(
+                self._subscribers
+            )
         for stream in subscribers:
             self._deliver(stream, payload)
 
@@ -63,7 +65,9 @@ class AgentLogBus:
                 payload[key] = str(value)
         return payload
 
-    def _deliver(self, stream: queue.Queue[dict[str, Any]], event: dict[str, Any]) -> None:
+    def _deliver(
+        self, stream: queue.Queue[dict[str, Any]], event: dict[str, Any]
+    ) -> None:
         try:
             stream.put_nowait(event)
             return

@@ -1,4 +1,5 @@
 """Security baseline diagnostics."""
+
 from __future__ import annotations
 
 from typing import Iterable, List
@@ -19,7 +20,9 @@ UNSAFE_PREFS = (
 )
 def rule_electron_prefs(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []
-    for relative in context.iter_patterns("electron/**/*.js", "electron/**/*.ts", "desktop/**/*.ts"):
+    for relative in context.iter_patterns(
+        "electron/**/*.js", "electron/**/*.ts", "desktop/**/*.ts"
+    ):
         text = context.read_text(relative)
         for key, bad_value, rule_id in UNSAFE_PREFS[:2]:
             needle = f"{key}: {bad_value}"
@@ -48,7 +51,9 @@ def rule_electron_prefs(context: RuleContext) -> Iterable[Finding]:
 )
 def rule_sandbox_disabled(context: RuleContext) -> Iterable[Finding]:
     findings: List[Finding] = []
-    for relative in context.iter_patterns("electron/**/*.js", "electron/**/*.ts", "desktop/**/*.ts", "frontend/**/*.ts"):
+    for relative in context.iter_patterns(
+        "electron/**/*.js", "electron/**/*.ts", "desktop/**/*.ts", "frontend/**/*.ts"
+    ):
         text = context.read_text(relative)
         needle = "sandbox: false"
         pos = text.find(needle)

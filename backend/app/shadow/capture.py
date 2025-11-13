@@ -52,8 +52,12 @@ def _extract_title(html: str) -> str:
                 if title_text:
                     return title_text
         except Exception:  # pragma: no cover - defensive guard
-            LOGGER.debug("failed to parse <title> tag with BeautifulSoup", exc_info=True)
-    match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+            LOGGER.debug(
+                "failed to parse <title> tag with BeautifulSoup", exc_info=True
+            )
+    match = re.search(
+        r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL
+    )
     if match:
         candidate = re.sub(r"\s+", " ", match.group(1)).strip()
         if candidate:
@@ -210,7 +214,9 @@ class ShadowCaptureService:
             }
             if not html.strip():
                 error_payload["message"] = "empty_response"
-            return SnapshotResult(status_code if status_code >= 400 else 502, error_payload)
+            return SnapshotResult(
+                status_code if status_code >= 400 else 502, error_payload
+            )
 
         title = _extract_title(html) or (domain or raw_url)
         body = _extract_text(html)
@@ -298,7 +304,9 @@ class ShadowCaptureService:
             rag_error = str(exc)
             LOGGER.exception("shadow capture indexing failed for %s", raw_url)
         else:
-            rag_indexed = bool(index_result.chunks) and not index_result.pending_embedding
+            rag_indexed = (
+                bool(index_result.chunks) and not index_result.pending_embedding
+            )
             pending_embedding = bool(index_result.pending_embedding)
 
         normalized_rel_path = str(

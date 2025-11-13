@@ -224,8 +224,16 @@ class AutopilotDirective(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_payload(self) -> "AutopilotDirective":
-        if not (self.query or self.reason or (self.tools and len(self.tools) > 0) or (self.steps and len(self.steps) > 0) or self.directive):
-            raise ValueError("autopilot directive must include query, reason, tools, steps, or directive details")
+        if not (
+            self.query
+            or self.reason
+            or (self.tools and len(self.tools) > 0)
+            or (self.steps and len(self.steps) > 0)
+            or self.directive
+        ):
+            raise ValueError(
+                "autopilot directive must include query, reason, tools, steps, or directive details"
+            )
         return self
 
 

@@ -29,7 +29,7 @@ def _has_stream_frames(text: str) -> bool:
     return (
         "\n\n" in text
         or text.startswith("data: ")
-        or "\n{\"type\":" in text
+        or '\n{"type":' in text
         or '"type": "metadata"' in text
         or '"type": "delta"' in text
         or '"type": "complete"' in text
@@ -47,7 +47,10 @@ def probe_chat_loopback(context: RuleContext) -> Iterable[Finding]:
 
     base = "http://127.0.0.1:3100"
     url = f"{base}/api/chat"
-    payload = {"messages": [{"role": "user", "content": "ping"}], "model": "gpt-oss:20b"}
+    payload = {
+        "messages": [{"role": "user", "content": "ping"}],
+        "model": "gpt-oss:20b",
+    }
 
     # SSE
     try:

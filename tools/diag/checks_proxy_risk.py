@@ -1,4 +1,5 @@
 """Proxy risk diagnostics."""
+
 from __future__ import annotations
 
 import re
@@ -9,10 +10,17 @@ from .engine import Finding, RuleContext, Severity, register
 URL_RE = re.compile(
     r"(fetch|axios\.[a-zA-Z]+|requests\.(get|post|put|delete)|httpx\.(get|post|put|delete))\s*\(\s*['\"](https?://[^'\"]+)",
 )
-LOCAL_PREFIXES = ("http://localhost", "http://127.", "https://localhost", "https://127.")
+LOCAL_PREFIXES = (
+    "http://localhost",
+    "http://127.",
+    "https://localhost",
+    "https://127.",
+)
 
 DEFAULT_PORT_RE = re.compile(r"DEFAULT_API_BASE_URL\s*=\s*['\"`]http://[^:]+:(\d+)")
-DESTINATION_PORT_RE = re.compile(r"destination\s*:\s*['\"`]http://[^:]+:(\d+)/api/:path\*")
+DESTINATION_PORT_RE = re.compile(
+    r"destination\s*:\s*['\"`]http://[^:]+:(\d+)/api/:path\*"
+)
 BACKEND_PORT_RE = re.compile(r"BACKEND_PORT\s*=\s*(\d+)")
 
 
@@ -112,7 +120,7 @@ def rule_proxy_cors_mismatch(context: RuleContext) -> Iterable[Finding]:
             )
 
     if backend_text:
-        if "\"/api/*\"" not in backend_text and "'/api/*'" not in backend_text:
+        if '"/api/*"' not in backend_text and "'/api/*'" not in backend_text:
             findings.append(
                 Finding(
                     id="proxy-cors:cors-scope",

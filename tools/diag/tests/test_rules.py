@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import pytest
-
 from tools.diag import DiagnosticsEngine, Finding, Severity
 
 
@@ -15,10 +13,14 @@ def _write_files(root: Path, files: Sequence[tuple[str, str]]) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def _run_rules(tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]) -> list[Finding]:
+def _run_rules(
+    tmp_path: Path, files: Sequence[tuple[str, str]], only: Iterable[str]
+) -> list[Finding]:
     _write_files(tmp_path, files)
     engine = DiagnosticsEngine(tmp_path)
-    results, _, _ = engine.run(smoke=False, fail_on=Severity.HIGH, only=set(only), write_artifacts=False)
+    results, _, _ = engine.run(
+        smoke=False, fail_on=Severity.HIGH, only=set(only), write_artifacts=False
+    )
     return list(results.findings)
 
 
@@ -43,7 +45,9 @@ def test_browser_shell_iframe_and_history(tmp_path: Path) -> None:
             """,
         )
     ]
-    findings = _run_rules(tmp_path, files, only={"R1", "R2", "R23_cross_origin_iframe_history"})
+    findings = _run_rules(
+        tmp_path, files, only={"R1", "R2", "R23_cross_origin_iframe_history"}
+    )
     rule_ids = {finding.rule_id for finding in findings}
     assert "R1" in rule_ids
     assert "R2" in rule_ids
@@ -196,7 +200,10 @@ def test_llm_stream_integrity(tmp_path: Path) -> None:
     files = [
         ("desktop/main.ts", "export const noop = true;"),
         ("desktop/preload.ts", "export const noop = true;"),
-        ("frontend/src/hooks/useLlmStream.ts", "export function useLlmStream() { return null as any; }")
+        (
+            "frontend/src/hooks/useLlmStream.ts",
+            "export function useLlmStream() { return null as any; }",
+        ),
     ]
     findings = _run_rules(tmp_path, files, only={"R20_stream_integrity"})
     rule_ids = {finding.rule_id for finding in findings}

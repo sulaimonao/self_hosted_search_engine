@@ -50,7 +50,10 @@ class MetricsStore:
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._path.write_text(json.dumps(self._metrics.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+            self._path.write_text(
+                json.dumps(self._metrics.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except Exception:
             pass
 
@@ -71,7 +74,9 @@ class MetricsStore:
 _store = MetricsStore(METRICS_PATH)
 
 
-def record_event(key: str, amount: int = 1, *, bus: ProgressBus | None = None) -> Dict[str, int]:
+def record_event(
+    key: str, amount: int = 1, *, bus: ProgressBus | None = None
+) -> Dict[str, int]:
     snapshot = _store.increment(key, amount)
     if bus is not None:
         try:

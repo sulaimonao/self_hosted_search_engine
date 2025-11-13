@@ -50,7 +50,9 @@ def route_to_browser(
     reason_text = (reason or "").strip() or "User requested browser assistance."
     results = web_search(trimmed, limit=limit, use_llm=False, model=model)
     top_url = next((item.get("url") for item in results if item.get("url")), trimmed)
-    top_title = next((item.get("title") for item in results if item.get("title")), "Result")
+    top_title = next(
+        (item.get("title") for item in results if item.get("title")), "Result"
+    )
 
     tool_payload = {
         "label": "Open top result",
@@ -84,7 +86,10 @@ def reasoning_endpoint():
     resolved_model = requested_model or _configured_model()
     resolved_model = ollama_client.resolve_model_name(resolved_model, chat_only=True)
     use_browser = _coerce_bool(payload.get("use_browser"))
-    browser_reason = str(payload.get("browser_reason") or payload.get("reason") or "").strip() or None
+    browser_reason = (
+        str(payload.get("browser_reason") or payload.get("reason") or "").strip()
+        or None
+    )
     limit = payload.get("limit")
     try:
         limit_value = int(limit) if limit not in (None, "") else 5
@@ -99,7 +104,11 @@ def reasoning_endpoint():
     }
 
     if use_browser:
-        response["browser"] = {"results": web_search(query, limit=limit_value, use_llm=False, model=resolved_model)}
+        response["browser"] = {
+            "results": web_search(
+                query, limit=limit_value, use_llm=False, model=resolved_model
+            )
+        }
         response["autopilot"] = route_to_browser(
             query,
             reason=browser_reason,

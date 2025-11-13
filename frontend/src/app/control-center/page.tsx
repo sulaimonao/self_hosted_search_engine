@@ -46,6 +46,7 @@ import {
 } from "@/lib/configClient";
 import type { ConfigFieldOption, ConfigSchema, RuntimeConfig, HealthSnapshot } from "@/lib/configClient";
 import { useSafeNavigate } from "@/lib/useSafeNavigate";
+import RoadmapPanel from "@/components/roadmap/RoadmapPanel";
 import { useRenderLoopGuardState } from "@/lib/renderLoopContext";
 import { useRenderLoopDiagnostics } from "@/state/useRenderLoopDiagnostics";
 import { safeLocalStorage } from "@/utils/isomorphicStorage";
@@ -66,6 +67,7 @@ function resolveFieldValue(config: RuntimeConfig | undefined, field: ConfigField
 }
 
 const RUNTIME_TAB_ID = "runtime-desktop";
+const ROADMAP_TAB_ID = "roadmap";
 
 const AGENT_BROWSER_DEFAULTS: AgentBrowserConfigPayload = {
   enabled: true,
@@ -679,6 +681,7 @@ export default function ControlCenterPage() {
               </TabsTrigger>
             ))}
             <TabsTrigger value={RUNTIME_TAB_ID}>Runtime & Desktop</TabsTrigger>
+            <TabsTrigger value={ROADMAP_TAB_ID}>Roadmap</TabsTrigger>
           </TabsList>
           {sections.map((section) => (
             <TabsContent key={section.id} value={section.id}>
@@ -950,6 +953,14 @@ export default function ControlCenterPage() {
                   High {diagHigh} · Medium {diagMedium} · Low {diagLow}
                 </div>
               </Card>
+            </div>
+          </TabsContent>
+          <TabsContent value={ROADMAP_TAB_ID}>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Live roadmap of features and stability tasks. Items mapped to diagnostics auto-update; manual items can be edited inline.
+              </p>
+              <RoadmapPanel />
             </div>
           </TabsContent>
         </Tabs>

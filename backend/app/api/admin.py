@@ -61,7 +61,9 @@ def install_models() -> tuple[Response, int]:
         candidate = entry if isinstance(entry, str) else None
         if not candidate:
             continue
-        name = ollama_client.resolve_model_name(candidate, base_url=base_url, chat_only=False)
+        name = ollama_client.resolve_model_name(
+            candidate, base_url=base_url, chat_only=False
+        )
         try:
             process = ollama_client.pull_model(name, base_url=base_url)
         except FileNotFoundError:

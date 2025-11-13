@@ -251,13 +251,15 @@ except ModuleNotFoundError:
         prom_module.generate_latest = _generate_latest
         sys.modules["prometheus_client"] = prom_module
 
-from backend.app.api import domains as domains_api
-from backend.app.db import AppStateDB
+from backend.app.api import domains as domains_api  # noqa: E402
+from backend.app.db import AppStateDB  # noqa: E402
 
 
 def _seed_documents(state_db) -> None:
     job_id = "job-1"
-    state_db.record_crawl_job(job_id, query="test", normalized_path="/tmp/normalized.jsonl")
+    state_db.record_crawl_job(
+        job_id, query="test", normalized_path="/tmp/normalized.jsonl"
+    )
     state_db.update_crawl_status(job_id, "success")
     state_db.upsert_document(
         job_id=job_id,

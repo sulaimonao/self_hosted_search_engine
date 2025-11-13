@@ -28,7 +28,9 @@ def assemble_context(
     global_mems = state_db.list_memories(scope="global", scope_ref=None, limit=20)
 
     combined = thread_mems + user_mems + global_mems
-    include_flags = {item.strip().lower() for item in include or set() if item and item.strip()}
+    include_flags = {
+        item.strip().lower() for item in include or set() if item and item.strip()
+    }
     payload = {
         "messages": messages,
         "summary": summary.get("summary") if summary else None,

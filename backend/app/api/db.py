@@ -22,7 +22,19 @@ _NAMED_QUERIES: dict[str, str] = {
     ),
 }
 
-_DISALLOWED_TOKENS = {"insert", "update", "delete", "drop", "alter", "create", "attach", "detach", "reindex", "vacuum", "replace"}
+_DISALLOWED_TOKENS = {
+    "insert",
+    "update",
+    "delete",
+    "drop",
+    "alter",
+    "create",
+    "attach",
+    "detach",
+    "reindex",
+    "vacuum",
+    "replace",
+}
 
 
 def _serialize_cell(value: Any) -> Any:
@@ -65,7 +77,12 @@ def run_query():
     if named:
         sql_template = _NAMED_QUERIES.get(named)
         if not sql_template:
-            return jsonify({"error": "unknown_named_query", "allowed": sorted(_NAMED_QUERIES)}), 400
+            return (
+                jsonify(
+                    {"error": "unknown_named_query", "allowed": sorted(_NAMED_QUERIES)}
+                ),
+                400,
+            )
         sql_value = sql_template
     if not sql_value:
         return jsonify({"error": "query_required"}), 400

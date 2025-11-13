@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Awaitable
+from typing import Any, Coroutine
 
 import pytest
 
@@ -175,7 +175,9 @@ def test_handle_sources_enqueues_and_limits(tmp_path: Path) -> None:
         await crawler._handle_sources(candidate, result, queue)
         return queued_candidate
 
-    def _execute(coro: "asyncio.Future[Candidate]" | "asyncio.coroutines") -> Candidate:
+    def _execute(
+        coro: Coroutine[Any, Any, Candidate] | "asyncio.Future[Candidate]",
+    ) -> Candidate:
         try:
             asyncio.get_running_loop()
         except RuntimeError:

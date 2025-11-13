@@ -24,7 +24,11 @@ def list_probes() -> Dict[str, Any]:
 def run(labels: Optional[List[str]] = None) -> Dict[str, Any]:
     if labels:
         manifest = expand_manifest(load_manifest())
-        selected = [probe for probe in manifest.get("probes", []) if probe.get("label") in labels]
+        selected = [
+            probe
+            for probe in manifest.get("probes", [])
+            if probe.get("label") in labels
+        ]
         steps: List[Dict[str, Any]] = []
         errors: List[Dict[str, Any]] = []
         for probe in selected:

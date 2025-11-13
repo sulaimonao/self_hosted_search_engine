@@ -36,7 +36,9 @@ def probe_agent_trace_toggle(context: RuleContext) -> Iterable[Finding]:
 
     store = context.read_text("frontend/src/state/ui.ts")
     # Accept either direct localStorage usage or the safeLocalStorage helper
-    if not any(token in (store or "") for token in ("localStorage", "safeLocalStorage")):
+    if not any(
+        token in (store or "") for token in ("localStorage", "safeLocalStorage")
+    ):
         findings.append(
             Finding(
                 id="agent_trace_toggle:local_storage",

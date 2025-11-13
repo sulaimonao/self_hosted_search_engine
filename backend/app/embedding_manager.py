@@ -202,7 +202,8 @@ class EmbeddingManager:
             return []
 
         if result.returncode != 0:
-            if result.stderr and "command not found" in result.stderr.lower():
+            stderr_text = getattr(result, "stderr", "") or ""
+            if "command not found" in stderr_text.lower():
                 self.logger.warning("ollama command not found; auto-install disabled")
             return []
 

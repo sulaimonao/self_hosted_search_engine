@@ -1,4 +1,5 @@
 """Ensure environment keys referenced in code are documented."""
+
 from __future__ import annotations
 
 import os
@@ -48,7 +49,7 @@ def load_app_config_keys(root: Path) -> Set[str]:
             connection.close()
             continue
         keys: Set[str] = set()
-        for raw_key, in cursor.fetchall():
+        for (raw_key,) in cursor.fetchall():
             if raw_key is None:
                 continue
             base = str(raw_key).strip()

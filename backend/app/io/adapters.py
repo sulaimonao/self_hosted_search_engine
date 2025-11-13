@@ -71,7 +71,9 @@ def _ensure_mapping(payload: Any) -> dict[str, Any]:
     return {}
 
 
-def _safe_validate(model_cls: type[Directive] | type[Incident] | type[Step], payload: Any):
+def _safe_validate(
+    model_cls: type[Directive] | type[Incident] | type[Step], payload: Any
+):
     try:
         return model_cls.model_validate(payload)
     except ValidationError:
@@ -109,14 +111,18 @@ def clamp_incident(payload: Any) -> Incident:
         return Incident()
 
 
-def clamp_directive(payload: Any, *, fallback_reason: str | None = None) -> DirectiveClampResult:
+def clamp_directive(
+    payload: Any, *, fallback_reason: str | None = None
+) -> DirectiveClampResult:
     """Normalize planner responses down to executor-safe directives."""
 
     raw = _ensure_mapping(payload)
     steps_in = raw.get("steps")
     sanitized_steps: list[Step] = []
     dropped: list[str] = []
-    if isinstance(steps_in, Sequence) and not isinstance(steps_in, (str, bytes, bytearray)):
+    if isinstance(steps_in, Sequence) and not isinstance(
+        steps_in, (str, bytes, bytearray)
+    ):
         for idx, candidate in enumerate(steps_in, start=1):
             try:
                 step_model = Step.model_validate(candidate)
@@ -134,7 +140,9 @@ def clamp_directive(payload: Any, *, fallback_reason: str | None = None) -> Dire
     if fallback_applied:
         sanitized_steps = [Step(type="reload")]
 
-    reason = _coerce_str(raw.get("reason")) or ("Planned fix" if not fallback_applied else "timeout_or_invalid")
+    reason = _coerce_str(raw.get("reason")) or (
+        "Planned fix" if not fallback_applied else "timeout_or_invalid"
+    )
     if fallback_applied and fallback_reason:
         reason = fallback_reason
 
@@ -147,7 +155,9 @@ def clamp_directive(payload: Any, *, fallback_reason: str | None = None) -> Dire
     except ValidationError:
         directive = Directive(reason=reason, steps=sanitized_steps)
 
-    return DirectiveClampResult(directive=directive, dropped_steps=dropped, fallback_applied=fallback_applied)
+    return DirectiveClampResult(
+        directive=directive, dropped_steps=dropped, fallback_applied=fallback_applied
+    )
 
 
 def coerce_incident(payload: Any) -> Incident:
@@ -179,7 +189,9 @@ def allowed_model_aliases() -> tuple[str, ...]:
     return tuple(sorted(_ALLOWED_MODEL_ALIASES))
 
 
-def normalize_model_alias(name: str | None, *, default: str = _DEFAULT_MODEL_ALIAS) -> str:
+def normalize_model_alias(
+    name: str | None, *, default: str = _DEFAULT_MODEL_ALIAS
+) -> str:
     if name is None:
         return default
     token = _normalize_token(name)
@@ -188,7 +200,9 @@ def normalize_model_alias(name: str | None, *, default: str = _DEFAULT_MODEL_ALI
     mapping = _model_alias_map()
     if token in mapping:
         return mapping[token]
-    raise ValueError(f"Unsupported model alias '{name}'. Allowed: {', '.join(allowed_model_aliases())}")
+    raise ValueError(
+        f"Unsupported model alias '{name}'. Allowed: {', '.join(allowed_model_aliases())}"
+    )
 
 
 def normalize_model(

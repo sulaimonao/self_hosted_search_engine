@@ -7,7 +7,9 @@ from backend.app.db import domain_profiles
 
 
 class DummyResponse:
-    def __init__(self, url: str, status_code: int = 200, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, url: str, status_code: int = 200, headers: dict[str, str] | None = None
+    ) -> None:
         self.url = url
         self.status_code = status_code
         self.headers = headers or {}
@@ -29,7 +31,11 @@ def test_detects_paywall_and_records_profile():
 
 
 def test_detects_login_redirect():
-    response = DummyResponse("https://news.example", status_code=302, headers={"Location": "https://news.example/login"})
+    response = DummyResponse(
+        "https://news.example",
+        status_code=302,
+        headers={"Location": "https://news.example/login"},
+    )
     info = auth_clearance.detect_clearance(response, "")
     assert info["requires_login"] is True
 
