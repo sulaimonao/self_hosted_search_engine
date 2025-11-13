@@ -548,6 +548,14 @@ field length via `LOG_MAX_FIELD_BYTES`. Follow live events with:
 
 Client-side logging (frontend / Electron) is forwarded into the same telemetry store; see `docs/logging_frontend.md` for details and verification steps.
 
+Every inbound Flask request now emits a `traffic.http.server` event that
+captures method, path, latency, byte counts, sanitized headers, and a redacted
+body snapshot when JSON is supplied. Outbound `requests` traffic is mirrored as
+`traffic.http.client`, so calls to Ollama, remote crawlers, and internal
+services share the same trace identifiers. Both directions respect
+`LOG_SAMPLE_PCT` (defaults to 1.0) and land in `events.ndjson`, making it easy
+to correlate chat requests with downstream HTTP calls when debugging.
+
 The refresh pipeline now streams normalized documents to SQLite immediately, even
 when the embedding model is still warming up. Pending chunks land in the
 `pending_documents`, `pending_chunks`, and `pending_vectors_queue` tables inside
@@ -577,8 +585,9 @@ array explains which column types are out of compliance (e.g. when
 `pending_documents.sim_signature` still uses an `INTEGER` type). Apply the
 latest migrations and restart the service to recover.
 
-Every Flask request emits `req.start` / `req.end` events with request, session,
-and user correlation IDs. Tool invocations emit
+Every Flask request emits `traffic.http.server` events with request, session,
+and user correlation IDs, while outbound calls show up as
+`traffic.http.client`. Tool invocations emit
 `tool.start` / `tool.end` / `tool.error` events with redacted inputs and result
 previews. Planner responses append `agent.turn` summaries, and API responses
 include a `run_log` array so the UI can surface per-turn activity.

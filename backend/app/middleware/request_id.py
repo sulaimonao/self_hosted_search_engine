@@ -7,7 +7,7 @@ import time
 from flask import g, request
 
 from backend.logging_utils import new_request_id
-from server.json_logger import log_event
+from backend.app.observability import log_inbound_http_traffic
 
 
 def before_request() -> None:
@@ -34,15 +34,7 @@ def after_request(response):  # type: ignore[no-untyped-def]
         duration_ms = int((time.perf_counter() - start_perf) * 1000)
     trace_id: str | None = getattr(g, "trace_id", None)
 
-    log_event(
-        "INFO",
-        "http.summary",
-        trace=trace_id,
-        method=request.method,
-        path=request.path,
-        status=response.status_code,
-        duration_ms=duration_ms,
-    )
+    log_inbound_http_traffic(response, duration_ms)
 
     if trace_id:
         response.headers.setdefault("X-Request-Id", trace_id)

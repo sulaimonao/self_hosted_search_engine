@@ -105,6 +105,9 @@ diagnostics/*
 !backend/app/services/fallbacks.py
 !backend/app/services/index_health.py
 !backend/app/services/runtime_status.py
+!backend/app/observability/
+!backend/app/observability/__init__.py
+!backend/app/observability/traffic.py
 !backend/app/routes/
 !backend/app/routes/__init__.py
 !backend/app/routes/config.py

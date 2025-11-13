@@ -21,6 +21,7 @@ from flask_cors import CORS
 
 from observability import configure_tracing
 from .logging_setup import setup_logging
+from backend.app.observability import install_requests_logging
 
 
 LOGGER = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ EMBEDDING_MODEL_PATTERNS = [
 ]
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.yaml"
+
+install_requests_logging()
 
 
 def _is_embedding_model(name: str) -> bool:
