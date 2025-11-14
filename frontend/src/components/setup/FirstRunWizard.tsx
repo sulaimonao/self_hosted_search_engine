@@ -53,12 +53,13 @@ export function FirstRunWizard() {
   const [error, setError] = useState<string | null>(null);
 
   const completed = Boolean(config?.setup_completed);
+  const hasConfig = typeof config !== "undefined";
   const missingModels = useMemo(() => detectMissingModels(health ?? null), [health]);
-  const [open, setOpen] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    if (!completed) {
-      setOpen(true);
+    if (completed) {
+      setDismissed(false);
     }
   }, [completed]);
 
@@ -83,15 +84,24 @@ export function FirstRunWizard() {
   const handleFinish = async () => {
     await putConfig({ setup_completed: true });
     await mutateConfig();
-    setOpen(false);
+    setDismissed(false);
   };
 
-  if (!open) {
+  const shouldDisplay = hasConfig && !completed && !dismissed;
+
+  if (!shouldDisplay) {
     return null;
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={shouldDisplay}
+      onOpenChange={(next) => {
+        if (!next) {
+          setDismissed(true);
+        }
+      }}
+    >
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Welcome to your self-hosted search engine</DialogTitle>
@@ -153,7 +163,12 @@ export function FirstRunWizard() {
           </section>
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setDismissed(true);
+            }}
+          >
             Skip for now
           </Button>
           <Button onClick={() => void handleFinish()}>
