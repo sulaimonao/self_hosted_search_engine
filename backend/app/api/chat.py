@@ -115,6 +115,12 @@ def _state_db() -> AppStateDB | None:
 
 def _ensure_thread_context(chat_request: ChatRequest) -> str:
     preferred = chat_request.chat_id
+    state_db = _state_db()
+    tab_id = chat_request.tab_id
+    if not preferred and state_db is not None and tab_id:
+        tab_thread = state_db.tab_thread_id(tab_id)
+        if tab_thread:
+            preferred = tab_thread
     if not preferred:
         context = chat_request.context or {}
         context_thread = context.get("thread_id") if isinstance(context, Mapping) else None
@@ -122,9 +128,10 @@ def _ensure_thread_context(chat_request: ChatRequest) -> str:
             preferred = context_thread.strip()
     if not preferred:
         preferred = chat_request.request_id or uuid4().hex
-    state_db = _state_db()
     if state_db is not None:
         state_db.ensure_llm_thread(preferred, origin="chat")
+        if tab_id:
+            state_db.bind_tab_thread(tab_id, preferred)
     g.chat_thread_id = preferred
     return preferred
 

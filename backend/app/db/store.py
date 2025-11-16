@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import sqlite3
 import threading
 import time
 import uuid
@@ -164,7 +165,7 @@ class AppStateDB:
             )
             if shadow_mode:
                 self._conn.execute(
-                    "UPDATE tabs SET shadow_mode=? WHERE id=?",
+                    "UPDATE tabs SET shadow_mode=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                     (shadow_mode, tab_id),
                 )
 
@@ -172,7 +173,7 @@ class AppStateDB:
         self.ensure_tab(tab_id)
         with self._lock, self._conn:
             self._conn.execute(
-                "UPDATE tabs SET shadow_mode=? WHERE id=?",
+                "UPDATE tabs SET shadow_mode=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (mode, tab_id),
             )
 
@@ -188,6 +189,138 @@ class AppStateDB:
             return None
         value = row["shadow_mode"]
         return str(value) if value is not None else None
+
+    def _format_tab_row(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        current_history = {
+            "id": payload.get("current_history_id"),
+            "url": payload.get("history_url") or payload.get("current_url"),
+            "title": payload.get("history_title") or payload.get("current_title"),
+            "visited_at": payload.get("history_visited_at") or payload.get("last_visited_at"),
+        }
+        if not any(current_history.values()):
+            current_history = None
+        return {
+            "id": payload.get("id"),
+            "shadow_mode": payload.get("shadow_mode"),
+            "thread_id": payload.get("thread_id"),
+            "current_history_id": payload.get("current_history_id"),
+            "current_url": payload.get("current_url") or payload.get("history_url"),
+            "current_title": payload.get("current_title") or payload.get("history_title"),
+            "created_at": payload.get("created_at"),
+            "updated_at": payload.get("updated_at"),
+            "last_visited_at": payload.get("last_visited_at"),
+            "current_history": current_history,
+        }
+
+    def list_tabs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        capped = max(1, min(int(limit), 200))
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT t.id,
+                       t.shadow_mode,
+                       t.thread_id,
+                       t.current_history_id,
+                       t.current_url,
+                       t.current_title,
+                       t.created_at,
+                       t.updated_at,
+                       t.last_visited_at,
+                       h.url AS history_url,
+                       h.title AS history_title,
+                       h.visited_at AS history_visited_at
+                  FROM tabs AS t
+             LEFT JOIN history AS h ON h.id = t.current_history_id
+              ORDER BY COALESCE(t.updated_at, t.created_at) DESC
+                 LIMIT ?
+                """,
+                (capped,),
+            ).fetchall()
+        return [self._format_tab_row(row) for row in rows]
+
+    def get_tab(self, tab_id: str) -> dict[str, Any] | None:
+        if not tab_id:
+            return None
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                """
+                SELECT t.id,
+                       t.shadow_mode,
+                       t.thread_id,
+                       t.current_history_id,
+                       t.current_url,
+                       t.current_title,
+                       t.created_at,
+                       t.updated_at,
+                       t.last_visited_at,
+                       h.url AS history_url,
+                       h.title AS history_title,
+                       h.visited_at AS history_visited_at
+                  FROM tabs AS t
+             LEFT JOIN history AS h ON h.id = t.current_history_id
+                 WHERE t.id = ?
+                """,
+                (tab_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._format_tab_row(row)
+
+    def bind_tab_thread(self, tab_id: str, thread_id: str | None) -> None:
+        if not tab_id:
+            return
+        self.ensure_tab(tab_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE tabs SET thread_id = ?, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+                (thread_id, tab_id),
+            )
+
+    def tab_thread_id(self, tab_id: str) -> str | None:
+        if not tab_id:
+            return None
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT thread_id FROM tabs WHERE id = ?",
+                (tab_id,),
+            ).fetchone()
+        if not row:
+            return None
+        value = row["thread_id"]
+        return str(value) if value else None
+
+    def update_tab_navigation(
+        self,
+        tab_id: str,
+        *,
+        history_id: int | None = None,
+        url: str | None = None,
+        title: str | None = None,
+    ) -> None:
+        if not tab_id:
+            return
+        updates: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
+        params: list[Any] = []
+        if history_id is not None:
+            updates.append("current_history_id = ?")
+            params.append(history_id)
+            updates.append("last_visited_at = CURRENT_TIMESTAMP")
+        if url is not None:
+            updates.append("current_url = ?")
+            params.append(url)
+        if title is not None:
+            updates.append("current_title = ?")
+            params.append(title)
+        if len(updates) == 1:
+            return
+        self.ensure_tab(tab_id)
+        params.append(tab_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE tabs SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
 
     def add_history_entry(
         self,
@@ -218,6 +351,8 @@ class AppStateDB:
                 ),
             )
             history_id = cursor.lastrowid
+        if tab_id:
+            self.update_tab_navigation(tab_id, history_id=int(history_id), url=url, title=title)
         return int(history_id)
 
     def mark_history_shadow_enqueued(self, history_id: int) -> None:
@@ -430,6 +565,65 @@ class AppStateDB:
         if not settings.get("enabled"):
             return "off"
         return str(settings.get("mode") or "off")
+
+    def overview_counters(self) -> dict[str, Any]:
+        def _count(query: str, params: Sequence[Any] | None = None) -> int:
+            try:
+                row = self._conn.execute(query, params or ()).fetchone()
+            except sqlite3.OperationalError:
+                return 0
+            value = row[0] if row else 0
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        with self._lock, self._conn:
+            tabs_total = _count("SELECT COUNT(*) FROM tabs")
+            tabs_linked = _count(
+                "SELECT COUNT(*) FROM tabs WHERE thread_id IS NOT NULL AND thread_id <> ''"
+            )
+            history_row = self._conn.execute(
+                "SELECT COUNT(*), MAX(visited_at) FROM history"
+            ).fetchone()
+            history_total = int(history_row[0] or 0)
+            history_last = history_row[1] if history_row else None
+            documents_total = _count("SELECT COUNT(*) FROM documents")
+            pages_total = _count("SELECT COUNT(*) FROM pages")
+            pending_docs = _count("SELECT COUNT(*) FROM pending_documents")
+            pending_chunks = _count("SELECT COUNT(*) FROM pending_chunks")
+            pending_vectors = _count("SELECT COUNT(*) FROM pending_vectors_queue")
+            llm_threads = _count("SELECT COUNT(*) FROM llm_threads")
+            llm_messages = _count("SELECT COUNT(*) FROM llm_messages")
+            memories_total = _count("SELECT COUNT(*) FROM memories")
+            tasks_total = _count("SELECT COUNT(*) FROM tasks")
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) AS total FROM tasks GROUP BY status"
+            ).fetchall()
+            tasks_by_status = {
+                str(row["status"] or "unknown"): int(row["total"] or 0)
+                for row in rows
+            }
+
+        return {
+            "browser": {
+                "tabs": {"total": tabs_total, "linked": tabs_linked},
+                "history": {"entries": history_total, "last_visit": history_last},
+            },
+            "knowledge": {
+                "documents": documents_total,
+                "pages": pages_total,
+                "pending_documents": pending_docs,
+                "pending_chunks": pending_chunks,
+                "pending_vectors": pending_vectors,
+            },
+            "llm": {
+                "threads": {"total": llm_threads},
+                "messages": {"total": llm_messages},
+                "memories": {"total": memories_total},
+            },
+            "tasks": {"total": tasks_total, "by_status": tasks_by_status},
+        }
 
     def enqueue_crawl_job(
         self,
