@@ -700,6 +700,45 @@ def _migration_20251115_desktop_defaults(connection: sqlite3.Connection) -> None
         connection.executescript(script)
 
 
+def _migration_011_tab_threads(connection: sqlite3.Connection) -> None:
+    table = "tabs"
+    if not _table_exists(connection, table):
+        return
+    with connection:
+        if not _column_exists(connection, table, "thread_id"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN thread_id TEXT REFERENCES llm_threads(id) ON DELETE SET NULL"
+            )
+        if not _column_exists(connection, table, "current_history_id"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN current_history_id INTEGER REFERENCES history(id) ON DELETE SET NULL"
+            )
+        if not _column_exists(connection, table, "current_url"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN current_url TEXT"
+            )
+        if not _column_exists(connection, table, "current_title"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN current_title TEXT"
+            )
+        if not _column_exists(connection, table, "last_visited_at"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN last_visited_at TIMESTAMP"
+            )
+        if not _column_exists(connection, table, "updated_at"):
+            connection.execute(
+                "ALTER TABLE tabs ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            )
+
+    with connection:
+        if not _index_exists(connection, table, "idx_tabs_thread"):
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_tabs_thread ON tabs(thread_id)")
+        if not _index_exists(connection, table, "idx_tabs_history"):
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tabs_history ON tabs(current_history_id)"
+            )
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -711,6 +750,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("008_app_config", _migration_008_app_config),
     ("009_domain_graph", _migration_009_domain_graph),
     ("010_hydraflow", _migration_010_hydraflow),
+    ("011_tab_threads", _migration_011_tab_threads),
     ("20251102_app_config", _migration_20251102_app_config),
     ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]

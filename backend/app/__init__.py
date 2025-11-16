@@ -104,6 +104,7 @@ def create_app() -> Flask:
     from .api import sources as sources_api
     from .api import runtime as runtime_api
     from .api import embeddings as embeddings_api
+    from .api import overview as overview_api
     # Config routes (persisted app configuration)
     from .routes import config as config_routes
     from .config import AppConfig
@@ -665,6 +666,7 @@ def create_app() -> Flask:
     app.register_blueprint(sources_api.bp)
     app.register_blueprint(runtime_api.bp)
     app.register_blueprint(config_routes.bp)
+    app.register_blueprint(overview_api.bp)
 
     app.before_request(request_id_middleware.before_request)
     app.after_request(request_id_middleware.after_request)

@@ -29,6 +29,69 @@ def _state_db() -> AppStateDB:
 
 
 # ---------------------------------------------------------------------------
+# Tab ↔ thread endpoints
+# ---------------------------------------------------------------------------
+
+
+def _normalize_tab_id(tab_id: str | None) -> str | None:
+    if tab_id is None:
+        return None
+    text = str(tab_id).strip()
+    return text or None
+
+
+@bp.get("/tabs")
+def list_tabs():
+    state_db = _state_db()
+    limit = request.args.get("limit", type=int) or 50
+    items = state_db.list_tabs(limit=limit)
+    return jsonify({"items": items})
+
+
+@bp.get("/tabs/<tab_id>")
+def get_tab(tab_id: str):
+    normalized = _normalize_tab_id(tab_id)
+    if not normalized:
+        abort(400, "tab_id is required")
+    state_db = _state_db()
+    record = state_db.get_tab(normalized)
+    if not record:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"tab": record})
+
+
+@bp.post("/tabs/<tab_id>/thread")
+def bind_tab_thread(tab_id: str):
+    normalized = _normalize_tab_id(tab_id)
+    if not normalized:
+        abort(400, "tab_id is required")
+    payload = request.get_json(silent=True) or {}
+    requested_thread = _normalize_tab_id(payload.get("thread_id"))
+    title = str(payload.get("title") or "").strip() or None
+    description = str(payload.get("description") or "").strip() or None
+    origin = str(payload.get("origin") or "browser").strip() or "browser"
+    state_db = _state_db()
+    if requested_thread:
+        state_db.ensure_llm_thread(
+            requested_thread,
+            title=title,
+            description=description,
+            origin=origin,
+        )
+        thread_id = requested_thread
+    else:
+        thread_id = state_db.create_llm_thread(
+            title=title,
+            description=description,
+            origin=origin,
+        )
+    state_db.bind_tab_thread(normalized, thread_id)
+    tab_record = state_db.get_tab(normalized)
+    thread_record = state_db.get_llm_thread(thread_id)
+    return jsonify({"tab": tab_record, "thread": thread_record, "thread_id": thread_id})
+
+
+# ---------------------------------------------------------------------------
 # History endpoints
 # ---------------------------------------------------------------------------
 

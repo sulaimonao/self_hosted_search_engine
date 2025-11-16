@@ -109,3 +109,29 @@ def test_hydraflow_tables_and_columns_created() -> None:
             assert message[0] == "thread-1"
         finally:
             conn.close()
+
+
+def test_tabs_gain_thread_columns_and_indexes() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "state.db")
+        conn = sqlite3.connect(db_path)
+        try:
+            schema.migrate(conn)
+            columns = {
+                row[1]: (row[2] or "").upper()
+                for row in conn.execute("PRAGMA table_info(tabs)")
+            }
+            for column in {
+                "thread_id",
+                "current_history_id",
+                "current_url",
+                "current_title",
+                "last_visited_at",
+                "updated_at",
+            }:
+                assert column in columns
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list('tabs')")}
+            assert "idx_tabs_thread" in indexes
+            assert "idx_tabs_history" in indexes
+        finally:
+            conn.close()
