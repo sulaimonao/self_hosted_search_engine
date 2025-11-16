@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -57,6 +57,10 @@ def _parse_int(value: Any) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _utc_now() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass(slots=True)
@@ -1127,6 +1131,71 @@ class AppStateDB:
                 "subdomains": "TEXT",
                 "last_scanned": "REAL",
             },
+            "llm_threads": {
+                "id": "TEXT",
+                "title": "TEXT",
+                "description": "TEXT",
+                "origin": "TEXT",
+                "created_at": "TEXT",
+                "updated_at": "TEXT",
+                "last_user_message_at": "TEXT",
+                "last_assistant_message_at": "TEXT",
+                "metadata": "TEXT",
+            },
+            "llm_messages": {
+                "id": "TEXT",
+                "thread_id": "TEXT",
+                "parent_id": "TEXT",
+                "role": "TEXT",
+                "content": "TEXT",
+                "created_at": "TEXT",
+                "tokens": "INTEGER",
+                "metadata": "TEXT",
+            },
+            "tasks": {
+                "id": "TEXT",
+                "thread_id": "TEXT",
+                "title": "TEXT",
+                "description": "TEXT",
+                "status": "TEXT",
+                "priority": "INTEGER",
+                "due_at": "TEXT",
+                "created_at": "TEXT",
+                "updated_at": "TEXT",
+                "closed_at": "TEXT",
+                "owner": "TEXT",
+                "metadata": "TEXT",
+                "result": "TEXT",
+            },
+            "task_events": {
+                "id": "TEXT",
+                "task_id": "TEXT",
+                "event_type": "TEXT",
+                "payload": "TEXT",
+                "created_at": "TEXT",
+            },
+            "memories": {
+                "id": "TEXT",
+                "scope": "TEXT",
+                "scope_ref": "TEXT",
+                "key": "TEXT",
+                "value": "TEXT",
+                "metadata": "TEXT",
+                "strength": "REAL",
+                "last_accessed": "DATETIME",
+                "created_at": "DATETIME",
+                "thread_id": "TEXT",
+                "task_id": "TEXT",
+                "source_message_id": "TEXT",
+                "embedding_ref": "TEXT",
+            },
+            "memory_embeddings": {
+                "memory_id": "TEXT",
+                "embedding": "BLOB",
+                "dim": "INTEGER",
+                "vector_ref": "TEXT",
+                "created_at": "TEXT",
+            },
         }
         tables: dict[str, dict[str, str]] = {}
         errors: list[str] = []
@@ -1831,12 +1900,16 @@ class AppStateDB:
         value: str,
         metadata: Mapping[str, Any] | None,
         strength: float,
+        thread_id: str | None = None,
+        task_id: str | None = None,
+        source_message_id: str | None = None,
+        embedding_ref: str | None = None,
     ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO memories(id, scope, scope_ref, key, value, metadata, strength)
-                VALUES(?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO memories(id, scope, scope_ref, key, value, metadata, strength, thread_id, task_id, source_message_id, embedding_ref)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     scope = excluded.scope,
                     scope_ref = excluded.scope_ref,
@@ -1844,6 +1917,10 @@ class AppStateDB:
                     value = excluded.value,
                     metadata = excluded.metadata,
                     strength = excluded.strength,
+                    thread_id = excluded.thread_id,
+                    task_id = excluded.task_id,
+                    source_message_id = excluded.source_message_id,
+                    embedding_ref = excluded.embedding_ref,
                     last_accessed = CURRENT_TIMESTAMP
                 """,
                 (
@@ -1854,6 +1931,10 @@ class AppStateDB:
                     value,
                     _serialize(metadata or {}),
                     strength,
+                    thread_id,
+                    task_id,
+                    source_message_id,
+                    embedding_ref,
                 ),
             )
             self._conn.execute(
@@ -1866,7 +1947,8 @@ class AppStateDB:
     ) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT id, scope, scope_ref, key, value, metadata, strength, last_accessed, created_at
+            SELECT id, scope, scope_ref, key, value, metadata, strength, last_accessed, created_at,
+                   thread_id, task_id, source_message_id, embedding_ref
               FROM memories
              WHERE scope = ? AND (scope_ref = ? OR ? IS NULL)
           ORDER BY last_accessed DESC
@@ -1880,6 +1962,392 @@ class AppStateDB:
             payload["metadata"] = _deserialize(payload.get("metadata"), {})
             items.append(payload)
         return items
+
+    def search_memories(
+        self,
+        *,
+        query: str | None = None,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if scope_ref:
+            clauses.append("scope_ref = ?")
+            params.append(scope_ref)
+        if query:
+            pattern = f"%{query.lower()}%"
+            clauses.append("(lower(value) LIKE ? OR lower(COALESCE(key,'')) LIKE ?)")
+            params.extend([pattern, pattern])
+        where_clause = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql = (
+            "SELECT id, scope, scope_ref, key, value, metadata, strength, last_accessed, created_at, "
+            "thread_id, task_id, source_message_id, embedding_ref FROM memories"
+            + where_clause
+            + " ORDER BY last_accessed DESC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit), 200)))
+        rows = self._conn.execute(sql, params).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["metadata"] = _deserialize(payload.get("metadata"), {})
+            items.append(payload)
+        return items
+
+    # ------------------------------------------------------------------
+    # HydraFlow threads & messages
+    # ------------------------------------------------------------------
+    def ensure_llm_thread(
+        self,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        origin: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        if not thread_id:
+            raise ValueError("thread_id is required")
+        created_at = _utc_now()
+        metadata_json = _serialize(metadata) if metadata is not None else None
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO llm_threads(id, title, description, origin, created_at, updated_at, metadata)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title = COALESCE(excluded.title, llm_threads.title),
+                    description = COALESCE(excluded.description, llm_threads.description),
+                    origin = COALESCE(excluded.origin, llm_threads.origin),
+                    metadata = COALESCE(excluded.metadata, llm_threads.metadata),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (thread_id, title, description, origin, created_at, created_at, metadata_json),
+            )
+        return thread_id
+
+    def create_llm_thread(
+        self,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        origin: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        thread_id = uuid.uuid4().hex
+        return self.ensure_llm_thread(
+            thread_id,
+            title=title,
+            description=description,
+            origin=origin,
+            metadata=metadata,
+        )
+
+    def get_llm_thread(self, thread_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT id, title, description, origin, created_at, updated_at,
+                   last_user_message_at, last_assistant_message_at, metadata
+              FROM llm_threads
+             WHERE id = ?
+            """,
+            (thread_id,),
+        ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["metadata"] = _deserialize(payload.get("metadata"), {})
+        return payload
+
+    def list_llm_threads(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        capped = max(1, min(int(limit), 200))
+        start = max(0, int(offset))
+        rows = self._conn.execute(
+            """
+            SELECT id, title, description, origin, created_at, updated_at,
+                   last_user_message_at, last_assistant_message_at, metadata
+              FROM llm_threads
+          ORDER BY COALESCE(updated_at, created_at) DESC
+             LIMIT ? OFFSET ?
+            """,
+            (capped, start),
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["metadata"] = _deserialize(payload.get("metadata"), {})
+            items.append(payload)
+        return items
+
+    def append_llm_message(
+        self,
+        *,
+        thread_id: str,
+        role: str,
+        content: str,
+        message_id: str | None = None,
+        parent_id: str | None = None,
+        tokens: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        normalized_role = (role or "").strip().lower() or "user"
+        created_at = _utc_now()
+        metadata_json = _serialize(metadata) if metadata is not None else None
+        msg_id = message_id or uuid.uuid4().hex
+        self.ensure_llm_thread(thread_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO llm_messages(id, thread_id, parent_id, role, content, created_at, tokens, metadata)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    thread_id = excluded.thread_id,
+                    parent_id = excluded.parent_id,
+                    role = excluded.role,
+                    content = excluded.content,
+                    created_at = excluded.created_at,
+                    tokens = excluded.tokens,
+                    metadata = excluded.metadata
+                """,
+                (msg_id, thread_id, parent_id, normalized_role, content, created_at, tokens, metadata_json),
+            )
+            updates = [created_at]
+            set_fragments = ["updated_at = ?"]
+            if normalized_role == "user":
+                set_fragments.append("last_user_message_at = ?")
+                updates.append(created_at)
+            elif normalized_role == "assistant":
+                set_fragments.append("last_assistant_message_at = ?")
+                updates.append(created_at)
+            updates.append(thread_id)
+            self._conn.execute(
+                f"UPDATE llm_threads SET {', '.join(set_fragments)} WHERE id = ?",
+                updates,
+            )
+        return msg_id
+
+    def list_llm_messages(
+        self, thread_id: str, *, limit: int = 50, ascending: bool = True
+    ) -> list[dict[str, Any]]:
+        if not thread_id:
+            return []
+        capped = max(1, min(int(limit), 200))
+        order = "ASC" if ascending else "DESC"
+        rows = self._conn.execute(
+            f"""
+            SELECT id, thread_id, parent_id, role, content, created_at, tokens, metadata
+              FROM llm_messages
+             WHERE thread_id = ?
+          ORDER BY datetime(created_at) {order}
+             LIMIT ?
+            """,
+            (thread_id, capped),
+        ).fetchall()
+        items: list[dict[str, Any]] = [dict(row) for row in rows]
+        for item in items:
+            item["metadata"] = _deserialize(item.get("metadata"), {})
+        if not ascending:
+            return items
+        return items
+
+    def recent_llm_messages(
+        self, thread_id: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        return self.list_llm_messages(thread_id, limit=limit, ascending=True)
+
+    # ------------------------------------------------------------------
+    # HydraFlow tasks & events
+    # ------------------------------------------------------------------
+    def create_task(
+        self,
+        *,
+        title: str,
+        description: str | None = None,
+        thread_id: str | None = None,
+        status: str = "pending",
+        priority: int = 0,
+        due_at: str | None = None,
+        owner: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> str:
+        task_id = uuid.uuid4().hex
+        created_at = _utc_now()
+        if thread_id:
+            self.ensure_llm_thread(thread_id)
+        metadata_json = _serialize(metadata or {})
+        result_json = _serialize(result) if result is not None else None
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO tasks(id, thread_id, title, description, status, priority, due_at, created_at, updated_at, owner, metadata, result)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    thread_id,
+                    title,
+                    description,
+                    status,
+                    priority,
+                    due_at,
+                    created_at,
+                    created_at,
+                    owner,
+                    metadata_json,
+                    result_json,
+                ),
+            )
+        return task_id
+
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT id, thread_id, title, description, status, priority, due_at,
+                   created_at, updated_at, closed_at, owner, metadata, result
+              FROM tasks
+             WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["metadata"] = _deserialize(payload.get("metadata"), {})
+        payload["result"] = _deserialize(payload.get("result"), None)
+        return payload
+
+    def list_tasks(
+        self,
+        *,
+        status: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if thread_id:
+            clauses.append("thread_id = ?")
+            params.append(thread_id)
+        where_clause = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql = (
+            "SELECT id, thread_id, title, description, status, priority, due_at, created_at, updated_at, closed_at, owner, metadata, result"
+            " FROM tasks"
+            + where_clause
+            + " ORDER BY updated_at DESC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit), 200)))
+        rows = self._conn.execute(sql, params).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["metadata"] = _deserialize(payload.get("metadata"), {})
+            payload["result"] = _deserialize(payload.get("result"), None)
+            items.append(payload)
+        return items
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        priority: int | None = None,
+        due_at: str | None = None,
+        owner: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+        thread_id: str | None = None,
+        closed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        sets: list[str] = []
+        params: list[Any] = []
+        updates = {
+            "title": title,
+            "description": description,
+            "status": status,
+            "priority": priority,
+            "due_at": due_at,
+            "owner": owner,
+            "thread_id": thread_id,
+        }
+        for column, value in updates.items():
+            if value is None:
+                continue
+            sets.append(f"{column} = ?")
+            params.append(value)
+        if metadata is not None:
+            sets.append("metadata = ?")
+            params.append(_serialize(metadata))
+        if result is not None:
+            sets.append("result = ?")
+            params.append(_serialize(result))
+        if closed_at is not None:
+            sets.append("closed_at = ?")
+            params.append(closed_at)
+        if not sets:
+            return self.get_task(task_id)
+        sets.append("updated_at = ?")
+        params.append(_utc_now())
+        params.append(task_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+        return self.get_task(task_id)
+
+    def record_task_event(
+        self,
+        task_id: str,
+        *,
+        event_type: str,
+        payload: Mapping[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> str:
+        event_identifier = event_id or uuid.uuid4().hex
+        serialized = _serialize(payload or {})
+        created_at = _utc_now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO task_events(id, task_id, event_type, payload, created_at)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (event_identifier, task_id, event_type, serialized, created_at),
+            )
+        return event_identifier
+
+    def list_task_events(
+        self, task_id: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT id, task_id, event_type, payload, created_at
+              FROM task_events
+             WHERE task_id = ?
+          ORDER BY created_at ASC
+             LIMIT ?
+            """,
+            (task_id, max(1, min(int(limit), 500))),
+        ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["payload"] = _deserialize(payload.get("payload"), {})
+            events.append(payload)
+        return events
 
     def age_memories(self, *, decay: float = 0.9, floor: float = 0.05) -> None:
         with self._lock, self._conn:

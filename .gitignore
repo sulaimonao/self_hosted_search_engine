@@ -42,6 +42,7 @@ diagnostics/*
 !backend/app/api/index_health.py
 !backend/app/api/health.py
 !backend/app/api/chat_history.py
+!backend/app/api/hydraflow.py
 !backend/app/api/browser.py
 !backend/app/api/self_heal.py
 !backend/app/api/admin.py
@@ -94,11 +95,13 @@ diagnostics/*
 !backend/app/services/progress_bus.py
 !backend/app/services/categorizer.py
 !backend/app/services/context_assembler.py
+!backend/app/services/incident_log.py
 !backend/app/services/labeler.py
 !backend/app/services/embeddings.py
 !backend/app/services/__init__.py
 !backend/app/services/source_follow.py
 !backend/app/services/domain_profiles.py
+!backend/app/services/domain_profile.py
 !backend/app/services/log_bus.py
 !backend/app/services/agent_tracing.py
 !backend/app/services/auth_clearance.py
@@ -125,6 +128,7 @@ diagnostics/*
 !backend/app/shadow/manager.py
 !backend/app/shadow/policy_store.py
 !backend/app/shadow/capture.py
+!backend/app/logging_setup.py
 !observability/__init__.py
 !desktop/package.json
 !desktop/tsconfig.json
@@ -144,6 +148,7 @@ diagnostics/*
 !tests/api/test_research_api.py
 !tests/api/test_web_search_api.py
 !tests/api/test_reasoning_api.py
+!tests/api/test_hydraflow_api.py
 !tests/api/test_utils.py
 !tests/e2e/test_agent_browser.py
 !tests/e2e/test_zero_touch.py

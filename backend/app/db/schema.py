@@ -529,6 +529,132 @@ def _migration_009_domain_graph(connection: sqlite3.Connection) -> None:
         connection.executescript(script)
 
 
+def _migration_010_hydraflow(connection: sqlite3.Connection) -> None:
+    with connection:
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS llm_threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                description TEXT,
+                origin TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_user_message_at TEXT,
+                last_assistant_message_at TEXT,
+                metadata TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS llm_messages (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                parent_id TEXT,
+                role TEXT CHECK(role IN ('user','assistant','system','tool')) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                tokens INTEGER,
+                metadata TEXT,
+                FOREIGN KEY(thread_id) REFERENCES llm_threads(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_llm_messages_thread ON llm_messages(thread_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT,
+                title TEXT NOT NULL,
+                description TEXT,
+                status TEXT CHECK(status IN ('pending','in_progress','blocked','completed','failed','cancelled')) NOT NULL DEFAULT 'pending',
+                priority INTEGER DEFAULT 0,
+                due_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                closed_at TEXT,
+                owner TEXT,
+                metadata TEXT,
+                result TEXT,
+                FOREIGN KEY(thread_id) REFERENCES llm_threads(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tasks_thread ON tasks(thread_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS task_events (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at ASC);
+
+            CREATE TABLE IF NOT EXISTS memory_embeddings (
+                memory_id TEXT PRIMARY KEY,
+                embedding BLOB,
+                dim INTEGER,
+                vector_ref TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            );
+            """
+        )
+
+    for column, ddl in (
+        ("thread_id", "ALTER TABLE memories ADD COLUMN thread_id TEXT"),
+        ("task_id", "ALTER TABLE memories ADD COLUMN task_id TEXT"),
+        ("source_message_id", "ALTER TABLE memories ADD COLUMN source_message_id TEXT"),
+        ("embedding_ref", "ALTER TABLE memories ADD COLUMN embedding_ref TEXT"),
+    ):
+        if not _column_exists(connection, "memories", column):
+            with connection:
+                connection.execute(ddl)
+
+    if _table_exists(connection, "chat_threads"):
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO llm_threads(id, title, origin, created_at, updated_at)
+                SELECT ct.id, ct.title, 'legacy', ct.created_at, COALESCE(ct.last_activity, ct.created_at)
+                  FROM chat_threads AS ct
+                 WHERE NOT EXISTS (SELECT 1 FROM llm_threads WHERE id = ct.id)
+                """
+            )
+
+    if _table_exists(connection, "chat_messages"):
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO llm_messages(id, thread_id, role, content, created_at, tokens)
+                SELECT cm.id, cm.thread_id, cm.role, cm.content, cm.created_at, cm.tokens
+                  FROM chat_messages AS cm
+                 WHERE NOT EXISTS (SELECT 1 FROM llm_messages WHERE id = cm.id)
+                """
+            )
+
+    with connection:
+        connection.execute(
+            """
+            UPDATE llm_threads
+               SET last_user_message_at = (
+                       SELECT MAX(created_at)
+                         FROM llm_messages
+                        WHERE thread_id = llm_threads.id AND role = 'user'
+                   ),
+                   last_assistant_message_at = (
+                       SELECT MAX(created_at)
+                         FROM llm_messages
+                        WHERE thread_id = llm_threads.id AND role = 'assistant'
+                   ),
+                   updated_at = COALESCE(
+                       (SELECT MAX(created_at) FROM llm_messages WHERE thread_id = llm_threads.id),
+                       updated_at,
+                       created_at
+                   )
+            """
+        )
+
+
 def _migration_008_app_config(connection: sqlite3.Connection) -> None:
     schema_path = _APP_CONFIG_SCHEMA
     try:
@@ -584,6 +710,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("007_domain_profiles", _migration_007_domain_profiles),
     ("008_app_config", _migration_008_app_config),
     ("009_domain_graph", _migration_009_domain_graph),
+    ("010_hydraflow", _migration_010_hydraflow),
     ("20251102_app_config", _migration_20251102_app_config),
     ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]

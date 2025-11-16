@@ -13,9 +13,11 @@ from typing import Any, Dict, Iterable, Iterator, List, Literal, Mapping, Option
 import requests
 from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
 from pydantic import ValidationError
+from uuid import uuid4
 
 from server.json_logger import log_event
 
+from backend.app.db import AppStateDB
 from backend.app.io import (
     allowed_model_aliases,
     chat_schema as io_chat_schema,
@@ -99,6 +101,32 @@ class _SseRegistry:
 
 
 _SSE_REGISTRY = _SseRegistry(ttl_seconds=120.0)
+
+
+def _state_db() -> AppStateDB | None:
+    try:
+        state_db = current_app.config.get("APP_STATE_DB")
+    except RuntimeError:  # pragma: no cover - outside request context
+        return None
+    if isinstance(state_db, AppStateDB):
+        return state_db
+    return None
+
+
+def _ensure_thread_context(chat_request: ChatRequest) -> str:
+    preferred = chat_request.chat_id
+    if not preferred:
+        context = chat_request.context or {}
+        context_thread = context.get("thread_id") if isinstance(context, Mapping) else None
+        if isinstance(context_thread, str) and context_thread.strip():
+            preferred = context_thread.strip()
+    if not preferred:
+        preferred = chat_request.request_id or uuid4().hex
+    state_db = _state_db()
+    if state_db is not None:
+        state_db.ensure_llm_thread(preferred, origin="chat")
+    g.chat_thread_id = preferred
+    return preferred
 
 
 def _incident_log() -> IncidentLog | None:
@@ -1225,7 +1253,7 @@ def _execute_chat_request(
     stream_transport: Literal["ndjson", "sse"],
 ) -> Response:
     sanitized_messages = [msg.model_dump(exclude_none=True) for msg in chat_request.messages]
-    context_payload = chat_request.context or {}
+    context_payload = dict(chat_request.context or {})
     tool_specs = chat_request.tools or []
     serialized_tools: list[Mapping[str, Any]] = [tool.model_dump(exclude_none=True) for tool in tool_specs]
     allowed_tool_names: set[str] | None = None
@@ -1242,12 +1270,17 @@ def _execute_chat_request(
     _maybe_index_page_context(context_payload)
     context_prelude, context_meta = _render_context_prelude(context_payload, serialized_tools)
 
+    thread_id = _ensure_thread_context(chat_request)
+
     chat_logger = current_app.config.get("CHAT_LOGGER")
     if hasattr(chat_logger, "info"):
         preview = " | ".join(entry.get("content", "") for entry in sanitized_messages)
         chat_logger.info("chat request received: %s", preview.strip())
 
     request_id = _resolve_request_id(chat_request.request_id)
+
+    if thread_id and isinstance(context_payload, dict):
+        context_payload.setdefault("thread_id", thread_id)
 
     requested_model = chat_request.model
     url_value = chat_request.url
