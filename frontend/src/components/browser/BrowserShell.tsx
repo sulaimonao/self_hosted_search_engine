@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, MessageSquare, Stethoscope } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw, Download, Cog, Globe, Menu, MessageSquare, Stethoscope, Share2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useId } from "react";
 import { useShallow } from "zustand/react/shallow";
 import dynamic from "next/dynamic";
@@ -26,6 +26,7 @@ import { LocalSearchPanel } from "@/components/panels/LocalSearchPanel";
 import { ShadowPanel } from "@/components/panels/ShadowPanel";
 import { useEvents } from "@/state/useEvents";
 import { Panel, useAppStore } from "@/state/useAppStore";
+import { KnowledgeGraphPanel } from "@/components/KnowledgeGraphPanel";
 import { resolveBrowserAPI, type BrowserNavError } from "@/lib/browser-ipc";
 import { useBrowserIpc } from "@/hooks/useBrowserIpc";
 import { SiteInfoPopover } from "@/components/browser/SiteInfoPopover";
@@ -58,6 +59,7 @@ const PANEL_COMPONENT: Record<Panel, JSX.Element> = {
   collections: <CollectionsPanel />,
   shadow: <ShadowPanel />,
   agentLog: <AgentLogPanel />,
+  knowledgeGraph: <KnowledgeGraphPanel />,
 };
 
 function toBrowserNavError(error: unknown, fallback = "Navigation failed"): BrowserNavError {
@@ -197,6 +199,7 @@ function BrowserShellInner() {
   const shadowDescriptionId = useId();
   const agentLogDescriptionId = useId();
   const diagnosticsDescriptionId = useId();
+  const knowledgeGraphDescriptionId = useId();
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -805,6 +808,18 @@ function BrowserShellInner() {
             </span>
             <span id={localSearchDescriptionId} className="sr-only">
               Browse files discovered on this device
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => openPanel("knowledgeGraph")}
+            aria-label="Open knowledge graph"
+            aria-describedby={knowledgeGraphDescriptionId}
+          >
+            <Share2 size={16} aria-hidden="true" />
+            <span id={knowledgeGraphDescriptionId} className="sr-only">
+              Inspect the crawl knowledge graph
             </span>
           </Button>
           <Button

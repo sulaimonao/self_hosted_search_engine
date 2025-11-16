@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+from collections import deque
 import threading
 import time
 import uuid
@@ -60,6 +61,9 @@ SUPPORTED_EXTENSIONS = {
 
 MAX_TEXT_LENGTH = 750_000
 PREVIEW_LENGTH = 400
+
+LOG_SAMPLE_WINDOW_SECONDS = 30.0
+LOG_SAMPLE_LIMIT = 8
 
 
 @dataclass(slots=True)
@@ -127,6 +131,9 @@ class LocalDiscoveryService:
         self._confirmed_ids = set()
         self._seen_mtimes = {}
         self._started = False
+        self._inflight_paths: set[str] = set()
+        self._log_emissions: deque[float] = deque()
+        self._suppressed_logs = 0
         self._load_confirmations()
 
     # ------------------------------------------------------------------
@@ -176,6 +183,8 @@ class LocalDiscoveryService:
         for subscriber_id in list(self._subscribers):
             self.unsubscribe(subscriber_id)
 
+        self._emit_suppressed_summary(force=True)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -185,6 +194,11 @@ class LocalDiscoveryService:
         resolved = path.resolve()
         if not resolved.exists():
             return
+        key = str(resolved)
+        with self._lock:
+            if key in self._inflight_paths:
+                return
+            self._inflight_paths.add(key)
         self._executor.submit(self._process_with_retries, resolved)
 
     def scan(self, directory: Path) -> None:
@@ -266,16 +280,21 @@ class LocalDiscoveryService:
     # Internal helpers
     # ------------------------------------------------------------------
     def _process_with_retries(self, path: Path) -> None:
+        key = str(path)
         time.sleep(0.5)
-        for attempt in range(3):
-            try:
-                processed = self._process_path(path)
-            except Exception:  # pragma: no cover - logged
-                _safe_log("exception", "Local discovery failed for %s", path)
-                return
-            if processed:
-                return
-            time.sleep(0.5)
+        try:
+            for attempt in range(3):
+                try:
+                    processed = self._process_path(path)
+                except Exception:  # pragma: no cover - logged
+                    _safe_log("exception", "Local discovery failed for %s", path)
+                    return
+                if processed:
+                    return
+                time.sleep(0.5)
+        finally:
+            with self._lock:
+                self._inflight_paths.discard(key)
 
     def _process_path(self, path: Path) -> bool:
         if not path.exists():
@@ -336,7 +355,8 @@ class LocalDiscoveryService:
         for stream in subscribers:
             stream.put(record)
 
-        _safe_log("info", "Discovered local file: %s", path_str)
+        if self._should_log_discovery():
+            _safe_log("info", "Discovered local file: %s", path_str)
         return True
 
     def _extract_text(self, path: Path, ext: str) -> str:
@@ -405,6 +425,39 @@ class LocalDiscoveryService:
             json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
         )
         tmp_path.replace(self._ledger_path)
+
+    def _should_log_discovery(self) -> bool:
+        now = time.time()
+        with self._lock:
+            window = self._log_emissions
+            while window and now - window[0] > LOG_SAMPLE_WINDOW_SECONDS:
+                window.popleft()
+                if not window and self._suppressed_logs:
+                    _safe_log(
+                        "info",
+                        "Suppressed %d local discovery events in the last %.0f seconds",
+                        self._suppressed_logs,
+                        LOG_SAMPLE_WINDOW_SECONDS,
+                    )
+                    self._suppressed_logs = 0
+            if len(window) >= LOG_SAMPLE_LIMIT:
+                self._suppressed_logs += 1
+                return False
+            window.append(now)
+            return True
+
+    def _emit_suppressed_summary(self, *, force: bool = False) -> None:
+        with self._lock:
+            if (force or not self._log_emissions) and self._suppressed_logs:
+                _safe_log(
+                    "info",
+                    "Suppressed %d local discovery events in the last %.0f seconds",
+                    self._suppressed_logs,
+                    LOG_SAMPLE_WINDOW_SECONDS,
+                )
+                self._suppressed_logs = 0
+            if force:
+                self._log_emissions.clear()
 
 
 __all__ = ["LocalDiscoveryService", "DiscoveryRecord"]

@@ -63,6 +63,12 @@ export function KnowledgeGraphPanel() {
     loadGraphSummary();
   }, []);
 
+  useEffect(() => {
+    if (!globalView && !selectedSite && viewMode === "pages") {
+      loadGraphData(null);
+    }
+  }, [globalView, selectedSite, viewMode, loadGraphData]);
+
   
 
   async function loadGraphSummary() {
@@ -330,7 +336,7 @@ export function KnowledgeGraphPanel() {
         )}
       </div>
 
-      {viewMode === "pages" && summary && summary.top_sites.length > 0 && (
+      {viewMode === "pages" && summary?.top_sites?.length ? (
         <div className="space-y-2">
           <h3 className="text-lg font-medium">Top Sites</h3>
           <div className="space-y-2">
@@ -352,7 +358,7 @@ export function KnowledgeGraphPanel() {
             ))}
           </div>
         </div>
-      )}
+      ) : null}
 
       {(viewMode === "sites" || selectedSite || globalView) && (
         <div className="space-y-2">

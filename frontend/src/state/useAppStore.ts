@@ -7,7 +7,7 @@ import type { CopilotEvent } from "@/lib/events";
 import { resolveBrowserAPI, type BrowserNavError, type BrowserTabList } from "@/lib/browser-ipc";
 import { setIfChanged, wrapSetStateDebug } from "@/lib/store/utils";
 
-export type Panel = "localSearch" | "collections" | "chat" | "shadow" | "agentLog";
+export type Panel = "localSearch" | "collections" | "chat" | "shadow" | "agentLog" | "knowledgeGraph";
 
 type Tab = {
   id: string;
