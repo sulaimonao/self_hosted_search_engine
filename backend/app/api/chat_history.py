@@ -31,12 +31,25 @@ def store_chat_message(thread_id: str):
         tokens_value = None
     state_db: AppStateDB = current_app.config["APP_STATE_DB"]
     state_db.upsert_thread(thread_id)
+    state_db.ensure_llm_thread(thread_id, origin="chat")
     stored_id = state_db.add_chat_message(
         message_id=message_id,
         thread_id=thread_id,
         role=role,
         content=content,
         tokens=tokens_value,
+    )
+    metadata: dict[str, str] | None = None
+    page_url = payload.get("page_url")
+    if isinstance(page_url, str) and page_url.strip():
+        metadata = {"page_url": page_url.strip()}
+    state_db.append_llm_message(
+        thread_id=thread_id,
+        role=role,
+        content=content,
+        message_id=stored_id,
+        tokens=tokens_value,
+        metadata=metadata,
     )
     return jsonify({"ok": True, "id": stored_id})
 

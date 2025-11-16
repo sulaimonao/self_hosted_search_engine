@@ -102,6 +102,7 @@ class ChatRequest(BaseModel):
     server_timezone: str | None = None
     server_time_utc: str | None = None
     request_id: str | None = Field(default=None, alias="request_id")
+    chat_id: str | None = Field(default=None, alias="chat_id")
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -126,6 +127,14 @@ class ChatRequest(BaseModel):
     @field_validator("request_id", mode="before")
     @classmethod
     def _trim_request_id(cls, value: Any) -> str | None:
+        if isinstance(value, str):
+            trimmed = value.strip()
+            return trimmed or None
+        return None
+
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def _trim_chat_id(cls, value: Any) -> str | None:
         if isinstance(value, str):
             trimmed = value.strip()
             return trimmed or None

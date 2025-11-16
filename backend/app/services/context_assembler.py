@@ -21,7 +21,9 @@ def assemble_context(
 ) -> dict[str, Any]:
     """Return a context payload combining chat history, summary and scoped memories."""
 
-    messages = state_db.recent_messages(thread_id, limit=20)
+    messages = state_db.recent_llm_messages(thread_id, limit=20)
+    if not messages:
+        messages = state_db.recent_messages(thread_id, limit=20)
     summary = state_db.get_summary(thread_id)
     thread_mems = state_db.list_memories(scope="thread", scope_ref=thread_id, limit=20)
     user_mems = state_db.list_memories(scope="user", scope_ref=user_id, limit=20)

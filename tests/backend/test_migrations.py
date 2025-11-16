@@ -71,3 +71,41 @@ def test_crawl_jobs_priority_column_defaults_and_update() -> None:
             assert updated[0] == 5
         finally:
             conn.close()
+
+
+def test_hydraflow_tables_and_columns_created() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "state.db")
+        conn = sqlite3.connect(db_path)
+        try:
+            schema.migrate(conn)
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            for name in {"llm_threads", "llm_messages", "tasks", "task_events", "memory_embeddings"}:
+                assert name in tables
+
+            memories_columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+            for column in {"thread_id", "task_id", "source_message_id", "embedding_ref"}:
+                assert column in memories_columns
+
+            conn.execute(
+                "INSERT INTO llm_threads(id, title, origin) VALUES(?, ?, ?)",
+                ("thread-1", "Thread", "test"),
+            )
+            conn.execute(
+                "INSERT INTO llm_messages(id, thread_id, role, content) VALUES(?, ?, 'user', 'hi')",
+                ("msg-1", "thread-1"),
+            )
+            conn.commit()
+
+            message = conn.execute(
+                "SELECT thread_id FROM llm_messages WHERE id=?",
+                ("msg-1",),
+            ).fetchone()
+            assert message[0] == "thread-1"
+        finally:
+            conn.close()
