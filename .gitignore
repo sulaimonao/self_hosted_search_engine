@@ -9,6 +9,7 @@ pytest.ini
 *.zst
 data/
 !engine/data/
+!frontend/src/app/(shell)/data/
 .chroma/
 index/
 node_modules/

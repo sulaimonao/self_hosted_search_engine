@@ -1128,6 +1128,7 @@ export function ChatPanel(props: {
     activeTab?.url,
     applyContextSummary,
     clientTimezone,
+    finalizeAssistantMessage,
     input,
     inventory,
     isBusy,
