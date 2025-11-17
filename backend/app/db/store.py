@@ -517,6 +517,52 @@ class AppStateDB:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM history WHERE id=?", (history_id,))
 
+    def purge_history(
+        self,
+        *,
+        domain: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        clear_all: bool = False,
+    ) -> int:
+        normalized_domain = str(domain or "").strip().lower() or None
+        clauses: list[str] = []
+        params: list[Any] = []
+        if not clear_all and normalized_domain:
+            clauses.append("lower(url) LIKE ?")
+            params.append(f"%{normalized_domain}%")
+        if not clear_all and start:
+            clauses.append("visited_at >= ?")
+            params.append(start.isoformat())
+        if not clear_all and end:
+            clauses.append("visited_at <= ?")
+            params.append(end.isoformat())
+        if not clauses and not clear_all:
+            return 0
+        condition = " AND ".join(clauses) if clauses else "1=1"
+        params_tuple = tuple(params)
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM history WHERE {condition}", params_tuple
+            ).fetchone()
+            total = int(row[0] or 0)
+            if total == 0:
+                return 0
+            self._conn.execute(
+                f"""
+                UPDATE tabs
+                   SET current_history_id = NULL
+                 WHERE current_history_id IN (
+                     SELECT id FROM history WHERE {condition}
+                 )
+                """,
+                params_tuple,
+            )
+            self._conn.execute(
+                f"DELETE FROM history WHERE {condition}", params_tuple
+            )
+        return total
+
     def query_history(
         self,
         *,
@@ -2179,6 +2225,43 @@ class AppStateDB:
             items.append(record)
         return items
 
+    def prune_jobs(
+        self, *, statuses: Iterable[str] | None = None, older_than_days: int = 30
+    ) -> int:
+        candidates = [
+            (status or "").strip().lower()
+            for status in (statuses or [])
+            if isinstance(status, str)
+        ]
+        allowed = {status for status in candidates if status in JOB_STATUSES}
+        if not allowed:
+            allowed = {"succeeded"}
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=max(1, older_than_days))
+        cutoff_iso = cutoff.isoformat(timespec="seconds")
+        placeholders = ",".join("?" for _ in allowed)
+        params = tuple(list(allowed) + [cutoff_iso])
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"""
+                DELETE FROM job_status
+                 WHERE job_id IN (
+                     SELECT id FROM jobs
+                      WHERE status IN ({placeholders})
+                        AND COALESCE(completed_at, updated_at, created_at) < ?
+                 )
+                """,
+                params,
+            )
+            cursor = self._conn.execute(
+                f"""
+                DELETE FROM jobs
+                 WHERE status IN ({placeholders})
+                   AND COALESCE(completed_at, updated_at, created_at) < ?
+                """,
+                params,
+            )
+        return cursor.rowcount
+
     # ------------------------------------------------------------------
     # Job status
     # ------------------------------------------------------------------
@@ -2679,6 +2762,48 @@ class AppStateDB:
                 updates,
             )
         return msg_id
+
+    def delete_llm_thread(self, thread_id: str) -> dict[str, int]:
+        stats = {"threads": 0, "messages": 0, "tasks": 0, "memories": 0, "tabs": 0}
+        if not thread_id:
+            return stats
+        with self._lock, self._conn:
+            exists = self._conn.execute(
+                "SELECT 1 FROM llm_threads WHERE id=?", (thread_id,)
+            ).fetchone()
+            if not exists:
+                return stats
+            stats["messages"] = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) FROM llm_messages WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            stats["tasks"] = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) FROM tasks WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            stats["memories"] = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) FROM memories WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            stats["tabs"] = self._conn.execute(
+                "UPDATE tabs SET thread_id=NULL WHERE thread_id=?",
+                (thread_id,),
+            ).rowcount
+            self._conn.execute("DELETE FROM tasks WHERE thread_id=?", (thread_id,))
+            self._conn.execute("DELETE FROM memories WHERE thread_id=?", (thread_id,))
+            stats["threads"] = self._conn.execute(
+                "DELETE FROM llm_threads WHERE id=?", (thread_id,)
+            ).rowcount
+        return stats
 
     def list_llm_messages(
         self, thread_id: str, *, limit: int = 50, ascending: bool = True

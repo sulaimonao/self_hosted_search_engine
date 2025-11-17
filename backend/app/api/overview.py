@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from flask import Blueprint, current_app, jsonify
 
@@ -24,6 +27,11 @@ def _app_config() -> AppConfig | None:
     if isinstance(config, AppConfig):
         return config
     return None
+
+
+_STORAGE_CACHE_LOCK = threading.Lock()
+_STORAGE_CACHE_TTL = 300.0  # seconds
+_STORAGE_CACHE: dict[str, Any] = {"signature": None, "timestamp": 0.0, "data": {}}
 
 
 def _dir_size(path: Path) -> int:
@@ -58,6 +66,48 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _storage_signature(targets: dict[str, Path]) -> tuple[tuple[str, str], ...]:
+    signature = []
+    for label, path in targets.items():
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        signature.append((label, str(resolved)))
+    return tuple(sorted(signature))
+
+
+def _storage_summary(targets: dict[str, Path]) -> dict[str, dict[str, str | int]]:
+    signature = _storage_signature(targets)
+    now = time.time()
+    with _STORAGE_CACHE_LOCK:
+        cached_sig = _STORAGE_CACHE.get("signature")
+        cached_ts = float(_STORAGE_CACHE.get("timestamp") or 0.0)
+        cached_data = _STORAGE_CACHE.get("data")
+        if (
+            cached_sig == signature
+            and isinstance(cached_data, dict)
+            and now - cached_ts <= _STORAGE_CACHE_TTL
+        ):
+            return dict(cached_data)
+    storage_summary: dict[str, dict[str, str | int]] = {}
+    seen_paths: set[Path] = set()
+    for label, path in targets.items():
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        storage_summary[label] = {"path": str(path), "bytes": _dir_size(path)}
+    with _STORAGE_CACHE_LOCK:
+        _STORAGE_CACHE.update(
+            {"signature": signature, "timestamp": now, "data": dict(storage_summary)}
+        )
+    return storage_summary
+
+
 @bp.get("/overview")
 def overview_snapshot():
     state_db = _state_db()
@@ -75,18 +125,7 @@ def overview_snapshot():
         storage_targets = {
             "data": (Path(current_app.root_path).parents[1] / "data").resolve(),
         }
-    storage_summary: dict[str, dict[str, str | int]] = {}
-    seen_paths: set[Path] = set()
-    for label, path in storage_targets.items():
-        try:
-            resolved = path.resolve()
-        except OSError:
-            resolved = path
-        if resolved in seen_paths:
-            continue
-        seen_paths.add(resolved)
-        storage_summary[label] = {"path": str(path), "bytes": _dir_size(path)}
-    counters["storage"] = storage_summary
+    counters["storage"] = _storage_summary(storage_targets)
     return jsonify(counters)
 
 

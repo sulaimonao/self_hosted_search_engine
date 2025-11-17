@@ -19,6 +19,28 @@ def test_history_roundtrip(tmp_path) -> None:
     assert state_db.query_history(limit=5) == []
 
 
+def test_purge_history_domain_and_time_filters(tmp_path) -> None:
+    state_db = _db(tmp_path)
+    state_db.add_history_entry(tab_id="t1", url="https://alpha.example/a")
+    mid = state_db.add_history_entry(tab_id="t1", url="https://beta.example/b")
+    state_db.add_history_entry(tab_id="t1", url="https://alpha.example/c")
+    deleted = state_db.purge_history(domain="alpha.example")
+    assert deleted == 2
+    remaining = state_db.query_history(limit=5)
+    assert len(remaining) == 1 and remaining[0]["id"] == mid
+
+
+def test_purge_history_clear_all_resets_tabs(tmp_path) -> None:
+    state_db = _db(tmp_path)
+    history_id = state_db.add_history_entry(tab_id="tab-keep", url="https://example.com")
+    tab_record = state_db.get_tab("tab-keep")
+    assert tab_record["current_history_id"] == history_id
+    deleted = state_db.purge_history(clear_all=True)
+    assert deleted == 1
+    tab_record = state_db.get_tab("tab-keep")
+    assert tab_record["current_history_id"] is None
+
+
 def test_bookmarks_crud(tmp_path) -> None:
     state_db = _db(tmp_path)
     folder_id = state_db.create_bookmark_folder("Research")

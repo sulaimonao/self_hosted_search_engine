@@ -15,6 +15,23 @@ from ..jobs.runner import JobRunner
 bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 
 
+def _parse_statuses(source: Any) -> list[str]:
+    if source is None:
+        return []
+    if isinstance(source, str):
+        tokens = source.split(",")
+    elif isinstance(source, (list, tuple, set)):
+        tokens = list(source)
+    else:
+        return []
+    statuses: list[str] = []
+    for entry in tokens:
+        text = str(entry or "").strip().lower()
+        if text:
+            statuses.append(text)
+    return statuses
+
+
 @bp.get("/jobs")
 def list_jobs():
     """Return job records with optional status/type filtering."""
@@ -107,6 +124,31 @@ def job_log(job_id: str):
     if download:
         response.headers["Content-Disposition"] = f'attachment; filename="{job_id}.log"'
     return response
+
+
+@bp.delete("/jobs")
+def prune_jobs():
+    state_db: AppStateDB = current_app.config["APP_STATE_DB"]
+    payload = request.get_json(silent=True) or {}
+    statuses = _parse_statuses(request.args.get("status"))
+    statuses += _parse_statuses(payload.get("statuses"))
+    status_filter = statuses or None
+    older_param = request.args.get("older_than_days")
+    if older_param is None:
+        older_param = payload.get("older_than_days")
+    try:
+        older_days = int(older_param) if older_param is not None else 30
+    except (TypeError, ValueError):
+        older_days = 30
+    older_days = max(1, older_days)
+    deleted = state_db.prune_jobs(statuses=status_filter, older_than_days=older_days)
+    return jsonify(
+        {
+            "deleted": deleted,
+            "statuses": status_filter or ["succeeded"],
+            "older_than_days": older_days,
+        }
+    )
 
 
 @bp.get("/focused/last_index_time")
