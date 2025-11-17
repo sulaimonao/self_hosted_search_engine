@@ -53,7 +53,7 @@ export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiP
           <span className="sr-only">Collapse AI panel</span>
         </Button>
       </div>
-      <ThreadSummaryBar />
+      <ThreadSummaryBar onRequestTabChange={onTabChange} />
       <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as AiPanelTab)} className="flex flex-1 flex-col overflow-hidden">
         <TabsList className="grid grid-cols-3 rounded-xs border border-border-subtle bg-app-card-subtle text-xs">
           <TabsTrigger value="chat">Chat</TabsTrigger>

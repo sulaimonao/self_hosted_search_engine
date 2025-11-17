@@ -1,9 +1,10 @@
 "use client";
 
-import { BellIcon, CommandIcon, HelpCircleIcon, SparklesIcon } from "lucide-react";
+import { BellIcon, CommandIcon, HelpCircleIcon, PlusIcon, SparklesIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StartResearchSessionDialog } from "@/components/research/StartResearchSessionDialog";
 
 interface TopBarProps {
   onCommandPalette: () => void;
@@ -23,6 +24,14 @@ export function TopBar({ onCommandPalette, aiPanelOpen, onToggleAiPanel }: TopBa
         <div className="flex flex-1 items-center gap-3 lg:max-w-sm">
           <Input placeholder="Search everything..." className="bg-app-input" />
         </div>
+        <StartResearchSessionDialog
+          trigger={
+            <Button size="sm" className="bg-accent text-fg-on-accent hover:bg-accent/90">
+              <PlusIcon className="mr-2 size-4" />
+              New session
+            </Button>
+          }
+        />
         <Button variant={aiPanelOpen ? "secondary" : "outline"} size="sm" onClick={onToggleAiPanel}>
           <SparklesIcon className="mr-2 size-4" />
           {aiPanelOpen ? "Hide AI" : "Show AI"}
