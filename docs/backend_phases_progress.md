@@ -6,9 +6,9 @@
 | 1     | Complete     | Added HydraFlow schema, migrations, APIs, and chat wiring. |
 | 2     | In progress  | Tabs now store linked thread IDs/history snapshots, `/api/browser/tabs` exposes bindings, and chat reuses/binds tab threads. Need richer page snapshot context. |
 | 3     | In progress  | `/api/overview` aggregates browser/doc/task/memory counts plus storage sizes; future work: job/index health details. |
-| 4     | Not started  | |
-| 5     | Not started  | |
-| 6     | Not started  | |
+| 4     | In progress  | Added repo registry table plus `/api/repo/list`, `/status`, and guarded `/propose_patch` validation with tests; still need apply/run tooling endpoints. |
+| 5     | In progress  | Bundle v1 exports threads/messages/tasks to a zip manifest and `/api/export\|import/bundle` round-trip data; browser history import/deeper coverage TBD. |
+| 6     | In progress  | Jobs table + `/api/jobs` endpoints ship with bundle export/import job tracking; future work: wire crawlers/vector ops. |
 | 7     | Not started  | |
 
 ## Run Notes

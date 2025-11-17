@@ -15,6 +15,24 @@ from ..jobs.runner import JobRunner
 bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 
 
+@bp.get("/jobs")
+def list_jobs():
+    state_db: AppStateDB = current_app.config["APP_STATE_DB"]
+    limit = request.args.get("limit", type=int) or 50
+    status = request.args.get("status")
+    items = state_db.list_jobs(limit=limit, status=status)
+    return jsonify({"items": items})
+
+
+@bp.get("/jobs/<job_id>")
+def get_job(job_id: str):
+    state_db: AppStateDB = current_app.config["APP_STATE_DB"]
+    record = state_db.get_job(job_id)
+    if not record:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"job": record})
+
+
 def _compose_job_status(job_id: str) -> dict[str, Any]:
     worker = current_app.config.get("REFRESH_WORKER")
     if worker is not None:

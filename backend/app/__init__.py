@@ -87,6 +87,7 @@ def create_app() -> Flask:
     from .api import index_health as index_health_api
     from .api import jobs as jobs_api
     from .api import metrics as metrics_api
+    from .api import bundle as bundle_api
     from .api import admin as admin_api
     from .api import meta as meta_api
     from .api import refresh as refresh_api
@@ -103,6 +104,7 @@ def create_app() -> Flask:
     from .api import system_check as system_check_api
     from .api import sources as sources_api
     from .api import runtime as runtime_api
+    from .api import repo as repo_api
     from .api import embeddings as embeddings_api
     from .api import overview as overview_api
     # Config routes (persisted app configuration)
@@ -318,6 +320,11 @@ def create_app() -> Flask:
     # App state database
     # --------------------------------------------------------------------------
     state_db = AppStateDB(config.app_state_db_path)
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        state_db.register_repo("workspace", root_path=repo_root, allowed_ops=["read", "write"])
+    except Exception:
+        LOGGER.warning("unable to ensure workspace repo entry", exc_info=True)
     progress_bus = ProgressBus()
     agent_log_bus = AgentLogBus()
     incident_log = IncidentLog()
@@ -643,6 +650,7 @@ def create_app() -> Flask:
     app.register_blueprint(self_heal_execute_api.bp)
     app.register_blueprint(shipit_diag_api.bp)
     app.register_blueprint(metrics_api.bp)
+    app.register_blueprint(bundle_api.bp)
     app.register_blueprint(meta_api.bp)
     app.register_blueprint(admin_api.bp)
     app.register_blueprint(refresh_api.bp)
@@ -665,6 +673,7 @@ def create_app() -> Flask:
     app.register_blueprint(system_check_api.bp)
     app.register_blueprint(sources_api.bp)
     app.register_blueprint(runtime_api.bp)
+    app.register_blueprint(repo_api.bp)
     app.register_blueprint(config_routes.bp)
     app.register_blueprint(overview_api.bp)
 
