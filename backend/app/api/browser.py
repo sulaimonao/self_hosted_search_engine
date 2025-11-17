@@ -192,19 +192,34 @@ def delete_history_range():
     end = _parse_iso_ts(request.args.get("to") or payload.get("to"))
     clear_all = _as_bool(request.args.get("all")) or _as_bool(payload.get("clear_all"))
     if not clear_all and not any([domain, start, end]):
-        return jsonify({"error": "filter_required"}), 400
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "FILTER_REQUIRED",
+                        "message": "clear_all or a domain/time filter is required",
+                        "details": {},
+                    },
+                }
+            ),
+            400,
+        )
     state_db = _state_db()
     deleted = state_db.purge_history(
         domain=domain, start=start, end=end, clear_all=clear_all
     )
     return jsonify(
         {
-            "deleted": deleted,
-            "filters": {
-                "domain": domain,
-                "from": start.isoformat() if start else None,
-                "to": end.isoformat() if end else None,
-                "clear_all": clear_all,
+            "ok": True,
+            "data": {
+                "deleted_count": deleted,
+                "filters": {
+                    "domain": domain,
+                    "from": start.isoformat() if start else None,
+                    "to": end.isoformat() if end else None,
+                    "clear_all": clear_all,
+                },
             },
         }
     )
@@ -224,7 +239,7 @@ def get_fallback():
 def delete_history(history_id: int):
     state_db = _state_db()
     state_db.delete_history_entry(history_id)
-    return jsonify({"deleted": history_id})
+    return jsonify({"ok": True, "data": {"deleted_id": history_id}})
 
 
 # ---------------------------------------------------------------------------
