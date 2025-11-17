@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { ActivityTimeline } from "@/components/overview/ActivityTimeline";
 import { OverviewCards } from "@/components/overview/OverviewCards";
 import { SessionsList } from "@/components/overview/SessionsList";
+import { Button } from "@/components/ui/button";
+import { StartResearchSessionDialog } from "@/components/research/StartResearchSessionDialog";
 import { useOverview, useThreads, useJobs } from "@/lib/backend/hooks";
 import { useChatThread } from "@/lib/useChatThread";
 import { ROUTES } from "@/lib/navigation";
@@ -59,8 +61,34 @@ export default function HomePage() {
 
   return (
     <div className="flex flex-1 flex-col gap-8">
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+        <div className="rounded-2xl border border-border-subtle bg-app-card p-6 shadow-subtle">
+          <p className="text-xs uppercase tracking-wide text-fg-muted">Research cockpit</p>
+          <h1 className="mt-2 text-2xl font-semibold text-fg">Start a new research session</h1>
+          <p className="mt-2 text-sm text-fg-muted">
+            Open a browsing tab, capture sources, and ask the AI to summarize or create tasks with full context.
+          </p>
+          <div className="mt-4">
+            <StartResearchSessionDialog
+              trigger={
+                <Button className="bg-accent text-fg-on-accent hover:bg-accent/90">
+                  Start new research session
+                </Button>
+              }
+            />
+          </div>
+        </div>
+        <div className="rounded-2xl border border-border-subtle bg-app-card-subtle p-6">
+          <p className="text-sm font-semibold text-fg">Flow</p>
+          <ol className="mt-3 space-y-2 text-sm text-fg-muted">
+            <li>1. Launch a session with an optional topic.</li>
+            <li>2. Browse and capture pages into notes.</li>
+            <li>3. Chat with AI, create tasks, and export the bundle.</li>
+          </ol>
+        </div>
+      </div>
       <div>
-        <h1 className="text-2xl font-semibold">Overview</h1>
+        <h2 className="text-2xl font-semibold">Overview</h2>
         <p className="text-sm text-muted-foreground">HydraFlow status and AI activity at a glance.</p>
       </div>
       <OverviewCards

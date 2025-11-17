@@ -3,12 +3,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { apiClient } from "@/lib/backend/apiClient";
-import type { MessageRecord } from "@/lib/backend/types";
+import type { MessageRecord, ThreadRecord } from "@/lib/backend/types";
+import type { ChatResponsePayload } from "@/lib/types";
 
 interface StartThreadOptions {
   tabId?: string;
   title?: string;
   origin?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface SendMessageInput {
@@ -18,13 +20,14 @@ interface SendMessageInput {
 
 interface ChatThreadContextValue {
   currentThreadId: string | null;
+  currentThread: ThreadRecord | null;
   messages: MessageRecord[];
   isLoading: boolean;
   isSending: boolean;
   error: string | null;
   selectThread: (threadId: string | null) => void;
   startThread: (options?: StartThreadOptions) => Promise<string>;
-  sendMessage: (input: SendMessageInput) => Promise<void>;
+  sendMessage: (input: SendMessageInput) => Promise<ChatResponsePayload | null>;
   reloadThread: () => Promise<void>;
 }
 
@@ -33,6 +36,11 @@ const ChatThreadContext = createContext<ChatThreadContextValue | undefined>(unde
 async function fetchThreadMessages(threadId: string): Promise<MessageRecord[]> {
   const response = await apiClient.get<{ items: MessageRecord[] }>(`/api/threads/${threadId}/messages?limit=200`);
   return response.items ?? [];
+}
+
+async function fetchThreadRecord(threadId: string): Promise<ThreadRecord> {
+  const response = await apiClient.get<{ thread: ThreadRecord }>(`/api/threads/${threadId}`);
+  return response.thread;
 }
 
 async function createThreadViaBrowser(tabId: string, options?: StartThreadOptions) {
@@ -45,15 +53,17 @@ async function createThreadViaBrowser(tabId: string, options?: StartThreadOption
 }
 
 async function createThread(options?: StartThreadOptions) {
-  const response = await apiClient.post<{ id: string }>("/api/threads", {
+  const response = await apiClient.post<{ id: string; thread?: ThreadRecord }>("/api/threads", {
     title: options?.title,
     origin: options?.origin ?? "chat",
+    metadata: options?.metadata,
   });
-  return response.id;
+  return { id: response.id, thread: response.thread ?? null };
 }
 
 export function ChatThreadProvider({ children }: { children: ReactNode }) {
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
+  const [currentThread, setCurrentThread] = useState<ThreadRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -72,13 +82,24 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loadThreadRecord = useCallback(async (threadId: string) => {
+    try {
+      const thread = await fetchThreadRecord(threadId);
+      setCurrentThread(thread);
+    } catch (err) {
+      console.error("Failed to load thread", err);
+    }
+  }, []);
+
   useEffect(() => {
     if (!currentThreadId) {
       setMessages([]);
+      setCurrentThread(null);
       return;
     }
     loadMessages(currentThreadId);
-  }, [currentThreadId, loadMessages]);
+    loadThreadRecord(currentThreadId);
+  }, [currentThreadId, loadMessages, loadThreadRecord]);
 
   const selectThread = useCallback((threadId: string | null) => {
     setCurrentThreadId(threadId);
@@ -88,10 +109,30 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
     async (options?: StartThreadOptions) => {
       setIsLoading(true);
       try {
-        const threadId = options?.tabId
-          ? await createThreadViaBrowser(options.tabId, options)
-          : await createThread(options);
+        let createdThread: ThreadRecord | null = null;
+        let threadId: string;
+        if (options?.tabId) {
+          if (options?.metadata) {
+            const created = await createThread(options);
+            threadId = created.id;
+            createdThread = created.thread;
+            await apiClient.post(`/api/browser/tabs/${options.tabId}/thread`, {
+              thread_id: threadId,
+              origin: options.origin ?? "browser",
+              title: options.title,
+            });
+          } else {
+            threadId = await createThreadViaBrowser(options.tabId, options);
+          }
+        } else {
+          const created = await createThread(options);
+          threadId = created.id;
+          createdThread = created.thread;
+        }
         setCurrentThreadId(threadId);
+        if (createdThread) {
+          setCurrentThread(createdThread);
+        }
         setError(null);
         return threadId;
       } catch (err) {
@@ -109,7 +150,7 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
     async ({ content, tabId }: SendMessageInput) => {
       const trimmed = content.trim();
       if (!trimmed) {
-        return;
+        return null;
       }
       setIsSending(true);
       try {
@@ -117,7 +158,7 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
         if (!threadId) {
           threadId = await startThread({ tabId });
         }
-        await apiClient.post("/api/chat", {
+        const response = await apiClient.post<ChatResponsePayload>("/api/chat", {
           thread_id: threadId,
           tab_id: tabId,
           messages: [{ role: "user", content: trimmed }],
@@ -125,6 +166,7 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
         if (threadId) {
           await loadMessages(threadId);
         }
+        return response ?? null;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to send message");
         throw err;
@@ -137,12 +179,23 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
 
   const reloadThread = useCallback(async () => {
     if (!currentThreadId) return;
-    await loadMessages(currentThreadId);
-  }, [currentThreadId, loadMessages]);
+    await Promise.all([loadMessages(currentThreadId), loadThreadRecord(currentThreadId)]);
+  }, [currentThreadId, loadMessages, loadThreadRecord]);
 
   const value = useMemo<ChatThreadContextValue>(
-    () => ({ currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage, reloadThread }),
-    [currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage, reloadThread],
+    () => ({
+      currentThreadId,
+      currentThread,
+      messages,
+      isLoading,
+      isSending,
+      error,
+      selectThread,
+      startThread,
+      sendMessage,
+      reloadThread,
+    }),
+    [currentThreadId, currentThread, messages, isLoading, isSending, error, selectThread, startThread, sendMessage, reloadThread],
   );
 
   return <ChatThreadContext.Provider value={value}>{children}</ChatThreadContext.Provider>;

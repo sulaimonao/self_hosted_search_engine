@@ -1,20 +1,53 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/use-toast";
+import { apiClient } from "@/lib/backend/apiClient";
 import { useChatThread } from "@/lib/useChatThread";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 
 export function ChatMessageList() {
-  const { messages, isLoading, error, reloadThread } = useChatThread();
+  const { messages, isLoading, error, reloadThread, currentThreadId } = useChatThread();
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [taskMessageId, setTaskMessageId] = useState<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
+
+  const handleCreateTask = async (messageId: string, content: string) => {
+    if (!currentThreadId) {
+      toast({ title: "No session", description: "Link a thread to create tasks.", variant: "warning" });
+      return;
+    }
+    setTaskMessageId(messageId);
+    try {
+      const normalized = content.trim();
+      const [firstLine] = normalized.split("\n");
+      const title = (firstLine || "Follow up").slice(0, 120);
+      const description = normalized.length > 120 ? normalized : undefined;
+      await apiClient.post("/api/tasks", {
+        thread_id: currentThreadId,
+        title,
+        description,
+        status: "open",
+      });
+      toast({ title: "Task created", description: "Find it under the Tasks tab." });
+      await queryClient.invalidateQueries({ queryKey: ["tasks", currentThreadId] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to create task";
+      toast({ title: "Task not created", description: message, variant: "destructive" });
+    } finally {
+      setTaskMessageId(null);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -61,7 +94,20 @@ export function ChatMessageList() {
                   message.role === "user" ? "bg-app-card-subtle" : "bg-accent-soft"
                 )}
               >
-                <p className="text-[11px] uppercase tracking-wide text-fg-subtle">{message.role}</p>
+                <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-fg-subtle">
+                  <span>{message.role}</span>
+                  {message.role !== "system" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-[11px] font-semibold text-fg-muted hover:text-fg"
+                      onClick={() => handleCreateTask(message.id, message.content)}
+                      disabled={taskMessageId === message.id}
+                    >
+                      {taskMessageId === message.id ? "Saving…" : "Create task"}
+                    </Button>
+                  )}
+                </div>
                 <p className="whitespace-pre-wrap text-sm text-fg">{message.content}</p>
               </div>
             ))}

@@ -6,11 +6,13 @@ import { GlobeIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useBrowserTabs } from "@/lib/backend/hooks";
 import { useChatThread } from "@/lib/useChatThread";
+import { inferResearchSessionFromThread } from "@/lib/researchSession";
 import { cn } from "@/lib/utils";
 
 export function AiPanelHeader() {
-  const { currentThreadId, isLoading } = useChatThread();
+  const { currentThreadId, currentThread, isLoading } = useChatThread();
   const tabsQuery = useBrowserTabs();
+  const session = inferResearchSessionFromThread(currentThread);
 
   const linkedTab = useMemo(() => {
     if (!currentThreadId) return null;
@@ -28,15 +30,19 @@ export function AiPanelHeader() {
   }, [linkedTab?.current_url]);
 
   const status = tabsQuery.isLoading || isLoading ? "Syncing…" : linkedTab ? "Linked" : "Unbound";
+  const title = session?.topic ?? linkedTab?.current_title ?? currentThread?.title ?? (currentThreadId ? `Thread ${currentThreadId.slice(0, 8)}` : "Connect a thread");
+  const subtitle = session?.topic ? "Research session" : "AI Copilot";
+  const startedAt = session?.createdAt ? new Date(session.createdAt).toLocaleString() : null;
 
   return (
     <div className="w-full">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-wide text-fg-subtle">AI Copilot</p>
-          <p className="font-semibold text-fg">
-            {linkedTab?.current_title ?? (currentThreadId ? `Thread ${currentThreadId.slice(0, 8)}` : "Connect a thread")}
-          </p>
+          <p className="text-xs uppercase tracking-wide text-fg-subtle">{subtitle}</p>
+          <p className="font-semibold text-fg">{title}</p>
+          {startedAt && (
+            <p className="text-xs text-fg-muted">Started {startedAt}</p>
+          )}
         </div>
         <Badge
           variant="outline"

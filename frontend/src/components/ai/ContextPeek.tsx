@@ -4,17 +4,34 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBrowserTabs, useMemories } from "@/lib/backend/hooks";
+import { inferResearchSessionFromThread } from "@/lib/researchSession";
 import { useChatThread } from "@/lib/useChatThread";
 
 export function ContextPeek() {
-  const { currentThreadId } = useChatThread();
+  const { currentThreadId, currentThread } = useChatThread();
   const tabsQuery = useBrowserTabs();
   const memoriesQuery = useMemories(currentThreadId);
+  const session = inferResearchSessionFromThread(currentThread);
 
   const linkedTab = tabsQuery.data?.items.find((tab) => tab.thread_id === currentThreadId);
 
   return (
     <div className="flex-1 space-y-3 overflow-y-auto">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Session</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-sm text-fg">
+          {session ? (
+            <>
+              <p className="font-medium">{session.topic ?? currentThread?.title ?? `Thread ${session.threadId}`}</p>
+              <p className="text-xs text-fg-muted">Started {new Date(session.createdAt).toLocaleString()}</p>
+            </>
+          ) : (
+            <p className="text-sm text-fg-muted">Link a browser thread to view its session metadata.</p>
+          )}
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Current tab</CardTitle>
@@ -54,12 +71,12 @@ export function ContextPeek() {
             </div>
           )}
           {currentThreadId && !memoriesQuery.isLoading && !memoriesQuery.error && (memoriesQuery.data?.items.length ?? 0) === 0 && (
-            <p>No memories retrieved.</p>
+            <p>No session notes captured yet.</p>
           )}
           {memoriesQuery.data?.items.map((memory) => (
-            <div key={memory.id}>
+            <div key={memory.id} className="rounded-md border border-border-subtle bg-app-card-subtle p-2">
               <p className="font-medium text-foreground">{memory.key ?? memory.scope}</p>
-              <p className="text-xs">{memory.value}</p>
+              <p className="text-xs text-fg-muted whitespace-pre-wrap">{memory.value}</p>
             </div>
           ))}
         </CardContent>

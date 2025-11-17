@@ -48,22 +48,29 @@ export function TaskList() {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border bg-background p-6 text-center text-sm text-muted-foreground">
         <p className="text-base font-medium text-foreground">No tasks yet</p>
-        <p>Create a task from this conversation to track follow-ups.</p>
-        <Button variant="outline" size="sm" disabled>
-          Create task from chat
+        <p>Use the “Create task” action on any chat message to capture follow-ups.</p>
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isRefetching}>
+          Refresh
         </Button>
-        <p className="text-[11px] text-muted-foreground">Available once backend task APIs are linked.</p>
       </div>
     );
   }
 
   return (
-    <ScrollArea className="flex-1 rounded-xl border bg-background p-3">
-      <div className="space-y-3">
-        {tasks.map((task) => (
-          <TaskItem key={task.id} task={task} />
-        ))}
+    <div className="flex h-full flex-col gap-3">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>{tasks.length} task{tasks.length === 1 ? "" : "s"}</span>
+        <Button variant="ghost" size="sm" className="text-xs" onClick={() => refetch()} disabled={isRefetching}>
+          Refresh
+        </Button>
       </div>
-    </ScrollArea>
+      <ScrollArea className="flex-1 rounded-xl border bg-background p-3">
+        <div className="space-y-3">
+          {tasks.map((task) => (
+            <TaskItem key={task.id} task={task} />
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
   );
 }
