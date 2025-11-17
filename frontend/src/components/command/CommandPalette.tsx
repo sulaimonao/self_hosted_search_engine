@@ -17,6 +17,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { COMMAND_ACTIONS, NAV_ITEMS, ROUTES } from "@/lib/navigation";
 import { useChatThread } from "@/lib/useChatThread";
 import { apiClient } from "@/lib/backend/apiClient";
+import { useRepoList } from "@/lib/backend/hooks";
+import { setAiPanelSessionOpen } from "@/lib/uiSession";
 
 export function CommandPalette({
   open,
@@ -28,37 +30,56 @@ export function CommandPalette({
   const router = useRouter();
   const { toast } = useToast();
   const { startThread } = useChatThread();
+  const repoList = useRepoList();
 
   const runAction = useCallback(
     async (actionId: string) => {
       try {
         switch (actionId) {
-          case "new-tab":
+          case "new-tab": {
             await startThread({ origin: "browser" });
+            setAiPanelSessionOpen(true);
             router.push(ROUTES.browse);
-            toast({ title: "Browser tab linked", description: "New AI thread ready." });
+            toast({ title: "New browser tab", description: "Linked to a fresh AI thread." });
             break;
-          case "new-chat":
+          }
+          case "new-chat": {
             await startThread({ origin: "chat" });
+            setAiPanelSessionOpen(true);
             toast({ title: "New chat", description: "Ask the assistant anything." });
             break;
-          case "export-bundle":
-            router.push(ROUTES.data);
-            toast({ title: "Open data", description: "Configure bundle export." });
+          }
+          case "export-bundle": {
+            router.push(`${ROUTES.data}?focus=export`);
+            toast({ title: "Export bundle", description: "Focused the export form." });
             break;
-          case "import-bundle":
-            router.push(ROUTES.data);
-            toast({ title: "Open data", description: "Upload bundle for import." });
+          }
+          case "import-bundle": {
+            router.push(`${ROUTES.data}?focus=import`);
+            toast({ title: "Import bundle", description: "Ready to paste a bundle path." });
             break;
-          case "run-repo-checks":
-            router.push(ROUTES.repo);
-            break;
-          case "clear-history":
-            await apiClient.delete("/api/browser/history", {
-              body: JSON.stringify({ clear_all: true }),
+          }
+          case "run-repo-checks": {
+            const repoId = repoList.data?.items?.[0]?.id ?? null;
+            const href = repoId ? `${ROUTES.repo}?repo=${encodeURIComponent(repoId)}` : ROUTES.repo;
+            router.push(href);
+            toast({
+              title: "Repo checks",
+              description: repoId ? `Opening ${repoId}` : "Select a repo to continue.",
             });
-            toast({ title: "History cleared" });
             break;
+          }
+          case "clear-history": {
+            const domain = window.prompt("Clear history for which domain? Leave blank to purge all.")?.trim();
+            await apiClient.delete("/api/browser/history", {
+              body: JSON.stringify(domain ? { domain, clear_all: false } : { clear_all: true }),
+            });
+            toast({
+              title: "History cleared",
+              description: domain ? `Removed visits for ${domain}` : "Cleared all captured history.",
+            });
+            break;
+          }
           default:
             toast({ title: "Action triggered", description: "Feature coming soon." });
         }
@@ -67,7 +88,7 @@ export function CommandPalette({
         toast({ title: "Action failed", description: message, variant: "destructive" });
       }
     },
-    [router, startThread, toast],
+    [repoList.data?.items, router, startThread, toast],
   );
 
   useEffect(() => {
@@ -87,17 +108,18 @@ export function CommandPalette({
       <CommandList>
         <CommandEmpty>No matching commands.</CommandEmpty>
         <CommandGroup heading="Navigate">
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.map((item, index) => (
             <CommandItem
               key={item.href}
               value={item.title}
               onSelect={() => {
                 router.push(item.href);
+                toast({ title: "Navigating", description: `Opening ${item.title}.` });
                 onOpenChange(false);
               }}
             >
               {item.title}
-              <CommandShortcut>{item.href}</CommandShortcut>
+              <CommandShortcut>{`⌘${index + 1}`}</CommandShortcut>
             </CommandItem>
           ))}
         </CommandGroup>
@@ -113,6 +135,7 @@ export function CommandPalette({
               }}
             >
               {action.label}
+              {action.shortcut ? <CommandShortcut>{action.shortcut}</CommandShortcut> : null}
             </CommandItem>
           ))}
         </CommandGroup>

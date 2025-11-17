@@ -25,6 +25,7 @@ interface ChatThreadContextValue {
   selectThread: (threadId: string | null) => void;
   startThread: (options?: StartThreadOptions) => Promise<string>;
   sendMessage: (input: SendMessageInput) => Promise<void>;
+  reloadThread: () => Promise<void>;
 }
 
 const ChatThreadContext = createContext<ChatThreadContextValue | undefined>(undefined);
@@ -134,9 +135,14 @@ export function ChatThreadProvider({ children }: { children: ReactNode }) {
     [currentThreadId, loadMessages, startThread],
   );
 
+  const reloadThread = useCallback(async () => {
+    if (!currentThreadId) return;
+    await loadMessages(currentThreadId);
+  }, [currentThreadId, loadMessages]);
+
   const value = useMemo<ChatThreadContextValue>(
-    () => ({ currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage }),
-    [currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage],
+    () => ({ currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage, reloadThread }),
+    [currentThreadId, messages, isLoading, isSending, error, selectThread, startThread, sendMessage, reloadThread],
   );
 
   return <ChatThreadContext.Provider value={value}>{children}</ChatThreadContext.Provider>;

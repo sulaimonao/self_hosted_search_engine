@@ -30,6 +30,19 @@ export default function ActivityPage() {
     setSelectedJobId(initialJob);
   }, [initialJob]);
 
+  useEffect(() => {
+    const current = searchParams.toString();
+    const params = new URLSearchParams(current);
+    if (selectedJobId) {
+      params.set("job", selectedJobId);
+    } else {
+      params.delete("job");
+    }
+    const next = params.toString();
+    if (next === current) return;
+    router.replace(`${ROUTES.activity}${next ? `?${next}` : ""}`, { scroll: false });
+  }, [router, searchParams, selectedJobId]);
+
   const jobs = useMemo(() => jobsQuery.data?.jobs ?? [], [jobsQuery.data?.jobs]);
 
   function handleThreadOpen(threadId: string) {
@@ -54,12 +67,14 @@ export default function ActivityPage() {
           error={jobsQuery.error?.message ?? null}
           selectedJobId={selectedJobId}
           onSelectJob={setSelectedJobId}
+          onRetry={() => jobsQuery.refetch()}
         />
         <JobsFilters status={status} type={type} onStatusChange={setStatus} onTypeChange={setType} />
       </div>
       <JobDetailDrawer
         job={jobDetail.data?.job}
         isLoading={jobDetail.isLoading}
+        error={jobDetail.error?.message ?? null}
         onOpenThread={jobDetail.data?.job?.thread_id ? handleThreadOpen : undefined}
         onOpenRepo={jobDetail.data?.job?.type?.startsWith("repo_") ? handleRepoOpen : undefined}
       />

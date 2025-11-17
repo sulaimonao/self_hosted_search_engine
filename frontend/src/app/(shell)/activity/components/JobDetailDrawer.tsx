@@ -10,11 +10,12 @@ import type { JobRecord } from "@/lib/backend/types";
 interface JobDetailDrawerProps {
   job?: JobRecord;
   isLoading?: boolean;
+  error?: string | null;
   onOpenThread?: (threadId: string) => void;
   onOpenRepo?: () => void;
 }
 
-export function JobDetailDrawer({ job, isLoading, onOpenThread, onOpenRepo }: JobDetailDrawerProps) {
+export function JobDetailDrawer({ job, isLoading, error, onOpenThread, onOpenRepo }: JobDetailDrawerProps) {
   const payloadPreview = useMemo(() => JSON.stringify(job?.payload ?? {}, null, 2), [job?.payload]);
   const resultPreview = useMemo(() => JSON.stringify(job?.result ?? {}, null, 2), [job?.result]);
 
@@ -25,7 +26,8 @@ export function JobDetailDrawer({ job, isLoading, onOpenThread, onOpenRepo }: Jo
       </CardHeader>
       <CardContent className="space-y-3 text-sm text-muted-foreground">
         {isLoading && <Skeleton className="h-32 w-full" />}
-        {!isLoading && !job && <p>Select a job to inspect its payload and logs.</p>}
+        {error && <p className="text-destructive">{error}</p>}
+        {!isLoading && !error && !job && <p>Select a job to inspect its payload and logs.</p>}
         {job && (
           <div className="space-y-3">
             <div>

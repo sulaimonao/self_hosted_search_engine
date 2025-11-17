@@ -27,3 +27,30 @@ export const safeLocalStorage = {
     }
   },
 };
+
+export const safeSessionStorage = {
+  get(key: string): string | null {
+    try {
+      if (typeof window === "undefined") return null;
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string) {
+    try {
+      if (typeof window === "undefined") return;
+      window.sessionStorage.setItem(key, value);
+    } catch {
+      // ignore quota errors
+    }
+  },
+  remove(key: string) {
+    try {
+      if (typeof window === "undefined") return;
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  },
+};

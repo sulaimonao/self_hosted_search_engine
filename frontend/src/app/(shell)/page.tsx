@@ -9,6 +9,7 @@ import { SessionsList } from "@/components/overview/SessionsList";
 import { useOverview, useThreads, useJobs } from "@/lib/backend/hooks";
 import { useChatThread } from "@/lib/useChatThread";
 import { ROUTES } from "@/lib/navigation";
+import { setAiPanelSessionOpen } from "@/lib/uiSession";
 import type { OverviewCardProps } from "@/components/overview/OverviewCard";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
@@ -48,6 +49,7 @@ export default function HomePage() {
 
   const handleThreadSelect = (threadId: string) => {
     selectThread(threadId);
+    setAiPanelSessionOpen(true);
     router.push(ROUTES.browse);
   };
 
@@ -61,19 +63,26 @@ export default function HomePage() {
         <h1 className="text-2xl font-semibold">Overview</h1>
         <p className="text-sm text-muted-foreground">HydraFlow status and AI activity at a glance.</p>
       </div>
-      <OverviewCards cards={cards} isLoading={overview.isLoading} error={overview.error?.message ?? null} />
+      <OverviewCards
+        cards={cards}
+        isLoading={overview.isLoading}
+        error={overview.error?.message ?? null}
+        onRetry={() => overview.refetch()}
+      />
       <div className="grid gap-6 lg:grid-cols-2">
         <SessionsList
           threads={threads.data?.items}
           isLoading={threads.isLoading}
           error={threads.error?.message ?? null}
           onSelectThread={handleThreadSelect}
+          onRetry={() => threads.refetch()}
         />
         <ActivityTimeline
           items={jobs.data?.jobs}
           isLoading={jobs.isLoading}
           error={jobs.error?.message ?? null}
           onSelectJob={handleJobSelect}
+          onRetry={() => jobs.refetch()}
         />
       </div>
     </div>
