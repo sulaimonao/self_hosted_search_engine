@@ -14,7 +14,9 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { useToast } from "@/components/ui/use-toast";
-import { COMMAND_ACTIONS, NAV_ITEMS } from "@/lib/navigation";
+import { COMMAND_ACTIONS, NAV_ITEMS, ROUTES } from "@/lib/navigation";
+import { useChatThread } from "@/lib/useChatThread";
+import { apiClient } from "@/lib/backend/apiClient";
 
 export function CommandPalette({
   open,
@@ -25,16 +27,47 @@ export function CommandPalette({
 }) {
   const router = useRouter();
   const { toast } = useToast();
+  const { startThread } = useChatThread();
 
   const runAction = useCallback(
-    (actionId: string) => {
-      const description = COMMAND_ACTIONS.find((action) => action.id === actionId)?.label;
-      toast({
-        title: description ?? "Action triggered",
-        description: "This is a placeholder action in the new shell.",
-      });
+    async (actionId: string) => {
+      try {
+        switch (actionId) {
+          case "new-tab":
+            await startThread({ origin: "browser" });
+            router.push(ROUTES.browse);
+            toast({ title: "Browser tab linked", description: "New AI thread ready." });
+            break;
+          case "new-chat":
+            await startThread({ origin: "chat" });
+            toast({ title: "New chat", description: "Ask the assistant anything." });
+            break;
+          case "export-bundle":
+            router.push(ROUTES.data);
+            toast({ title: "Open data", description: "Configure bundle export." });
+            break;
+          case "import-bundle":
+            router.push(ROUTES.data);
+            toast({ title: "Open data", description: "Upload bundle for import." });
+            break;
+          case "run-repo-checks":
+            router.push(ROUTES.repo);
+            break;
+          case "clear-history":
+            await apiClient.delete("/api/browser/history", {
+              body: JSON.stringify({ clear_all: true }),
+            });
+            toast({ title: "History cleared" });
+            break;
+          default:
+            toast({ title: "Action triggered", description: "Feature coming soon." });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Action failed";
+        toast({ title: "Action failed", description: message, variant: "destructive" });
+      }
     },
-    [toast]
+    [router, startThread, toast],
   );
 
   useEffect(() => {
@@ -74,8 +107,8 @@ export function CommandPalette({
             <CommandItem
               key={action.id}
               value={action.label}
-              onSelect={() => {
-                runAction(action.id);
+              onSelect={async () => {
+                await runAction(action.id);
                 onOpenChange(false);
               }}
             >
