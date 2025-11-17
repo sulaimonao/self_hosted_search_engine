@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Deque, Dict, Optional, Sequence
 
 from backend.app.config import AppConfig
@@ -22,6 +23,10 @@ if TYPE_CHECKING:  # pragma: no cover - imported for typing only
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
 
 class RefreshWorker:
@@ -135,6 +140,19 @@ class RefreshWorker:
                     query=query,
                     normalized_path=str(self.config.normalized_path),
                 )
+                job_payload = {
+                    "query": query,
+                    "budget": effective_budget,
+                    "depth": frontier_depth,
+                    "seeds": seed_list or [],
+                    "force": bool(force),
+                }
+                self._state_db.create_job(
+                    "focused_crawl",
+                    job_id=job_id,
+                    payload=job_payload,
+                    status="queued",
+                )
             if self._progress_bus is not None:
                 self._progress_bus.ensure_queue(job_id)
                 self._progress_bus.publish(
@@ -226,6 +244,7 @@ class RefreshWorker:
         progress_bus = self._progress_bus
         if state_db is not None:
             state_db.update_crawl_status(job_id, "running")
+            state_db.update_job(job_id, status="running", started_at=_now_iso())
         if progress_bus is not None:
             progress_bus.publish(
                 job_id,
@@ -289,6 +308,12 @@ class RefreshWorker:
                 normalized_path=str(normalized_path) if normalized_path else None,
             )
             state_db.record_crawl_event(job_id, "done", {"stats": stats_payload})
+            state_db.update_job(
+                job_id,
+                status="succeeded",
+                completed_at=_now_iso(),
+                result={"stats": stats_payload, "query": job.get("query")},
+            )
         if progress_bus is not None:
             progress_bus.publish(
                 job_id,
@@ -347,6 +372,12 @@ class RefreshWorker:
         if self._state_db is not None:
             self._state_db.update_crawl_status(job_id, "error", error=error)
             self._state_db.record_crawl_event(job_id, "error", {"error": error})
+            self._state_db.update_job(
+                job_id,
+                status="failed",
+                error=error,
+                completed_at=_now_iso(),
+            )
         if self._progress_bus is not None:
             self._progress_bus.publish(
                 job_id,

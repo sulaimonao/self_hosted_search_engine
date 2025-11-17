@@ -780,6 +780,34 @@ def _migration_013_jobs_table(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migration_014_repo_changes(connection: sqlite3.Connection) -> None:
+    table = "repos"
+    if _table_exists(connection, table):
+        with connection:
+            if not _column_exists(connection, table, "check_command"):
+                connection.execute(
+                    "ALTER TABLE repos ADD COLUMN check_command TEXT"
+                )
+    with connection:
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS repo_changes (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+                applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                summary TEXT,
+                change_stats TEXT,
+                result TEXT,
+                error_message TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_repo_changes_repo ON repo_changes(repo_id, applied_at DESC);
+            """
+        )
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -794,6 +822,7 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("011_tab_threads", _migration_011_tab_threads),
     ("012_repo_registry", _migration_012_repo_registry),
     ("013_jobs_table", _migration_013_jobs_table),
+    ("014_repo_changes", _migration_014_repo_changes),
     ("20251102_app_config", _migration_20251102_app_config),
     ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]

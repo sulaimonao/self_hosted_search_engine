@@ -77,7 +77,6 @@ def create_app() -> Flask:
     from .api import health as health_api
     from .api import diagnostics as diagnostics_api
     from .api import diagnostics_self_heal as diagnostics_self_heal_api
-    from .api import roadmap as roadmap_api
     from .api import dev_diag as dev_diag_api
     from .api import db as db_api
     from .api import self_heal as self_heal_api
@@ -107,6 +106,10 @@ def create_app() -> Flask:
     from .api import repo as repo_api
     from .api import embeddings as embeddings_api
     from .api import overview as overview_api
+    try:
+        from .api import crawl as crawl_api
+    except ImportError:  # pragma: no cover - optional legacy endpoint
+        crawl_api = None
     # Config routes (persisted app configuration)
     from .routes import config as config_routes
     from .config import AppConfig
@@ -643,7 +646,6 @@ def create_app() -> Flask:
     app.register_blueprint(web_search_api.bp)
     app.register_blueprint(diagnostics_api.bp)
     app.register_blueprint(diagnostics_self_heal_api.bp)
-    app.register_blueprint(roadmap_api.bp)
     app.register_blueprint(dev_diag_api.bp)
     app.register_blueprint(db_api.bp)
     app.register_blueprint(self_heal_api.bp)
@@ -656,9 +658,8 @@ def create_app() -> Flask:
     app.register_blueprint(refresh_api.bp)
     app.register_blueprint(plan_api.bp)
     app.register_blueprint(agent_tools_api.bp)
-    # Register simple crawl utilities used by tests
-    from .api import crawl as crawl_api
-    app.register_blueprint(crawl_api.bp)
+    if crawl_api is not None:
+        app.register_blueprint(crawl_api.bp)
     app.register_blueprint(browser_api.bp)
     app.register_blueprint(seeds_api.bp)
     app.register_blueprint(extract_api.bp)

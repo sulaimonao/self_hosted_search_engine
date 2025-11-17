@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+from datetime import datetime, timezone
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from flask import Blueprint, abort, current_app, jsonify, request
 
@@ -19,6 +21,10 @@ MAX_FILES = getattr(change_budget_guard, "MAX_FILES", 50)
 MAX_LOC = getattr(change_budget_guard, "MAX_LOC", 4000)
 
 bp = Blueprint("repo_api", __name__, url_prefix="/api/repo")
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
 
 def _state_db() -> AppStateDB:
@@ -91,6 +97,25 @@ def _count_diff_lines(diff: str) -> tuple[int, int]:
     return additions, deletions
 
 
+def _normalize_command_arg(command: Any) -> list[str] | None:
+    if command is None:
+        return None
+    if isinstance(command, str):
+        candidate = command.strip()
+        return [candidate] if candidate else None
+    if isinstance(command, Iterable):
+        tokens: list[str] = []
+        for entry in command:
+            if entry is None:
+                continue
+            text = str(entry).strip()
+            if not text:
+                continue
+            tokens.append(text)
+        return tokens or None
+    return None
+
+
 def _validate_file_entry(entry: Any, *, repo_root: Path) -> dict[str, Any]:
     if not isinstance(entry, dict):
         abort(400, "each file entry must be an object")
@@ -142,6 +167,26 @@ def _validate_budget(files: list[dict[str, Any]]) -> tuple[int, int]:
     return len(files), total_lines
 
 
+def _apply_file_changes(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    applied: list[dict[str, Any]] = []
+    for entry in files:
+        resolved = Path(entry["resolved_path"])
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        action: str
+        if entry.get("delete"):
+            action = "deleted"
+            with suppress(FileNotFoundError):  # type: ignore[name-defined]
+                resolved.unlink()
+        else:
+            content = entry.get("content")
+            if content is None:
+                abort(400, f"content required for {entry['path']}")
+            resolved.write_text(str(content), encoding="utf-8")
+            action = "updated"
+        applied.append({"path": entry["path"], "action": action})
+    return applied
+
+
 @bp.get("/list")
 def list_repos() -> Any:
     state_db = _state_db()
@@ -190,7 +235,218 @@ def propose_patch(repo_id: str):
     return jsonify(response), 202
 
 
-def apply_patch(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - future work stub
-    """Placeholder for repo patch application logic."""
-    raise NotImplementedError("apply_patch is not implemented yet")
+@bp.post("/<repo_id>/apply_patch")
+def apply_patch_endpoint(repo_id: str):
+    record = _get_repo(repo_id)
+    if "write" not in record.get("allowed_ops", []):
+        abort(403, "write operations are disabled for this repository")
+    payload = request.get_json(force=True, silent=True) or {}
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        abort(400, "files list is required")
+    summary = (payload.get("summary") or "").strip() or None
+    repo_root = Path(record["root_path"]).resolve()
+    validated: list[dict[str, Any]] = []
+    for entry in files:
+        file_data = _validate_file_entry(entry, repo_root=repo_root)
+        delete_flag = bool(entry.get("delete"))
+        file_data["delete"] = delete_flag
+        if not delete_flag:
+            content = entry.get("content")
+            if content is None:
+                abort(400, f"content required for {file_data['path']}")
+            file_data["content"] = str(content)
+        validated.append(file_data)
+    file_count, total_lines = _validate_budget(validated)
+    state_db = _state_db()
+    job_payload = {
+        "repo_id": repo_id,
+        "file_count": file_count,
+        "line_delta": total_lines,
+        "summary": summary,
+    }
+    job_id = state_db.create_job("repo_apply_patch", payload=job_payload)
+    state_db.update_job(job_id, status="running", started_at=_now_iso())
+    change_stats = {
+        "files": file_count,
+        "lines": total_lines,
+        "details": [
+            {
+                "path": item["path"],
+                "additions": item["additions"],
+                "deletions": item["deletions"],
+                "delete": bool(item.get("delete")),
+            }
+            for item in validated
+        ],
+    }
+    try:
+        applied = _apply_file_changes(validated)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        state_db.update_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            completed_at=_now_iso(),
+        )
+        state_db.record_repo_change(
+            repo_id,
+            summary=summary or "apply_patch failed",
+            change_stats=change_stats,
+            result="failed",
+            error_message=str(exc),
+            job_id=job_id,
+        )
+        abort(500, "failed to apply patch")
+    result_payload = {
+        "files": applied,
+        "change_stats": change_stats,
+        "summary": summary or f"Applied {file_count} file(s)",
+    }
+    state_db.update_job(
+        job_id,
+        status="succeeded",
+        completed_at=_now_iso(),
+        result=result_payload,
+    )
+    state_db.record_repo_change(
+        repo_id,
+        summary=result_payload["summary"],
+        change_stats=change_stats,
+        result="succeeded",
+        error_message=None,
+        job_id=job_id,
+    )
+    response = dict(result_payload)
+    response.update({"job_id": job_id, "repo_id": repo_id})
+    return jsonify(response)
+
+
+def _truncate_output(text: str, limit: int = 16000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _resolve_check_command(record: dict[str, Any], override: Any) -> list[str]:
+    override_cmd = _normalize_command_arg(override)
+    if override_cmd:
+        return override_cmd
+    saved = record.get("check_command")
+    saved_cmd = _normalize_command_arg(saved)
+    if saved_cmd:
+        return saved_cmd
+    return []
+
+
+@bp.post("/<repo_id>/run_checks")
+def run_checks(repo_id: str):
+    record = _get_repo(repo_id)
+    allowed = {op for op in record.get("allowed_ops", [])}
+    if not ({"write", "run_checks", "checks"} & allowed):
+        abort(403, "check operations are disabled for this repository")
+    payload = request.get_json(force=True, silent=True) or {}
+    command = _resolve_check_command(record, payload.get("command"))
+    if not command:
+        abort(400, "no check command configured for this repository")
+    timeout_value = payload.get("timeout")
+    if timeout_value is None:
+        timeout_seconds = 600.0
+    else:
+        try:
+            timeout_seconds = float(timeout_value)
+        except (TypeError, ValueError):
+            abort(400, "timeout must be numeric")
+        if timeout_seconds <= 0:
+            abort(400, "timeout must be positive")
+    repo_root = Path(record["root_path"]).resolve()
+    summary = (payload.get("summary") or "").strip() or f"Run {' '.join(command)}"
+    state_db = _state_db()
+    job_id = state_db.create_job(
+        "repo_run_checks",
+        payload={
+            "repo_id": repo_id,
+            "command": command,
+            "timeout": timeout_seconds,
+            "summary": summary,
+        },
+    )
+    started_at = _now_iso()
+    state_db.update_job(job_id, status="running", started_at=started_at)
+    try:
+        proc = subprocess.run(  # noqa: S603,S607 - trusted command
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        error_message = f"timeout after {timeout_seconds}s"
+        state_db.update_job(
+            job_id,
+            status="failed",
+            error=error_message,
+            completed_at=_now_iso(),
+        )
+        state_db.record_repo_change(
+            repo_id,
+            summary=summary,
+            change_stats={"command": command, "timeout": timeout_seconds},
+            result="failed",
+            error_message=error_message,
+            job_id=job_id,
+        )
+        abort(504, error_message)
+    except Exception as exc:  # pragma: no cover - defensive path
+        error_message = str(exc)
+        state_db.update_job(
+            job_id,
+            status="failed",
+            error=error_message,
+            completed_at=_now_iso(),
+        )
+        state_db.record_repo_change(
+            repo_id,
+            summary=summary,
+            change_stats={"command": command},
+            result="failed",
+            error_message=error_message,
+            job_id=job_id,
+        )
+        abort(500, "run_checks_failed")
+    output_chunks = [proc.stdout or "", proc.stderr or ""]
+    combined_output = "\n".join(chunk for chunk in output_chunks if chunk)
+    truncated = _truncate_output(combined_output)
+    completed_at = _now_iso()
+    result_status = "succeeded" if proc.returncode == 0 else "failed"
+    result_payload = {
+        "repo_id": repo_id,
+        "command": command,
+        "exit_code": proc.returncode,
+        "output": truncated,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "timeout": timeout_seconds,
+        "status": result_status,
+    }
+    state_db.update_job(
+        job_id,
+        status=result_status,
+        completed_at=completed_at,
+        result=result_payload,
+        error=None if result_status == "succeeded" else truncated[-200:],
+    )
+    state_db.record_repo_change(
+        repo_id,
+        summary=f"Checks exit {proc.returncode}",
+        change_stats={"command": command, "exit_code": proc.returncode},
+        result=result_status,
+        error_message=None if result_status == "succeeded" else truncated[:500],
+        job_id=job_id,
+    )
+    response = dict(result_payload)
+    response["job_id"] = job_id
+    return jsonify(response)
 

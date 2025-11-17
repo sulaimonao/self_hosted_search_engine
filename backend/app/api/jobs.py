@@ -17,10 +17,15 @@ bp = Blueprint("jobs_api", __name__, url_prefix="/api")
 
 @bp.get("/jobs")
 def list_jobs():
+    """Return job records with optional status/type filtering."""
+
     state_db: AppStateDB = current_app.config["APP_STATE_DB"]
     limit = request.args.get("limit", type=int) or 50
     status = request.args.get("status")
-    items = state_db.list_jobs(limit=limit, status=status)
+    job_type = request.args.get("type")
+    if job_type:
+        job_type = job_type.strip() or None
+    items = state_db.list_jobs(limit=limit, status=status, job_type=job_type)
     return jsonify({"items": items})
 
 
