@@ -2,6 +2,18 @@
 
 This document captures how the major backend services introduced across the multi-phase plan fit together.
 
+## User profile model (Backend v1)
+- One repository + data directory hosts exactly **one** user profile.  All
+  persisted state (HydraFlow threads/messages/tasks, browser tabs/history,
+  bundles, jobs, repo tooling, etc.) is scoped to that profile.
+- Multi-user / multi-tenant operation inside a single database is intentionally
+  out of scope for Backend v1.  Supporting multiple people means running
+  multiple independent data directories (one per user) instead of sprinkling
+  `user_id` columns across every table.
+- Frontends or agents that need to impersonate different users should switch
+  between data directories explicitly so each profile keeps isolated storage,
+  privacy controls, and bundle exports.
+
 ## HydraFlow memory/tasks
 - Tables: `llm_threads`, `llm_messages`, `tasks`, `task_events`, `memory_embeddings`.
 - APIs: `/api/chat`, `/api/hydraflow`, `/api/memory`, `/api/tasks`, `DELETE /api/threads/<id>`.

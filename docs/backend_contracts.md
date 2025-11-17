@@ -14,10 +14,33 @@ This document is the source of truth for every externally callable backend API t
 | --- | --- |
 | Base URL | Every endpoint is rooted under `https://<host>/api`.  Browser-related endpoints add `/browser`, repo tooling adds `/repo`, etc. |
 | Media types | Request/response bodies are JSON.  Streaming chat also uses NDJSON over SSE. |
-| Error envelope | Errors return `{ "error": <code>, "hint"?: string }` with HTTP 4xx/5xx.  Some legacy endpoints use `abort()` which yields HTML—prefer JSON when touching them. |
-| Success envelope | Collections return `{ "items": [...] }`.  Singleton fetches use `{ "<entity>": {...} }`.  Mutations often add `{ "id": ..., "stats"?: {...} }`. |
+| Error envelope | Errors return `{ "ok": false, "error": { "code": string, "message": string, "details"?: {...} } }` with HTTP 4xx/5xx.  Legacy endpoints that still emit `{ "error": "..." }` should be migrated before Backend v2. |
+| Success envelope | Core endpoints return `{ "ok": true, "data": {...} }` and keep legacy top-level keys such as `items`, `thread`, or `job` for backwards compatibility. |
 | Pagination | Query params `limit` (default 50) and `offset` appear on list endpoints.  They must clamp to sane bounds and never throw on negative input. |
 | IDs | Threads, jobs, bundles, etc. accept caller-provided IDs but will generate stable UUIDv4 strings when omitted. |
+
+---
+
+## Extension Points v1
+
+- **Jobs / long-running operations**
+  - Introduce new work by registering a `jobs.type` (e.g., `bundle_export`).
+  - Mirror lifecycle updates through `AppStateDB.create_job` / `update_job`,
+    keep `jobs` table fields consistent, and document the type in this file.
+- **Bundle components**
+  - Add the component name to `manifest.components` and implement both
+    `bundle_io.export_bundle` and `bundle_io.import_bundle` paths with
+    idempotent dedupe logic.
+  - Ship regression tests covering export/import round-trips.
+- **Repo tools**
+  - Mount new helpers under `/api/repo/...`, enforce change budgets and
+    repo-root sandboxing, and log state changes via `repo_changes`.
+  - Any command execution must go through the allow-listed configuration and
+    record a `repo_*` job when applicable.
+- **HydraFlow entities**
+  - Prefer enriching existing tables (new metadata fields, enums, or payloads)
+    before introducing new tables.  This keeps bundles, privacy deletes, and
+    cross-component joins simple.
 
 ---
 

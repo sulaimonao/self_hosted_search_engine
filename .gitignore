@@ -152,11 +152,13 @@ diagnostics/*
 !tests/api/test_web_search_api.py
 !tests/api/test_reasoning_api.py
 !tests/api/test_browser_privacy.py
+!tests/api/test_contracts_shape.py
 !tests/api/test_hydraflow_api.py
 !tests/api/test_jobs_api.py
 !tests/api/test_utils.py
 !tests/e2e/test_agent_browser.py
 !tests/e2e/test_zero_touch.py
+!tests/integration/test_full_lifecycle.py
 !tests/backend/test_local_discovery.py
 !tests/backend/test_vector_index_filters.py
 !tests/backend/test_vector_index_retry.py
@@ -176,6 +178,7 @@ diagnostics/*
 !tests/tools/termsearch/test_query_apostrophe.py
 !tests/unit/test_agent_tools_repo.py
 !tests/unit/test_observability.py
+!tests/backend_app_helpers.py
 !tests/server/test_tool_logging.py
 !tests/server/test_llm.py
 !chromadb/__init__.py
