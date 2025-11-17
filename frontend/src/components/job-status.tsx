@@ -22,17 +22,17 @@ const STATUS_META: Record<JobStatusSummary["state"], { label: string; icon: Reac
   queued: {
     label: "Queued",
     icon: <Clock className="h-4 w-4" />,
-    tone: "text-amber-500",
+    tone: "text-state-warning",
   },
   running: {
     label: "Running",
     icon: <PlayCircle className="h-4 w-4" />,
-    tone: "text-sky-500",
+    tone: "text-state-info",
   },
   done: {
     label: "Done",
     icon: <CheckCircle2 className="h-4 w-4" />,
-    tone: "text-emerald-500",
+    tone: "text-state-success",
   },
   error: {
     label: "Error",
@@ -55,7 +55,7 @@ export function JobStatus({ jobs }: JobStatusProps) {
           const meta = STATUS_META[job.state];
           const percent = Math.max(0, Math.min(100, Math.round(job.progress)));
           return (
-            <div key={job.jobId} className="rounded border px-3 py-2">
+            <div key={job.jobId} className="rounded border border-border-subtle px-3 py-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">{job.description ?? job.jobId}</p>

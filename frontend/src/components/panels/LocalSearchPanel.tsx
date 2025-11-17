@@ -146,7 +146,7 @@ export function LocalSearchPanel() {
     statusLine?.kind === "error"
       ? "text-destructive"
       : statusLine?.kind === "warning"
-      ? "text-amber-600 dark:text-amber-400"
+      ? "text-state-warning"
       : "text-muted-foreground";
 
   const metaLine = useMemo(() => {

@@ -34,15 +34,15 @@ export default function LogsPage() {
   }, []);
 
   return (
-    <div className="p-4">
-      <h2 className="text-xl font-semibold mb-2">Recent Telemetry</h2>
-      {loading && <div>Loading…</div>}
-      <div className="space-y-2">
+    <div className="flex flex-col gap-4 p-4">
+      <h2 className="text-xl font-semibold">Recent Telemetry</h2>
+      {loading && <div className="text-sm text-fg-muted">Loading…</div>}
+      <div className="space-y-3">
         {entries.map((e, i) => (
-          <div key={i} className="p-2 border rounded">
-            <div className="text-sm text-gray-600">{e.ts ?? e.timestamp}</div>
+          <div key={i} className="rounded-md border border-border-subtle bg-app-card p-3 text-sm text-fg shadow-subtle">
+            <div className="text-xs text-fg-muted">{e.ts ?? e.timestamp}</div>
             <div className="font-mono text-sm">{e.event} — {e.level}</div>
-            <div className="mt-1">{e.msg ?? JSON.stringify(e.meta)?.slice(0, 200)}</div>
+            <div className="mt-1 text-sm text-fg-muted">{e.msg ?? JSON.stringify(e.meta)?.slice(0, 200)}</div>
           </div>
         ))}
       </div>

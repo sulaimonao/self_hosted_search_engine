@@ -51,11 +51,13 @@ export default function FirstRunWizard(): JSX.Element {
   const startDisabled = Boolean(jobId);
 
   return (
-    <div className="p-4 border rounded-2xl space-y-3">
-      <div className="font-semibold">First-Run Setup</div>
-      <div>LLM: {llmUnavailable ? "offline" : llmStatus === "available" ? "reachable" : "checking…"}</div>
+    <div className="space-y-3 rounded-2xl border border-border-subtle bg-app-card p-4 text-sm text-fg shadow-subtle">
+      <div className="text-base font-semibold">First-Run Setup</div>
+      <div className="text-sm text-fg-muted">
+        LLM: {llmUnavailable ? "offline" : llmStatus === "available" ? "reachable" : "checking…"}
+      </div>
       {llmUnavailable ? (
-        <p className="text-sm text-amber-600">
+        <p className="text-sm text-state-warning">
           Ollama is not running, so chat, planning, and autopilot features are disabled. You can still crawl and search locally.
           Start <code>ollama serve</code> and install models from the Control Center when you are ready to enable LLM features.
         </p>
@@ -65,19 +67,19 @@ export default function FirstRunWizard(): JSX.Element {
         </p>
       )}
       <textarea
-        className="w-full border rounded p-2"
+        className="w-full rounded-md border border-border-subtle bg-app-input p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         value={seeds}
         onChange={(event) => setSeeds(event.target.value)}
       />
       <button
-        className="px-3 py-2 rounded-2xl border disabled:opacity-50"
+        className="rounded-2xl border border-border-subtle bg-app-card-subtle px-3 py-2 font-medium text-fg transition hover:bg-app-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
         type="button"
         onClick={start}
         disabled={startDisabled}
       >
         Start crawl
       </button>
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {error && <div className="text-sm text-state-danger">{error}</div>}
       {jobId && <CrawlMonitor jobId={jobId} />}
     </div>
   );

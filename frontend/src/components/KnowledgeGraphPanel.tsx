@@ -190,37 +190,37 @@ export function KnowledgeGraphPanel() {
   if (loading && !summary) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-accent border-t-transparent" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-        <p className="text-red-800 text-sm">Error: {error}</p>
+      <div className="rounded-xl border border-border-subtle bg-app-card-subtle p-4">
+        <p className="text-sm text-state-danger">Error: {error}</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-4 p-4 text-fg">
       <div className="space-y-2">
         <h2 className="text-xl font-semibold">Knowledge Graph</h2>
         {/* Controls */}
-        <div className="flex flex-wrap gap-2 items-end">
+        <div className="flex flex-wrap items-end gap-2 text-sm">
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">View</label>
+            <label className="text-xs text-fg-muted">View</label>
             <select
               value={viewMode}
               onChange={(e) => setViewMode(e.target.value as "pages" | "sites")}
-              className="border rounded px-2 py-1"
+              className="rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <option value="pages">Pages</option>
               <option value="sites">Sites (overview)</option>
             </select>
           </div>
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={globalView}
@@ -235,45 +235,45 @@ export function KnowledgeGraphPanel() {
             Global view
           </label>
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">Min degree</label>
+            <label className="text-xs text-fg-muted">Min degree</label>
             <input
               type="number"
               min={0}
               value={minDegree}
               onChange={(e) => setMinDegree(Number(e.target.value) || 0)}
-              className="border rounded px-2 py-1 w-28"
+              className="w-28 rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </div>
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">Category</label>
+            <label className="text-xs text-fg-muted">Category</label>
             <input
               type="text"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               placeholder="topic tag"
-              className="border rounded px-2 py-1 w-40"
+              className="w-40 rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg placeholder:text-fg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </div>
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">From</label>
+            <label className="text-xs text-fg-muted">From</label>
             <input
               type="date"
               value={fromDate}
               onChange={(e) => setFromDate(e.target.value)}
-              className="border rounded px-2 py-1"
+              className="rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </div>
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">To</label>
+            <label className="text-xs text-fg-muted">To</label>
             <input
               type="date"
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
-              className="border rounded px-2 py-1"
+              className="rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </div>
           {viewMode === "pages" && (
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={indexedOnly}
@@ -284,53 +284,53 @@ export function KnowledgeGraphPanel() {
           )}
           {viewMode === "sites" && (
             <div className="flex flex-col">
-              <label className="text-xs text-gray-600">Min weight</label>
+              <label className="text-xs text-fg-muted">Min weight</label>
               <input
                 type="number"
                 min={1}
                 max={10000}
                 value={minWeight}
                 onChange={(e) => setMinWeight(Math.max(1, Number(e.target.value) || 1))}
-                className="border rounded px-2 py-1 w-28"
+                className="w-28 rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               />
             </div>
           )}
           <div className="flex flex-col">
-            <label className="text-xs text-gray-600">Limit</label>
+            <label className="text-xs text-fg-muted">Limit</label>
             <input
               type="number"
               min={10}
               max={1000}
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value) || 200)}
-              className="border rounded px-2 py-1 w-24"
+              className="w-24 rounded-xs border border-border-subtle bg-app-input px-2 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             />
           </div>
           <button
             onClick={() => loadGraphData(selectedSite)}
-            className="ml-auto px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+            className="ml-auto rounded-md border border-transparent bg-accent px-4 py-1.5 text-sm font-medium text-fg-on-accent transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             Apply
           </button>
         </div>
-        
+
         {summary && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-gray-50 rounded-lg">
+          <div className="grid grid-cols-2 gap-4 rounded-xl border border-border-subtle bg-app-card-subtle p-4 md:grid-cols-4">
             <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{summary.pages}</div>
-              <div className="text-sm text-gray-600">Pages</div>
+              <div className="text-2xl font-bold text-accent">{summary.pages}</div>
+              <div className="text-sm text-fg-muted">Pages</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">{summary.sites}</div>
-              <div className="text-sm text-gray-600">Sites</div>
+              <div className="text-2xl font-bold text-state-success">{summary.sites}</div>
+              <div className="text-sm text-fg-muted">Sites</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">{summary.fresh_7d}</div>
-              <div className="text-sm text-gray-600">Fresh (7d)</div>
+              <div className="text-2xl font-bold text-accent">{summary.fresh_7d}</div>
+              <div className="text-sm text-fg-muted">Fresh (7d)</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-orange-600">{edges.length}</div>
-              <div className="text-sm text-gray-600">Connections</div>
+              <div className="text-2xl font-bold text-state-info">{edges.length}</div>
+              <div className="text-sm text-fg-muted">Connections</div>
             </div>
           </div>
         )}
@@ -344,15 +344,15 @@ export function KnowledgeGraphPanel() {
               <button
                 key={site.site}
                 onClick={() => setSelectedSite(site.site)}
-                className={`w-full text-left px-4 py-2 rounded-lg border transition-colors ${
+                className={`w-full rounded-lg border px-4 py-2 text-left text-sm font-medium transition ${
                   selectedSite === site.site
-                    ? "bg-blue-50 border-blue-300"
-                    : "bg-white border-gray-200 hover:bg-gray-50"
+                    ? "border-accent bg-accent-soft text-fg"
+                    : "border-border-subtle bg-app-card text-fg hover:bg-app-card-hover"
                 }`}
               >
                 <div className="flex justify-between items-center">
                   <span className="font-medium">{site.site}</span>
-                  <span className="text-sm text-gray-500">{site.degree} connections</span>
+                  <span className="text-xs text-fg-muted">{site.degree} connections</span>
                 </div>
               </button>
             ))}
@@ -373,7 +373,7 @@ export function KnowledgeGraphPanel() {
             {viewMode === "pages" && !globalView && (
               <button
                 onClick={() => setSelectedSite(null)}
-                className="text-sm text-blue-600 hover:text-blue-800"
+                className="text-sm text-accent hover:text-accent/80"
               >
                 Clear selection
               </button>
@@ -382,17 +382,17 @@ export function KnowledgeGraphPanel() {
           
           {loading ? (
             <div className="flex items-center justify-center p-4">
-              <div className="animate-spin h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full" />
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
             </div>
           ) : nodes.length > 0 ? (
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {nodes.map((node) => (
-                <div key={node.id} className="p-3 bg-white border border-gray-200 rounded-lg">
-                  <div className="font-medium text-sm truncate">{node.title || "Untitled"}</div>
-                  <div className="text-xs text-gray-500 truncate mt-1">{node.url}</div>
+                <div key={node.id} className="rounded-lg border border-border-subtle bg-app-card p-3 text-sm text-fg">
+                  <div className="font-medium truncate">{node.title || "Untitled"}</div>
+                  <div className="mt-1 truncate text-xs text-fg-muted">{node.url}</div>
                   {viewMode === "pages" && node.indexed !== undefined && (
                     <div className="mt-1 text-xs">
-                      <span className={node.indexed ? "text-green-600" : "text-gray-500"}>
+                      <span className={node.indexed ? "text-state-success" : "text-fg-muted"}>
                         {node.indexed ? "Indexed" : "Not indexed"}
                       </span>
                     </div>
@@ -402,7 +402,7 @@ export function KnowledgeGraphPanel() {
                       {node.topics.map((topic, idx) => (
                         <span
                           key={idx}
-                          className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded"
+                          className="rounded-full bg-accent-soft px-2 py-0.5 text-xs text-fg-on-accent"
                         >
                           {topic}
                         </span>
@@ -420,7 +420,7 @@ export function KnowledgeGraphPanel() {
               </div>
             </div>
           ) : (
-            <div className="p-4 text-center text-gray-500 text-sm">
+            <div className="rounded-md border border-border-subtle bg-app-card-subtle p-4 text-center text-sm text-fg-muted">
               {viewMode === "sites" ? "No sites found" : "No pages found for this site"}
             </div>
           )}
@@ -428,11 +428,11 @@ export function KnowledgeGraphPanel() {
       )}
 
       {/* Legend */}
-      <div className="mt-2 text-xs text-gray-600">
+      <div className="mt-2 text-xs text-fg-muted">
         {viewMode === "pages" ? (
           <div className="flex gap-4 items-center">
-            <div className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:'#22c55e'}} /> Indexed</div>
-            <div className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full" style={{backgroundColor:'#9CA3AF'}} /> Not indexed</div>
+            <div className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-full bg-state-success" /> Indexed</div>
+            <div className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-full bg-fg-muted/40" /> Not indexed</div>
           </div>
         ) : (
           <div>Sites overview: node size ~ pages and degree; link labels show cross-site link weight</div>

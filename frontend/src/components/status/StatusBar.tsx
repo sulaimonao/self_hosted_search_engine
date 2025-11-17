@@ -16,12 +16,12 @@ const COMPONENTS: Array<{ key: string; label: string }> = [
 function statusClasses(status?: string): string {
   switch (status) {
     case "ok":
-      return "bg-emerald-500";
+      return "bg-state-success";
     case "degraded":
-      return "bg-amber-500";
+      return "bg-state-warning";
     case "error":
     case "unavailable":
-      return "bg-destructive";
+      return "bg-state-danger";
     default:
       return "bg-muted-foreground/60";
   }

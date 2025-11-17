@@ -89,29 +89,29 @@ export function OllamaHealthBanner() {
 
   if (loading) {
     return (
-      <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
-        <p className="text-sm text-blue-700">Checking Ollama connection...</p>
+      <div className="border-l-4 border-border-subtle bg-app-card-subtle p-4">
+        <p className="text-sm text-fg-muted">Checking Ollama connection...</p>
       </div>
     );
   }
 
   if (!ok) {
     return (
-      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+      <div className="border-l-4 border-border-strong bg-app-card-subtle p-4">
         <div className="flex flex-col gap-2">
-          <p className="text-sm text-yellow-700">
+          <p className="text-sm text-state-warning">
             Ollama is not available: {error}
           </p>
           <div className="flex gap-2">
             <button
               onClick={() => window.open("https://ollama.com", "_blank")}
-              className="text-sm text-yellow-700 underline"
+              className="text-sm font-medium text-state-warning underline hover:text-state-warning/80"
             >
               Install Ollama
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="text-sm text-yellow-700 underline"
+              className="text-sm font-medium text-state-warning underline hover:text-state-warning/80"
             >
               Retry
             </button>

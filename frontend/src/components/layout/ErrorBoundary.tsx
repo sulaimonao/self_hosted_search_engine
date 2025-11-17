@@ -18,7 +18,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   render() {
     if (this.state.hasError) {
       return this.props.fallback ?? (
-        <div className="p-3 text-sm text-red-600">
+        <div className="rounded-md border border-border-strong bg-app-card-subtle p-3 text-sm text-state-danger">
           Chat panel crashed — see console for details.
         </div>
       );

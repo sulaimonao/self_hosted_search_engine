@@ -39,7 +39,7 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
             toast.variant === "destructive"
               ? "border-destructive/60 bg-destructive/10 text-destructive"
               : toast.variant === "warning"
-                ? "border-amber-500/60 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                ? "border-state-warning/60 bg-state-warning/10 text-state-warning"
                 : "border-foreground/20 bg-background/95 text-foreground",
           )}
         >

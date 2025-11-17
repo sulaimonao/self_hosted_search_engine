@@ -105,7 +105,7 @@ export function IndexHealthPanel({ onRefreshStatus }: IndexHealthPanelProps) {
               >
                 <div className="flex items-center justify-between font-semibold">
                   <span>{store.name}</span>
-                  <span className={store.ok ? "text-emerald-600" : "text-destructive"}>
+                  <span className={store.ok ? "text-state-success" : "text-destructive"}>
                     {store.ok ? "healthy" : "unavailable"}
                   </span>
                 </div>

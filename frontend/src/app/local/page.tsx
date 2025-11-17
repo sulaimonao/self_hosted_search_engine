@@ -7,7 +7,7 @@ type JsonValue = Record<string, unknown> | Array<unknown> | null;
 function JsonBlock({ data }: { data: JsonValue }) {
   if (data === null) return null;
   return (
-    <pre className="mt-3 text-sm bg-neutral-50 border p-3 overflow-auto rounded">
+    <pre className="mt-3 max-h-64 overflow-auto rounded-md border border-border-subtle bg-app-card p-3 font-mono text-sm text-fg">
       {JSON.stringify(data, null, 2)}
     </pre>
   );
@@ -116,14 +116,14 @@ export default function LocalHome() {
           className="flex gap-2"
         >
           <input
-            className="border p-2 flex-1 rounded"
+            className="flex-1 rounded-xs border border-border-subtle bg-app-input p-2 text-sm text-fg placeholder:text-fg-subtle focus-visible:border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             value={chat}
             onChange={(event) => setChat(event.target.value)}
             placeholder="Ask the copilot…"
           />
           <button
             type="submit"
-            className="border px-3 rounded disabled:opacity-50"
+            className="rounded-md border border-transparent bg-accent px-3 py-2 text-sm font-medium text-fg-on-accent transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
             disabled={chatSending || !chat.trim()}
           >
             {chatSending ? "Sending…" : "Send"}
@@ -140,14 +140,14 @@ export default function LocalHome() {
           className="flex gap-2"
         >
           <input
-            className="border p-2 flex-1 rounded"
+            className="flex-1 rounded-xs border border-border-subtle bg-app-input p-2 text-sm text-fg placeholder:text-fg-subtle focus-visible:border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             value={q}
             onChange={(event) => setQ(event.target.value)}
             placeholder="Search local index..."
           />
           <button
             type="submit"
-            className="border px-3 rounded disabled:opacity-50"
+            className="rounded-md border border-border-subtle bg-app-card-subtle px-3 py-2 text-sm font-medium text-fg transition hover:bg-app-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
             onClick={search}
             disabled={searching}
           >
@@ -166,14 +166,14 @@ export default function LocalHome() {
           className="flex gap-2"
         >
           <input
-            className="border p-2 flex-1 rounded"
+            className="flex-1 rounded-xs border border-border-subtle bg-app-input p-2 text-sm text-fg placeholder:text-fg-subtle focus-visible:border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             value={host}
             onChange={(event) => setHost(event.target.value)}
             placeholder="example.com"
           />
           <button
             type="submit"
-            className="border px-3 rounded disabled:opacity-50"
+            className="rounded-md border border-border-subtle bg-app-card-subtle px-3 py-2 text-sm font-medium text-fg transition hover:bg-app-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
             onClick={scan}
             disabled={scanning}
           >
@@ -184,7 +184,7 @@ export default function LocalHome() {
       </section>
       {error && (
         <div
-          className="md:col-span-2 text-sm text-red-600 border border-red-200 rounded p-3"
+          className="md:col-span-2 rounded-md border border-border-strong bg-app-card-subtle p-3 text-sm text-state-danger"
           role="alert"
           aria-live="assertive"
         >
