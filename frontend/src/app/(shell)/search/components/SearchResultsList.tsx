@@ -3,7 +3,11 @@ import { SearchResultItem } from "@/app/(shell)/search/components/SearchResultIt
 
 export function SearchResultsList({ results }: { results: SearchResult[] }) {
   if (!results.length) {
-    return <p className="rounded-xl border bg-card/50 p-6 text-sm text-muted-foreground">No results yet. Try a different query.</p>;
+    return (
+      <p className="rounded-md border border-border-subtle bg-app-card-subtle p-6 text-sm text-fg-muted">
+        No results yet. Try a different query.
+      </p>
+    );
   }
 
   return (

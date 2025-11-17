@@ -51,13 +51,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ChatThreadProvider>
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 flex-col bg-app-bg text-fg">
         <TopBar
           onCommandPalette={() => setCommandPaletteOpen(true)}
           aiPanelOpen={aiPanelOpen}
           onToggleAiPanel={toggleAiPanel}
         />
-        <div className="flex flex-1 overflow-hidden bg-muted/10">
+        <div className="flex flex-1 overflow-hidden bg-app-bg">
           <SidebarNav />
           <ShellLayoutGrid>{children}</ShellLayoutGrid>
           <AiPanel

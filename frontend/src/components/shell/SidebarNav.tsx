@@ -5,7 +5,7 @@ import { NavItem } from "@/components/shell/NavItem";
 
 export function SidebarNav() {
   return (
-    <aside className="hidden w-72 shrink-0 border-r bg-background/60 px-3 py-6 md:block">
+    <aside className="hidden w-72 shrink-0 border-r border-border-subtle bg-app-subtle/80 px-3 py-6 text-fg-muted md:block">
       <div className="space-y-2">
         {NAV_ITEMS.map((item) => (
           <NavItem key={item.href} item={item} />

@@ -9,10 +9,10 @@ export type SearchResult = {
 
 export function SearchResultItem({ result }: { result: SearchResult }) {
   return (
-    <li className="rounded-xl border bg-background p-4">
-      <p className="text-sm text-muted-foreground">{result.source}</p>
-      <h3 className="text-lg font-semibold">{result.title}</h3>
-      <p className="text-sm text-muted-foreground">{result.snippet}</p>
+    <li className="rounded-xs border border-transparent bg-app-card px-4 py-3 text-fg transition-colors duration-fast hover:border-border-subtle hover:bg-app-card-hover">
+      <p className="text-xs uppercase tracking-wide text-fg-muted">{result.source}</p>
+      <h3 className="text-lg font-semibold text-fg">{result.title}</h3>
+      <p className="text-sm text-fg-muted">{result.snippet}</p>
       <div className="mt-3 flex gap-2 text-sm">
         <Button variant="secondary" size="sm">Open in tab</Button>
         <Button variant="ghost" size="sm">Share to AI</Button>
