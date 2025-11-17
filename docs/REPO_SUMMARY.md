@@ -22,6 +22,11 @@ This document condenses the architecture, recent changes (Knowledge Graph featur
   - `frontend/src/components/KnowledgeGraphPanel.tsx` - Graph UI filters and data mapping.
   - `frontend/src/components/GraphCanvas.tsx` - Force-graph renderer (client-only dynamic import).
 
+## Backend contracts & maintenance-mode agent prompt
+
+- **Canonical API reference:** `docs/backend_contracts.md` now captures "Backend Contracts v1" across chat, HydraFlow threads/messages/tasks, browser history, repo tooling, jobs, bundles, and diagnostics.  Treat it as the frozen schema source whenever you add tests or wire new clients.
+- **Maintenance default:** the same doc includes the new maintenance-mode system prompt.  Agents (or humans automating work) should read it alongside `docs/backend_architecture.md` before touching endpoints so we default to non-breaking fixes, improved tests, and tighter observability instead of inventing new APIs by default.
+
 ---
 
 ## Recent changes (Knowledge Graph)
