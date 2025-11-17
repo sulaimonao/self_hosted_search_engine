@@ -43,7 +43,8 @@ def list_jobs():
     if job_type:
         job_type = job_type.strip() or None
     items = state_db.list_jobs(limit=limit, status=status, job_type=job_type)
-    return jsonify({"items": items})
+    payload = {"ok": True, "data": {"jobs": items}, "items": items}
+    return jsonify(payload)
 
 
 @bp.get("/jobs/<job_id>")

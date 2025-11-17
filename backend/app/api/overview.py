@@ -126,7 +126,9 @@ def overview_snapshot():
             "data": (Path(current_app.root_path).parents[1] / "data").resolve(),
         }
     counters["storage"] = _storage_summary(storage_targets)
-    return jsonify(counters)
+    payload = {"ok": True, "data": counters}
+    payload.update(counters)
+    return jsonify(payload)
 
 
 __all__ = ["bp"]

@@ -477,6 +477,25 @@ def _coerce_schema(resp: Union[str, Dict[str, Any], List[Any], None]) -> Dict[st
     return {"message": str(resp).strip()}
 
 
+def _chat_response_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Wrap chat responses in the standard `{ok, data}` envelope."""
+
+    thread_id = getattr(g, "chat_thread_id", None)
+    messages = payload.get("messages") if isinstance(payload.get("messages"), list) else None
+    if messages is None:
+        content = ""
+        for key in ("message", "answer", "reasoning"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                content = value.strip()
+                break
+        messages = ([{"role": "assistant", "content": content}] if content else [])
+    envelope = dict(payload)
+    envelope.setdefault("ok", True)
+    envelope["data"] = {"thread_id": thread_id, "messages": messages}
+    return envelope
+
+
 def _truncate(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
@@ -1692,7 +1711,7 @@ def _execute_chat_request(
 
             payload_dict = _coerce_schema(response_payload.model_dump(exclude_none=True))
             _publish_payload("io.chat.response", payload_dict)
-            flask_response = jsonify(payload_dict)
+            flask_response = jsonify(_chat_response_envelope(payload_dict))
             flask_response.headers["X-LLM-Model"] = candidate
             flask_response.headers["X-Request-Id"] = request_id
             return flask_response
