@@ -242,9 +242,9 @@ export function DownloadsTray() {
                       </p>
                     </div>
                     {finished ? (
-                      <Check size={16} className="text-green-500" />
+                      <Check size={16} className="text-state-success" />
                     ) : failed ? (
-                      <FileWarning size={16} className="text-amber-500" />
+                      <FileWarning size={16} className="text-state-warning" />
                     ) : null}
                   </div>
                   <div className="mt-2 space-y-2">

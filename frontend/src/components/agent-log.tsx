@@ -55,8 +55,8 @@ export function AgentLog({ entries, isStreaming = false }: AgentLogProps) {
                 <span
                   className={cn(
                     "absolute left-0 top-1.5 flex h-3 w-3 items-center justify-center",
-                    status === "success" && "text-emerald-500",
-                    status === "warning" && "text-amber-500",
+                    status === "success" && "text-state-success",
+                    status === "warning" && "text-state-warning",
                     status === "error" && "text-destructive",
                     status === "info" && "text-muted-foreground"
                   )}

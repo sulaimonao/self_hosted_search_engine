@@ -119,22 +119,22 @@ export default function CrawlMonitor({ jobId }: CrawlMonitorProps): JSX.Element 
   const pct = Math.round(status.pct);
 
   return (
-    <div className="p-3 rounded-2xl border space-y-2">
-      <div className="flex justify-between text-sm">
+    <div className="space-y-2 rounded-xl border border-border-subtle bg-app-card p-3 text-sm text-fg shadow-subtle">
+      <div className="flex justify-between">
         <span>Phase: {status.phase}</span>
         <span>{pct}%</span>
       </div>
-      <div className="w-full h-2 bg-gray-100 rounded">
+      <div className="h-2 w-full rounded-full bg-app-subtle">
         <div
-          className="h-2 rounded bg-blue-500"
+          className="h-2 rounded-full bg-accent transition-all"
           style={{ width: `${pct}%` }}
           aria-label="Crawl progress"
         />
       </div>
-      <div className="text-xs mt-1 truncate">
+      <div className="mt-1 truncate text-xs text-fg-muted">
         Last URL: {status.lastUrl ?? "n/a"}
       </div>
-      <div className="text-xs text-gray-500">Processed: {status.urlsProcessed}</div>
+      <div className="text-xs text-fg-muted">Processed: {status.urlsProcessed}</div>
     </div>
   );
 }

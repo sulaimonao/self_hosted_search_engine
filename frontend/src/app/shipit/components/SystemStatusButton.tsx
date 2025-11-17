@@ -16,7 +16,9 @@ export default function SystemStatusButton(): JSX.Element {
   const host = data?.host ?? "local";
   return (
     <div
-      className={`px-3 py-1 rounded-2xl border text-sm ${reachable ? "border-green-500 text-green-600" : "border-amber-500 text-amber-600"}`}
+      className={`rounded-2xl border px-3 py-1 text-sm ${
+        reachable ? "border-state-success text-state-success" : "border-state-warning text-state-warning"
+      }`}
     >
       {statusLabel} • {modelCount} models • {host}
     </div>

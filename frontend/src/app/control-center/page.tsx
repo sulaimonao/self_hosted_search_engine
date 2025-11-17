@@ -615,7 +615,7 @@ export default function ControlCenterPage() {
                   </Button>
                 </div>
               </div>
-              <div className="space-y-2 rounded border p-3 text-xs text-muted-foreground">
+              <div className="space-y-2 rounded border border-border-subtle p-3 text-xs text-muted-foreground">
                 {diagnostics ? (
                   <>
                     <p>Snapshot taken {diagnostics.captured_at ? new Date((diagnostics.captured_at as number) * 1000).toLocaleString() : "recently"}.</p>
@@ -623,7 +623,7 @@ export default function ControlCenterPage() {
                   </>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                    <AlertTriangle className="h-4 w-4 text-state-warning" />
                     <span>No diagnostics captured yet.</span>
                   </div>
                 )}
@@ -885,10 +885,10 @@ export default function ControlCenterPage() {
                     const installed = installedModelFamilies.has(name.toLowerCase());
                     const inFlight = installingModel === name;
                     return (
-                      <div key={name} className="flex items-center justify-between rounded border p-2">
+                      <div key={name} className="flex items-center justify-between rounded border border-border-subtle p-2">
                         <span className="font-medium">{name}</span>
                         {installed ? (
-                          <span className="text-[10px] font-semibold uppercase text-green-600">
+                          <span className="text-[10px] font-semibold uppercase text-state-success">
                             installed
                           </span>
                         ) : (

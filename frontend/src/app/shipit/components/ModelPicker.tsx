@@ -72,7 +72,7 @@ export default function ModelPicker(): JSX.Element {
       <label className="flex items-center gap-2">
         <span className="text-xs uppercase tracking-wide text-muted-foreground">Model</span>
         <select
-          className="rounded-2xl border px-3 py-1 text-sm"
+          className="rounded-md border border-border-subtle bg-app-input px-3 py-1 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           value={selectedModel ?? ""}
           onChange={(event) => setSelectedModel(event.target.value || null)}
         >
@@ -87,7 +87,7 @@ export default function ModelPicker(): JSX.Element {
         </select>
       </label>
       <div
-        className={`rounded-2xl border px-3 py-1 ${reachable ? "border-green-500 text-green-600" : "border-red-500 text-red-600"}`}
+        className={`rounded-2xl border px-3 py-1 text-sm ${reachable ? "border-state-success text-state-success" : "border-state-danger text-state-danger"}`}
       >
         {statusLabel} • {count}
       </div>

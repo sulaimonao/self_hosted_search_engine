@@ -11,11 +11,11 @@ import { useBrowserNavigation } from "@/hooks/useBrowserNavigation";
 function resolveHealthColor(status: string | undefined) {
   switch (status) {
     case "ok":
-      return "bg-green-500";
+      return "bg-state-success";
     case "degraded":
-      return "bg-amber-500";
+      return "bg-state-warning";
     default:
-      return "bg-red-500";
+      return "bg-state-danger";
   }
 }
 

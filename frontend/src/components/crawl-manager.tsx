@@ -472,7 +472,7 @@ export function CrawlManager({
     }
     return "Queue is empty. Add a domain to begin crawling.";
   }, [currentHostname, currentSeed, summarySeed]);
-  const contextTone = currentHostname && !currentSeed ? "text-amber-600" : "text-muted-foreground";
+  const contextTone = currentHostname && !currentSeed ? "text-state-warning" : "text-muted-foreground";
   const queueCount = formatCount(queue.length);
   const queueCountDetail = queue.length === 1 ? "domain" : "domains";
   const aggregateError = actionError ?? errorMessage;

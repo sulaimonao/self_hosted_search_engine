@@ -117,9 +117,9 @@ export function decorateItems(items: RoadmapItem[], snapshot: DiagnosticsSnapsho
 
 export function statusColor(status: RoadmapStatus): string {
   switch (status) {
-    case "done": return "bg-emerald-500";
-    case "in_progress": return "bg-amber-500";
-    default: return "bg-muted-foreground/60";
+    case "done": return "bg-state-success";
+    case "in_progress": return "bg-state-warning";
+    default: return "bg-fg-muted/40";
   }
 }
 

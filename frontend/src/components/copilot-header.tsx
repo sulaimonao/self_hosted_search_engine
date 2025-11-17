@@ -112,7 +112,7 @@ export function CopilotHeader({
         </div>
       ) : null}
       {hasModels && !reachable ? (
-        <div className="flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-600">
+        <div className="flex items-center gap-2 rounded-md border border-state-warning/60 bg-state-warning/10 px-3 py-2 text-xs text-state-warning">
           <AlertTriangle className="h-3.5 w-3.5" />
           Ollama host unreachable. Start Ollama then retry.
         </div>

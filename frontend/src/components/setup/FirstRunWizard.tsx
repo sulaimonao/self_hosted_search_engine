@@ -131,7 +131,7 @@ export function FirstRunWizard() {
               </Button>
             </div>
             {missingModels.length === 0 ? (
-              <div className="flex items-center gap-2 text-xs text-emerald-600">
+              <div className="flex items-center gap-2 text-xs text-state-success">
                 <PlugZap className="h-4 w-4" /> All required models detected.
               </div>
             ) : (

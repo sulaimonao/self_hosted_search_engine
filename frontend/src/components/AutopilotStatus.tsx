@@ -67,28 +67,28 @@ export function AutopilotStatus({
   }
 
   return (
-    <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 space-y-3">
+    <div className="space-y-3 rounded-xl border border-border-subtle bg-app-card p-4 text-sm text-fg shadow-subtle">
       <div className="flex items-start justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-            <span className="font-medium text-blue-900">Autopilot Mode: {mode}</span>
+            <div className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+            <span className="font-medium text-fg">Autopilot Mode: {mode}</span>
           </div>
           {reason && (
-            <p className="text-sm text-blue-700 ml-4">{reason}</p>
+            <p className="ml-4 text-fg-muted">{reason}</p>
           )}
         </div>
         {!executing && (
           <div className="flex gap-2">
             <button
               onClick={handleExecute}
-              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              className="rounded-md border border-transparent bg-accent px-3 py-1 font-medium text-fg-on-accent transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               Execute
             </button>
             <button
               onClick={handleCancel}
-              className="px-3 py-1 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors"
+              className="rounded-md border border-border-subtle bg-app-card-subtle px-3 py-1 font-medium text-fg transition hover:bg-app-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               Cancel
             </button>
@@ -98,18 +98,18 @@ export function AutopilotStatus({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-blue-700">Steps: {totalSteps}</span>
+          <span className="text-fg-muted">Steps: {totalSteps}</span>
           {executing && (
-            <span className="text-blue-600">
+            <span className="text-fg">
               Executing step {currentStep + 1} of {totalSteps}
             </span>
           )}
         </div>
 
         {executing && (
-          <div className="w-full bg-blue-200 rounded-full h-2">
+          <div className="h-2 w-full rounded-full bg-app-subtle">
             <div
-              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+              className="h-2 rounded-full bg-accent transition-all duration-300"
               style={{ width: `${((currentStep + 1) / totalSteps) * 100}%` }}
             />
           </div>
@@ -117,15 +117,15 @@ export function AutopilotStatus({
       </div>
 
       {steps.length > 0 && !executing && (
-        <details className="text-sm">
-          <summary className="cursor-pointer text-blue-700 hover:text-blue-900 font-medium">
+        <details className="text-sm text-fg">
+          <summary className="cursor-pointer font-medium text-fg-muted transition hover:text-fg">
             View steps ({steps.length})
           </summary>
           <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
             {steps.map((step, idx) => (
               <div
                 key={idx}
-                className="px-3 py-2 bg-white rounded border border-blue-100 text-gray-700"
+                className="rounded-md border border-border-subtle bg-app-card-subtle px-3 py-2 text-sm text-fg"
               >
                 <span className="font-mono text-xs">
                   {idx + 1}. {step.type}
@@ -142,7 +142,7 @@ export function AutopilotStatus({
       )}
 
       {error && (
-        <div className="p-2 bg-red-100 border border-red-300 rounded text-sm text-red-800">
+        <div className="rounded-md border border-border-strong bg-app-card-subtle p-2 text-sm text-state-danger">
           {error}
         </div>
       )}
