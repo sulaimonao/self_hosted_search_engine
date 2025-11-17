@@ -43,8 +43,8 @@ def migrate(connection: sqlite3.Connection) -> None:
             continue
         LOGGER.info("Applying migration %s", migration_id)
         try:
-            migration_fn(connection)
             with connection:
+                migration_fn(connection)
                 _mark_applied(connection, migration_id)
         except Exception:  # noqa: BLE001 - surface precise failure context to logs
             LOGGER.exception(

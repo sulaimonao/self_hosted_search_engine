@@ -105,6 +105,12 @@ def _parse_iso_ts(value: str | None) -> datetime | None:
         return None
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 @bp.get("/history")
 def get_history():
     state_db = _state_db()
@@ -174,6 +180,34 @@ def post_history():
         excerpt=title or url,
     )
     return jsonify(response), 201
+
+
+@bp.delete("/history")
+def delete_history_range():
+    payload = request.get_json(silent=True) or {}
+    domain = (
+        (request.args.get("domain") or payload.get("domain") or "").strip() or None
+    )
+    start = _parse_iso_ts(request.args.get("from") or payload.get("from"))
+    end = _parse_iso_ts(request.args.get("to") or payload.get("to"))
+    clear_all = _as_bool(request.args.get("all")) or _as_bool(payload.get("clear_all"))
+    if not clear_all and not any([domain, start, end]):
+        return jsonify({"error": "filter_required"}), 400
+    state_db = _state_db()
+    deleted = state_db.purge_history(
+        domain=domain, start=start, end=end, clear_all=clear_all
+    )
+    return jsonify(
+        {
+            "deleted": deleted,
+            "filters": {
+                "domain": domain,
+                "from": start.isoformat() if start else None,
+                "to": end.isoformat() if end else None,
+                "clear_all": clear_all,
+            },
+        }
+    )
 
 
 @bp.get("/fallback")

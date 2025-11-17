@@ -151,7 +151,9 @@ diagnostics/*
 !tests/api/test_research_api.py
 !tests/api/test_web_search_api.py
 !tests/api/test_reasoning_api.py
+!tests/api/test_browser_privacy.py
 !tests/api/test_hydraflow_api.py
+!tests/api/test_jobs_api.py
 !tests/api/test_utils.py
 !tests/e2e/test_agent_browser.py
 !tests/e2e/test_zero_touch.py

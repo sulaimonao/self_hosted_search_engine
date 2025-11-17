@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from contextlib import suppress
 from datetime import datetime, timezone
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -167,6 +169,24 @@ def _validate_budget(files: list[dict[str, Any]]) -> tuple[int, int]:
     return len(files), total_lines
 
 
+def _write_atomic_text(target: Path, content: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=str(target.parent), delete=False
+        ) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            tmp_file = Path(handle.name)
+        tmp_file.replace(target)
+    finally:
+        if tmp_file is not None and tmp_file.exists():
+            with suppress(OSError):
+                tmp_file.unlink()
+
+
 def _apply_file_changes(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     applied: list[dict[str, Any]] = []
     for entry in files:
@@ -175,13 +195,13 @@ def _apply_file_changes(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         action: str
         if entry.get("delete"):
             action = "deleted"
-            with suppress(FileNotFoundError):  # type: ignore[name-defined]
+            with suppress(FileNotFoundError):
                 resolved.unlink()
         else:
             content = entry.get("content")
             if content is None:
                 abort(400, f"content required for {entry['path']}")
-            resolved.write_text(str(content), encoding="utf-8")
+            _write_atomic_text(resolved, str(content))
             action = "updated"
         applied.append({"path": entry["path"], "action": action})
     return applied
@@ -329,14 +349,18 @@ def _truncate_output(text: str, limit: int = 16000) -> str:
 
 
 def _resolve_check_command(record: dict[str, Any], override: Any) -> list[str]:
+    configured = _normalize_command_arg(record.get("check_command")) or []
     override_cmd = _normalize_command_arg(override)
-    if override_cmd:
-        return override_cmd
-    saved = record.get("check_command")
-    saved_cmd = _normalize_command_arg(saved)
-    if saved_cmd:
-        return saved_cmd
-    return []
+    if override_cmd and override_cmd != configured:
+        response = jsonify(
+            {
+                "error": "command_not_allowed",
+                "detail": "command overrides must match the configured check command",
+            }
+        )
+        response.status_code = 400
+        abort(response)
+    return configured
 
 
 @bp.post("/<repo_id>/run_checks")
@@ -348,7 +372,11 @@ def run_checks(repo_id: str):
     payload = request.get_json(force=True, silent=True) or {}
     command = _resolve_check_command(record, payload.get("command"))
     if not command:
-        abort(400, "no check command configured for this repository")
+        response = jsonify(
+            {"error": "no check command configured for this repository"}
+        )
+        response.status_code = 400
+        return response
     timeout_value = payload.get("timeout")
     if timeout_value is None:
         timeout_seconds = 600.0

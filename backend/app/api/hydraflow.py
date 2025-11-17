@@ -69,6 +69,15 @@ def get_thread(thread_id: str):
     return jsonify({"thread": record})
 
 
+@bp.delete("/threads/<thread_id>")
+def delete_thread(thread_id: str):
+    state_db = _state_db()
+    stats = state_db.delete_llm_thread(thread_id)
+    if stats["threads"] == 0:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"deleted": thread_id, "stats": stats})
+
+
 @bp.get("/threads/<thread_id>/messages")
 def list_thread_messages(thread_id: str):
     limit = request.args.get("limit", type=int) or 50
