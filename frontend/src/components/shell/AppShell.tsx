@@ -7,12 +7,13 @@ import { CommandPalette } from "@/components/command/CommandPalette";
 import { ShellLayoutGrid } from "@/components/shell/ShellLayoutGrid";
 import { SidebarNav } from "@/components/shell/SidebarNav";
 import { TopBar } from "@/components/shell/TopBar";
+import { ChatThreadProvider } from "@/lib/useChatThread";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   return (
-    <>
+    <ChatThreadProvider>
       <div className="flex h-full min-h-0 flex-col">
         <TopBar onCommandPalette={() => setCommandPaletteOpen(true)} />
         <div className="flex flex-1 overflow-hidden bg-muted/10">
@@ -22,6 +23,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
-    </>
+    </ChatThreadProvider>
   );
 }

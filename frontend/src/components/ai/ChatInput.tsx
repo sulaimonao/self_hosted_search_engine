@@ -5,17 +5,24 @@ import { FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/use-toast";
+import { useChatThread } from "@/lib/useChatThread";
 
 export function ChatInput() {
   const [value, setValue] = useState("");
   const { toast } = useToast();
+  const { sendMessage, isSending } = useChatThread();
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = value.trim();
     if (!trimmed) return;
-    toast({ title: "Message queued", description: trimmed });
-    setValue("");
+    try {
+      await sendMessage({ content: trimmed });
+      setValue("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to send";
+      toast({ title: "Chat error", description: message, variant: "destructive" });
+    }
   }
 
   return (
@@ -24,8 +31,11 @@ export function ChatInput() {
         value={value}
         onChange={(event) => setValue(event.target.value)}
         placeholder="Ask the AI to summarize, search, or triage"
+        disabled={isSending}
       />
-      <Button type="submit">Send</Button>
+      <Button type="submit" disabled={isSending}>
+        {isSending ? "Sending" : "Send"}
+      </Button>
     </form>
   );
 }

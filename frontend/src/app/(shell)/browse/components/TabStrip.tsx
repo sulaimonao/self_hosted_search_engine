@@ -1,56 +1,80 @@
 "use client";
 
-import { useState } from "react";
-import { PlusIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2Icon, PlusIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-
-const initialTabs = [
-  { id: "tab-1", title: "Docs", url: "https://docs.local" },
-  { id: "tab-2", title: "HydraFlow", url: "https://hydra" },
-];
+import { useBrowserTabs } from "@/lib/backend/hooks";
+import { useChatThread } from "@/lib/useChatThread";
 
 export function TabStrip() {
-  const [tabs, setTabs] = useState(initialTabs);
-  const [activeId, setActiveId] = useState(initialTabs[0]?.id ?? "");
+  const { data, isLoading } = useBrowserTabs();
+  const { selectThread, startThread, currentThreadId } = useChatThread();
+  const tabs = useMemo(() => data?.items ?? [], [data?.items]);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
-  function addTab() {
-    const id = `tab-${tabs.length + 1}`;
-    const next = { id, title: `New Tab ${tabs.length + 1}`, url: "about:blank" };
-    setTabs([...tabs, next]);
-    setActiveId(id);
+  useEffect(() => {
+    if (!activeId && tabs.length) {
+      setActiveId(tabs[0].id);
+      if (tabs[0].thread_id) {
+        selectThread(tabs[0].thread_id);
+      }
+    }
+  }, [activeId, selectThread, tabs]);
+
+  const activeThreadId = useMemo(() => {
+    if (!activeId) return null;
+    return tabs.find((tab) => tab.id === activeId)?.thread_id ?? null;
+  }, [activeId, tabs]);
+
+  useEffect(() => {
+    if (activeThreadId && currentThreadId !== activeThreadId) {
+      selectThread(activeThreadId);
+    }
+  }, [activeThreadId, currentThreadId, selectThread]);
+
+  async function handleSelect(tabId: string) {
+    setActiveId(tabId);
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    if (tab.thread_id) {
+      selectThread(tab.thread_id);
+      return;
+    }
+    try {
+      const threadId = await startThread({ tabId, title: tab.current_title ?? tab.current_url ?? "New tab", origin: "browser" });
+      selectThread(threadId);
+    } catch (error) {
+      console.error("Unable to link tab", error);
+    }
   }
 
-  function closeTab(id: string) {
-    const nextTabs = tabs.filter((tab) => tab.id !== id);
-    setTabs(nextTabs);
-    if (activeId === id && nextTabs.length) {
-      setActiveId(nextTabs[0].id);
+  async function handleNewChat() {
+    try {
+      const threadId = await startThread({ origin: "chat" });
+      selectThread(threadId);
+    } catch (error) {
+      console.error("Unable to start chat", error);
     }
   }
 
   return (
     <div className="flex items-center gap-2 rounded-xl border bg-background px-3 py-2">
       <div className="flex flex-1 items-center gap-2 overflow-x-auto">
+        {isLoading && <Loader2Icon className="size-4 animate-spin text-muted-foreground" />}
+        {!isLoading && !tabs.length && <p className="text-sm text-muted-foreground">No browser tabs are currently linked.</p>}
         {tabs.map((tab) => (
-          <div
+          <button
+            type="button"
             key={tab.id}
-            className={`flex items-center gap-2 rounded-full px-3 py-1 text-sm ${
-              tab.id === activeId
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground"
-            }`}
+            onClick={() => handleSelect(tab.id)}
+            className={`flex items-center gap-2 rounded-full px-3 py-1 text-sm ${tab.id === activeId ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
           >
-            <button type="button" onClick={() => setActiveId(tab.id)} className="flex-1 text-left">
-              {tab.title}
-            </button>
-            <button type="button" onClick={() => closeTab(tab.id)} className="text-xs">
-              <XIcon className="size-3" />
-            </button>
-          </div>
+            <span className="max-w-[140px] truncate">{tab.current_title ?? tab.current_url ?? tab.id}</span>
+          </button>
         ))}
       </div>
-      <Button variant="ghost" size="icon" onClick={addTab}>
+      <Button variant="ghost" size="icon" onClick={handleNewChat}>
         <PlusIcon className="size-4" />
       </Button>
     </div>

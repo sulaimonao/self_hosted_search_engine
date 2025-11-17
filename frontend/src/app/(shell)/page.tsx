@@ -1,37 +1,80 @@
+"use client";
+
+import { useMemo } from "react";
+import { useRouter } from "next/navigation";
+
 import { ActivityTimeline } from "@/components/overview/ActivityTimeline";
 import { OverviewCards } from "@/components/overview/OverviewCards";
 import { SessionsList } from "@/components/overview/SessionsList";
+import { useOverview, useThreads, useJobs } from "@/lib/backend/hooks";
+import { useChatThread } from "@/lib/useChatThread";
+import { ROUTES } from "@/lib/navigation";
+import type { OverviewCardProps } from "@/components/overview/OverviewCard";
 
-const cards = [
-  { title: "Documents", value: "12,481", description: "Indexed across HydraFlow" },
-  { title: "Memories", value: "384", description: "Linked to chat threads" },
-  { title: "Browser tabs", value: "7", description: "Active with capture enabled" },
-  { title: "Storage", value: "64%", description: "Of allotted disk used" },
-];
-
-const sessions = [
-  { id: "s1", title: "Search quality sync", timestamp: "5m ago", summary: "Compared serp across threads." },
-  { id: "s2", title: "Repo triage", timestamp: "28m ago", summary: "Outlined failing tests and patches." },
-  { id: "s3", title: "Privacy audit", timestamp: "1h ago", summary: "Reviewed retention policy." },
-];
-
-const activity = [
-  { id: "a1", title: "Bundle export", timestamp: "Just now", status: "Queued" },
-  { id: "a2", title: "Repo checks", timestamp: "17m ago", status: "Passing" },
-  { id: "a3", title: "Domain crawl", timestamp: "1h ago", status: "Completed" },
-];
+const numberFormatter = new Intl.NumberFormat("en-US");
 
 export default function HomePage() {
+  const router = useRouter();
+  const { selectThread } = useChatThread();
+  const overview = useOverview();
+  const threads = useThreads(5);
+  const jobs = useJobs({ limit: 5 });
+
+  const cards: OverviewCardProps[] = useMemo(() => {
+    if (!overview.data) return [];
+    return [
+      {
+        title: "Documents",
+        value: numberFormatter.format(overview.data.knowledge.documents ?? 0),
+        description: "Normalized across HydraFlow",
+      },
+      {
+        title: "Memories",
+        value: numberFormatter.format(overview.data.llm.memories.total ?? 0),
+        description: "Stored against chat threads",
+      },
+      {
+        title: "Browser tabs",
+        value: numberFormatter.format(overview.data.browser.tabs.linked ?? 0),
+        description: "Linked to AI sessions",
+      },
+      {
+        title: "History rows",
+        value: numberFormatter.format(overview.data.browser.history.entries ?? 0),
+        description: "Captured from local browsing",
+      },
+    ];
+  }, [overview.data]);
+
+  const handleThreadSelect = (threadId: string) => {
+    selectThread(threadId);
+    router.push(ROUTES.browse);
+  };
+
+  const handleJobSelect = (jobId: string) => {
+    router.push(`${ROUTES.activity}?job=${jobId}`);
+  };
+
   return (
     <div className="flex flex-1 flex-col gap-8">
       <div>
         <h1 className="text-2xl font-semibold">Overview</h1>
         <p className="text-sm text-muted-foreground">HydraFlow status and AI activity at a glance.</p>
       </div>
-      <OverviewCards cards={cards} />
+      <OverviewCards cards={cards} isLoading={overview.isLoading} error={overview.error?.message ?? null} />
       <div className="grid gap-6 lg:grid-cols-2">
-        <SessionsList sessions={sessions} />
-        <ActivityTimeline items={activity} />
+        <SessionsList
+          threads={threads.data?.items}
+          isLoading={threads.isLoading}
+          error={threads.error?.message ?? null}
+          onSelectThread={handleThreadSelect}
+        />
+        <ActivityTimeline
+          items={jobs.data?.jobs}
+          isLoading={jobs.isLoading}
+          error={jobs.error?.message ?? null}
+          onSelectJob={handleJobSelect}
+        />
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ export function RepoChangesTable() {
             <p className="text-xs text-muted-foreground">{change.status}</p>
           </div>
         ))}
+        <p className="text-xs text-muted-foreground">Repo change history wiring will surface backend data in a follow-up.</p>
       </CardContent>
     </Card>
   );

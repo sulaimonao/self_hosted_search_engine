@@ -1,14 +1,19 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function BrowserImportSummary() {
+interface BrowserImportSummaryProps {
+  entries?: number;
+  lastVisit?: string | null;
+}
+
+export function BrowserImportSummary({ entries, lastVisit }: BrowserImportSummaryProps) {
   return (
     <Card>
       <CardHeader>
         <CardTitle>Import summary</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
-        <p>Bookmarks imported: 532</p>
-        <p>History rows deduped: 2,931</p>
+        <p>History entries captured: {entries ?? "--"}</p>
+        <p>Last visit: {lastVisit ? new Date(lastVisit).toLocaleString() : "n/a"}</p>
       </CardContent>
     </Card>
   );
