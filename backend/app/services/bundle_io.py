@@ -11,7 +11,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from backend.app.db import AppStateDB
 
-_BUNDLE_COMPONENTS = ("threads", "messages", "tasks")
+_BUNDLE_COMPONENTS = ("threads", "messages", "tasks", "browser_history")
 
 
 def _now_iso() -> str:
@@ -74,6 +74,12 @@ def export_bundle(
                 path = staging / "tasks.ndjson"
                 _write_ndjson(path, data)
                 files["tasks"] = path
+        if "browser_history" in selected:
+            data = state_db.export_browser_history()
+            if data:
+                path = staging / "browser_history.ndjson"
+                _write_ndjson(path, data)
+                files["browser_history"] = path
         manifest_path = staging / "bundle.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         bundle_name = f"bundle-{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%S')}.zip"
@@ -105,7 +111,7 @@ def import_bundle(
     included = set(manifest_payload.get("included_components") or [])
     requested = _normalize_components(components)
     target_components = [component for component in requested if component in included]
-    stats = {"threads": 0, "messages": 0, "tasks": 0}
+    stats = {component: 0 for component in _BUNDLE_COMPONENTS}
     with ZipFile(resolved, "r") as archive:
         for component in target_components:
             filename = f"{component}.ndjson"
@@ -123,6 +129,8 @@ def import_bundle(
                         state_db.import_llm_message_record(record)
                     elif component == "tasks":
                         state_db.import_task_record(record)
+                    elif component == "browser_history":
+                        state_db.import_browser_history_record(record)
                     stats[component] += 1
     return stats
 

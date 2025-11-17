@@ -63,6 +63,25 @@ def _normalize_repo_ops(ops: Any) -> list[str]:
     return normalized
 
 
+def _normalize_command(command: Any) -> list[str] | None:
+    if command is None:
+        return None
+    if isinstance(command, str):
+        candidate = command.strip()
+        return [candidate] if candidate else None
+    if isinstance(command, Iterable) and not isinstance(command, (bytes, bytearray)):
+        entries: list[str] = []
+        for item in command:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if not text:
+                continue
+            entries.append(text)
+        return entries or None
+    return None
+
+
 def _parse_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -173,23 +192,27 @@ class AppStateDB:
         *,
         root_path: Path | str,
         allowed_ops: Iterable[str] | None = None,
+        check_command: Iterable[str] | str | None = None,
     ) -> dict[str, Any]:
         if not repo_id:
             raise ValueError("repo_id is required")
         normalized_ops = _normalize_repo_ops(allowed_ops) or ["read"]
         payload = _serialize(normalized_ops)
+        normalized_command = _normalize_command(check_command)
+        command_payload = _serialize(normalized_command) if normalized_command else None
         resolved_root = str(Path(root_path).resolve())
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO repos(id, root_path, allowed_ops, created_at, updated_at)
-                VALUES(?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO repos(id, root_path, allowed_ops, check_command, created_at, updated_at)
+                VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     root_path = excluded.root_path,
                     allowed_ops = excluded.allowed_ops,
+                    check_command = COALESCE(excluded.check_command, repos.check_command),
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (repo_id, resolved_root, payload),
+                (repo_id, resolved_root, payload, command_payload),
             )
         record = self.get_repo(repo_id)
         if record is None:
@@ -201,7 +224,7 @@ class AppStateDB:
             return None
         with self._lock, self._conn:
             row = self._conn.execute(
-                "SELECT id, root_path, allowed_ops, created_at, updated_at FROM repos WHERE id = ?",
+                "SELECT id, root_path, allowed_ops, check_command, created_at, updated_at FROM repos WHERE id = ?",
                 (repo_id,),
             ).fetchone()
         if not row:
@@ -211,7 +234,7 @@ class AppStateDB:
     def list_repos(self) -> list[dict[str, Any]]:
         with self._lock, self._conn:
             rows = self._conn.execute(
-                "SELECT id, root_path, allowed_ops, created_at, updated_at FROM repos ORDER BY id ASC"
+                "SELECT id, root_path, allowed_ops, check_command, created_at, updated_at FROM repos ORDER BY id ASC"
             ).fetchall()
         return [self._format_repo_row(row) for row in rows]
 
@@ -220,7 +243,65 @@ class AppStateDB:
         payload["allowed_ops"] = _normalize_repo_ops(
             _deserialize(payload.get("allowed_ops"), [])
         )
+        payload["check_command"] = _normalize_command(
+            _deserialize(payload.get("check_command"), None)
+        )
         return payload
+
+    def record_repo_change(
+        self,
+        repo_id: str,
+        *,
+        summary: str,
+        change_stats: Mapping[str, Any] | None,
+        result: str,
+        error_message: str | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        if not repo_id:
+            raise ValueError("repo_id is required")
+        identifier = uuid.uuid4().hex
+        stats_json = _serialize(change_stats) if change_stats is not None else None
+        normalized_result = (result or "").strip() or None
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO repo_changes(id, repo_id, job_id, summary, change_stats, result, error_message)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    repo_id,
+                    job_id,
+                    summary,
+                    stats_json,
+                    normalized_result,
+                    error_message,
+                ),
+            )
+        return identifier
+
+    def list_repo_changes(self, repo_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        if not repo_id:
+            return []
+        capped = max(1, min(int(limit), 200))
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT id, repo_id, job_id, applied_at, summary, change_stats, result, error_message
+                  FROM repo_changes
+                 WHERE repo_id = ?
+              ORDER BY datetime(applied_at) DESC, id DESC
+                 LIMIT ?
+                """,
+                (repo_id, capped),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["change_stats"] = _deserialize(payload.get("change_stats"), {})
+            items.append(payload)
+        return items
 
     # ------------------------------------------------------------------
     # Tabs & history
@@ -469,6 +550,56 @@ class AppStateDB:
         with self._lock, self._conn:
             rows = self._conn.execute(query_sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def export_browser_history(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT id, tab_id, url, title, visited_at, referrer, status_code, content_type, shadow_enqueued
+                  FROM history
+              ORDER BY datetime(visited_at) ASC, id ASC
+                """
+            ).fetchall()
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["shadow_enqueued"] = bool(record.get("shadow_enqueued"))
+            payload.append(record)
+        return payload
+
+    def import_browser_history_record(self, record: Mapping[str, Any]) -> int:
+        url = str(record.get("url") or "").strip()
+        if not url:
+            raise ValueError("history url is required")
+        visited_at = str(record.get("visited_at") or _utc_now())
+        tab_id = record.get("tab_id")
+        if tab_id is not None:
+            tab_id = str(tab_id).strip() or None
+        title = record.get("title")
+        referrer = record.get("referrer")
+        status_code = record.get("status_code")
+        content_type = record.get("content_type")
+        shadow_enqueued = int(bool(record.get("shadow_enqueued")))
+        if tab_id:
+            self.ensure_tab(tab_id)
+        with self._lock, self._conn:
+            existing = self._conn.execute(
+                "SELECT id FROM history WHERE url = ? AND visited_at = ? LIMIT 1",
+                (url, visited_at),
+            ).fetchone()
+            if existing:
+                return int(existing["id"])
+            cursor = self._conn.execute(
+                """
+                INSERT INTO history(tab_id, url, title, visited_at, referrer, status_code, content_type, shadow_enqueued)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (tab_id, url, title, visited_at, referrer, status_code, content_type, shadow_enqueued),
+            )
+            history_id = cursor.lastrowid
+        if tab_id:
+            self.update_tab_navigation(tab_id, history_id=int(history_id), url=url, title=title)
+        return int(history_id)
 
     # ------------------------------------------------------------------
     # Bookmarks
@@ -2019,12 +2150,16 @@ class AppStateDB:
         *,
         limit: int = 50,
         status: str | None = None,
+        job_type: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = []
         params: list[Any] = []
         if status and status in JOB_STATUSES:
             clauses.append("status = ?")
             params.append(status)
+        if job_type:
+            clauses.append("type = ?")
+            params.append(job_type)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         capped = max(1, min(int(limit), 200))
         query = (
