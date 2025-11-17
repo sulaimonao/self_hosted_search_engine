@@ -1,13 +1,15 @@
 import { OverviewCard, type OverviewCardProps } from "@/components/overview/OverviewCard";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface OverviewCardsProps {
   cards: OverviewCardProps[];
   isLoading?: boolean;
   error?: string | null;
+  onRetry?: () => void;
 }
 
-export function OverviewCards({ cards, isLoading, error }: OverviewCardsProps) {
+export function OverviewCards({ cards, isLoading, error, onRetry }: OverviewCardsProps) {
   if (isLoading) {
     return (
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -19,7 +21,14 @@ export function OverviewCards({ cards, isLoading, error }: OverviewCardsProps) {
   }
 
   if (error) {
-    return <p className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>;
+    return (
+      <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+        <p>{error}</p>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      </div>
+    );
   }
 
   return (

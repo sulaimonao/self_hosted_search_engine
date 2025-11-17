@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,10 +15,21 @@ const COMPONENT_OPTIONS = [
   { id: "tasks", label: "Tasks" },
 ];
 
-export function BundleImportForm() {
+interface BundleImportFormProps {
+  autoFocus?: boolean;
+}
+
+export function BundleImportForm({ autoFocus }: BundleImportFormProps) {
   const [file, setFile] = useState("");
   const [components, setComponents] = useState<string[]>([]);
   const importMutation = useBundleImport();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    inputRef.current?.focus();
+    inputRef.current?.scrollIntoView({ block: "center" });
+  }, [autoFocus]);
 
   function toggle(component: string, checked: boolean) {
     setComponents((prev) => (checked ? [...prev, component] : prev.filter((entry) => entry !== component)));
@@ -37,7 +48,12 @@ export function BundleImportForm() {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
-          <Input value={file} onChange={(event) => setFile(event.target.value)} placeholder="/path/to/bundle.json" />
+          <Input
+            ref={inputRef}
+            value={file}
+            onChange={(event) => setFile(event.target.value)}
+            placeholder="/path/to/bundle.json"
+          />
           <div className="grid gap-2">
             {COMPONENT_OPTIONS.map((option) => (
               <Label key={option.id} className="flex items-center gap-2 font-normal">

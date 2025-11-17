@@ -72,10 +72,10 @@ export const NAV_ITEMS: NavigationItem[] = [
 ];
 
 export const COMMAND_ACTIONS = [
-  { id: "new-tab", label: "Open a new browser tab" },
-  { id: "new-chat", label: "Start a fresh AI chat" },
-  { id: "export-bundle", label: "Export a data bundle" },
-  { id: "import-bundle", label: "Import a bundle" },
-  { id: "run-repo-checks", label: "Run repo checks" },
-  { id: "clear-history", label: "Clear current domain history" },
+  { id: "new-tab", label: "New browser tab", shortcut: "⌘T" },
+  { id: "new-chat", label: "New chat thread", shortcut: "⌘⇧A" },
+  { id: "export-bundle", label: "Export bundle", shortcut: "" },
+  { id: "import-bundle", label: "Import bundle" },
+  { id: "run-repo-checks", label: "Run checks for repo…" },
+  { id: "clear-history", label: "Clear browsing history…" },
 ] as const;

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,9 +15,21 @@ const COMPONENT_OPTIONS = [
   { id: "browser_history", label: "Browser history" },
 ];
 
-export function BundleExportForm() {
+interface BundleExportFormProps {
+  autoFocus?: boolean;
+}
+
+export function BundleExportForm({ autoFocus }: BundleExportFormProps) {
   const [selected, setSelected] = useState<string[]>(["threads", "messages"]);
   const exportMutation = useBundleExport();
+  const firstOptionRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    const node = firstOptionRef.current;
+    node?.focus();
+    node?.scrollIntoView({ block: "center" });
+  }, [autoFocus]);
 
   function handleToggle(component: string, checked: boolean) {
     setSelected((prev) => (checked ? [...prev, component] : prev.filter((entry) => entry !== component)));
@@ -36,9 +48,10 @@ export function BundleExportForm() {
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div className="grid gap-2">
-            {COMPONENT_OPTIONS.map((option) => (
+            {COMPONENT_OPTIONS.map((option, index) => (
               <Label key={option.id} className="flex items-center gap-2 font-normal">
                 <Checkbox
+                  ref={index === 0 ? firstOptionRef : undefined}
                   checked={selected.includes(option.id)}
                   onCheckedChange={(checked) => handleToggle(option.id, Boolean(checked))}
                 />

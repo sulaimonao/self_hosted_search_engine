@@ -2,6 +2,10 @@ import type { SearchResult } from "@/app/(shell)/search/components/SearchResultI
 import { SearchResultItem } from "@/app/(shell)/search/components/SearchResultItem";
 
 export function SearchResultsList({ results }: { results: SearchResult[] }) {
+  if (!results.length) {
+    return <p className="rounded-xl border bg-card/50 p-6 text-sm text-muted-foreground">No results yet. Try a different query.</p>;
+  }
+
   return (
     <ul className="space-y-3">
       {results.map((result) => (

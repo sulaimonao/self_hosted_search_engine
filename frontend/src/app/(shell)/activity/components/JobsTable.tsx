@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { JobRecord } from "@/lib/backend/types";
 
@@ -10,9 +11,10 @@ interface JobsTableProps {
   error?: string | null;
   selectedJobId?: string | null;
   onSelectJob?: (jobId: string) => void;
+  onRetry?: () => void;
 }
 
-export function JobsTable({ jobs, isLoading, error, selectedJobId, onSelectJob }: JobsTableProps) {
+export function JobsTable({ jobs, isLoading, error, selectedJobId, onSelectJob, onRetry }: JobsTableProps) {
   return (
     <Card>
       <CardHeader>
@@ -20,7 +22,12 @@ export function JobsTable({ jobs, isLoading, error, selectedJobId, onSelectJob }
       </CardHeader>
       <CardContent className="overflow-auto">
         {isLoading && <Skeleton className="h-32 w-full" />}
-        {!isLoading && error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <p>{error}</p>
+            <Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>
+          </div>
+        )}
         {!isLoading && !error && (!jobs || jobs.length === 0) && (
           <p className="text-sm text-muted-foreground">No jobs found for the selected filters.</p>
         )}
@@ -38,8 +45,9 @@ export function JobsTable({ jobs, isLoading, error, selectedJobId, onSelectJob }
               {jobs.map((job) => (
                 <tr
                   key={job.id}
-                  className={`border-t ${selectedJobId === job.id ? "bg-muted/40" : ""}`}
+                  className={`cursor-pointer border-t transition ${selectedJobId === job.id ? "bg-primary/5" : "hover:bg-muted/40"}`}
                   onClick={() => onSelectJob?.(job.id)}
+                  aria-selected={selectedJobId === job.id}
                 >
                   <td className="py-2 font-mono text-xs">#{job.id}</td>
                   <td className="py-2">{job.type}</td>

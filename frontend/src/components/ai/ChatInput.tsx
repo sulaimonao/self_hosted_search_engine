@@ -4,12 +4,11 @@ import { FormEvent, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/components/ui/use-toast";
 import { useChatThread } from "@/lib/useChatThread";
 
 export function ChatInput() {
   const [value, setValue] = useState("");
-  const { toast } = useToast();
+  const [composerError, setComposerError] = useState<string | null>(null);
   const { sendMessage, isSending } = useChatThread();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -19,23 +18,34 @@ export function ChatInput() {
     try {
       await sendMessage({ content: trimmed });
       setValue("");
+      setComposerError(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to send";
-      toast({ title: "Chat error", description: message, variant: "destructive" });
+      setComposerError(message);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mt-3 flex gap-2">
-      <Input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="Ask the AI to summarize, search, or triage"
-        disabled={isSending}
-      />
-      <Button type="submit" disabled={isSending}>
-        {isSending ? "Sending" : "Send"}
-      </Button>
+    <form onSubmit={handleSubmit} className="mt-3 space-y-2">
+      <div className="flex gap-2">
+        <Input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="Ask the AI to summarize, search, or triage"
+          disabled={isSending}
+        />
+        <Button type="submit" disabled={isSending}>
+          {isSending ? "Sending" : "Send"}
+        </Button>
+      </div>
+      {composerError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <p>{composerError}</p>
+          <button type="button" className="mt-1 underline" onClick={() => setComposerError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
     </form>
   );
 }
