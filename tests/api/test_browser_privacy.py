@@ -19,6 +19,15 @@ def test_delete_history_requires_filter(browser_app):
     client = browser_app.test_client()
     response = client.delete("/api/browser/history")
     assert response.status_code == 400
+    payload = response.get_json()
+    assert payload == {
+        "ok": False,
+        "error": {
+            "code": "FILTER_REQUIRED",
+            "message": "clear_all or a domain/time filter is required",
+            "details": {},
+        },
+    }
 
 
 def test_delete_history_domain_filter(browser_app):
@@ -32,7 +41,9 @@ def test_delete_history_domain_filter(browser_app):
     )
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["deleted"] == 1
+    assert payload["ok"] is True
+    assert payload["data"]["deleted_count"] == 1
+    assert payload["data"]["filters"]["domain"] == "example.com"
     urls = [row["url"] for row in state_db.query_history(limit=10)]
     assert urls == ["https://other.com/a"]
 
@@ -48,5 +59,9 @@ def test_delete_history_clear_all_resets_tabs(browser_app):
         json={"clear_all": True},
     )
     assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["data"]["deleted_count"] == 1
+    assert payload["data"]["filters"]["clear_all"] is True
     tab_record = state_db.get_tab("tab-clear")
     assert tab_record["current_history_id"] is None
