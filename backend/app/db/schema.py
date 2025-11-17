@@ -739,6 +739,47 @@ def _migration_011_tab_threads(connection: sqlite3.Connection) -> None:
             )
 
 
+def _migration_012_repo_registry(connection: sqlite3.Connection) -> None:
+    with connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS repos (
+                id TEXT PRIMARY KEY,
+                root_path TEXT NOT NULL,
+                allowed_ops TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_root ON repos(root_path);
+            """
+        )
+
+
+def _migration_013_jobs_table(connection: sqlite3.Connection) -> None:
+    with connection:
+        connection.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')) DEFAULT 'queued',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT,
+                completed_at TEXT,
+                payload TEXT,
+                result TEXT,
+                error TEXT,
+                task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+                thread_id TEXT REFERENCES llm_threads(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, updated_at DESC);
+            """
+        )
+
+
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("001_init", _migration_001_init),
     ("002_pending_vectors", _migration_002_pending_vectors),
@@ -751,6 +792,8 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     ("009_domain_graph", _migration_009_domain_graph),
     ("010_hydraflow", _migration_010_hydraflow),
     ("011_tab_threads", _migration_011_tab_threads),
+    ("012_repo_registry", _migration_012_repo_registry),
+    ("013_jobs_table", _migration_013_jobs_table),
     ("20251102_app_config", _migration_20251102_app_config),
     ("20251115_desktop_defaults", _migration_20251115_desktop_defaults),
 ]
