@@ -25,7 +25,7 @@ interface AiPanelProps {
 
 export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiPanelProps) {
   const collapsed = cn(
-    "hidden h-full shrink-0 border-l bg-card/80 transition-all duration-200 lg:flex lg:flex-col",
+    "hidden h-full shrink-0 border-l border-ai-border bg-ai-panel text-fg shadow-soft transition-all duration-normal ease-default lg:flex lg:flex-col",
     isOpen ? "w-[380px] p-4" : "w-12 items-center justify-between px-2 py-4",
   );
 
@@ -36,7 +36,7 @@ export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiP
           <PanelRightOpen className="size-4" />
           <span className="sr-only">Open AI panel</span>
         </Button>
-        <div className="flex flex-col items-center gap-1 text-[10px] font-semibold tracking-[0.4em] text-muted-foreground">
+        <div className="flex flex-col items-center gap-1 text-[10px] font-semibold tracking-[0.4em] text-fg-muted">
           <SparklesIcon className="size-4" aria-hidden />
           <span className="-rotate-90">AI</span>
         </div>
@@ -55,7 +55,7 @@ export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiP
       </div>
       <ThreadSummaryBar />
       <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as AiPanelTab)} className="flex flex-1 flex-col overflow-hidden">
-        <TabsList className="grid grid-cols-3 text-xs">
+        <TabsList className="grid grid-cols-3 rounded-xs border border-border-subtle bg-app-card-subtle text-xs">
           <TabsTrigger value="chat">Chat</TabsTrigger>
           <TabsTrigger value="tasks">Tasks</TabsTrigger>
           <TabsTrigger value="context">Context</TabsTrigger>

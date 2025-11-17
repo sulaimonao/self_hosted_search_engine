@@ -39,7 +39,7 @@ export function ChatInput() {
         </Button>
       </div>
       {composerError && (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div className="rounded-md border border-state-danger/40 bg-state-danger/10 px-3 py-2 text-xs text-state-danger">
           <p>{composerError}</p>
           <button type="button" className="mt-1 underline" onClick={() => setComposerError(null)}>
             Dismiss

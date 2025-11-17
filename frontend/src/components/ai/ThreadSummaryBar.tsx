@@ -9,13 +9,13 @@ export function ThreadSummaryBar() {
   const lastUser = [...messages].reverse().find((msg) => msg.role === "user");
 
   return (
-    <div className="mb-3 flex items-center gap-3 rounded-xl border bg-card/60 p-3">
-      <Avatar className="size-10 bg-muted">
+    <div className="mb-3 flex items-center gap-3 rounded-md border border-border-subtle bg-app-card-subtle p-3 text-sm shadow-subtle">
+      <Avatar className="size-10 border border-border-subtle bg-accent-soft/30 text-fg">
         <AvatarFallback>AI</AvatarFallback>
       </Avatar>
       <div className="text-sm">
-        <p className="font-medium">{lastAssistant ? "Assistant" : "Waiting for input"}</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="font-medium text-fg">{lastAssistant ? "Assistant" : "Waiting for input"}</p>
+        <p className="text-xs text-fg-muted">
           {lastAssistant?.content ?? lastUser?.content ?? "Send a message to kick things off."}
         </p>
       </div>

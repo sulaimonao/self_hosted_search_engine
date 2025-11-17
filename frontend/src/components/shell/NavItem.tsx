@@ -14,16 +14,16 @@ export function NavItem({ item }: { item: NavigationItem }) {
     <Link
       href={item.href}
       className={cn(
-        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition", 
+        "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-fast ease-default border-l-2",
         isActive
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          ? "border-accent bg-accent-soft text-fg"
+          : "border-transparent text-fg-muted hover:bg-app-card-hover hover:text-fg"
       )}
     >
       <item.icon className="size-4" />
       <div className="flex-1">
-        <p className="font-medium leading-5">{item.title}</p>
-        <p className="text-xs text-muted-foreground">{item.description}</p>
+        <p className="font-medium leading-5 text-fg">{item.title}</p>
+        <p className="text-xs text-fg-muted">{item.description}</p>
       </div>
     </Link>
   );
