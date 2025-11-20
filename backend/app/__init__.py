@@ -22,7 +22,6 @@ from flask_cors import CORS
 from observability import configure_tracing
 from .logging_setup import setup_logging
 from backend.app.observability import install_requests_logging
-from backend.app.services.runtime_status import build_health_snapshot
 
 
 LOGGER = logging.getLogger(__name__)
@@ -686,6 +685,8 @@ def create_app() -> Flask:
 
     @app.route("/api/health")
     def health_check():
+        from backend.app.services.runtime_status import build_health_snapshot
+
         return jsonify(build_health_snapshot())
 
     @app.route("/api/graph/summary")
