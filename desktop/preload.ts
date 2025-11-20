@@ -31,6 +31,16 @@ type BrowserBounds = {
   height: number;
 };
 
+type BrowserHistoryEntry = {
+  id: number;
+  url: string;
+  title: string | null;
+  visitTime: number;
+  transition?: string | null;
+  referrer?: string | null;
+  tabId?: string;
+};
+
 type BrowserSettings = {
   thirdPartyCookies: boolean;
   searchMode: 'auto' | 'query';
@@ -55,6 +65,8 @@ type BrowserAPI = {
   onNavState: (handler: (state: BrowserNavState) => void) => Unsubscribe;
   onTabList: (handler: (summary: BrowserTabList) => void) => Unsubscribe;
   requestTabList: () => Promise<BrowserTabList>;
+  onHistoryEntry: (handler: (entry: BrowserHistoryEntry) => void) => Unsubscribe;
+  requestHistory: (limit?: number) => Promise<BrowserHistoryEntry[]>;
   onSettings: (handler: (settings: BrowserSettings) => void) => Unsubscribe;
   getSettings: () => Promise<BrowserSettings>;
   updateSettings: (patch: Partial<BrowserSettings>) => Promise<BrowserSettings>;
@@ -225,7 +237,7 @@ const ALLOWED_EVENTS = new Set<DesktopSystemCheckChannel>([
 
 const noop: Unsubscribe = () => undefined;
 
-const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs', 'settings:state']);
+const BROWSER_ALLOWED_CHANNELS = new Set(['nav:state', 'browser:tabs', 'browser:history', 'settings:state']);
 
 function subscribe(channel: DesktopSystemCheckChannel, handler: SystemCheckHandler): Unsubscribe {
   if (!ALLOWED_EVENTS.has(channel) || typeof handler !== 'function') {
@@ -315,6 +327,11 @@ function createBrowserAPI(): BrowserAPI {
     onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
     onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
     requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+    onHistoryEntry: (handler) => subscribeBrowserChannel('browser:history', handler),
+    requestHistory: (limit) =>
+      ipcRenderer.invoke('browser:request-history', {
+        limit: Number.isFinite(limit) ? Number(limit) : undefined,
+      }),
     onSettings: (handler) => subscribeBrowserChannel('settings:state', handler),
     getSettings: () => ipcRenderer.invoke('settings:get'),
     updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),

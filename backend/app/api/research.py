@@ -91,6 +91,7 @@ def research_page():
     runner: JobRunner = current_app.config["JOB_RUNNER"]
     state_db: AppStateDB | None = current_app.config.get("APP_STATE_DB")
     vector_index: VectorIndexService | None = current_app.config.get("VECTOR_INDEX_SERVICE")
+    logger = current_app.logger
 
     job_ref: dict[str, str] = {}
 
@@ -115,7 +116,7 @@ def research_page():
             if snapshot:
                 state_db.record_crawl_event(job_id, "stats", snapshot)
         except Exception:  # pragma: no cover - defensive
-            current_app.logger.debug("failed to record research progress", exc_info=True)
+            logger.debug("failed to record research progress", exc_info=True)
 
     def _job():
         job_id = job_ref.get("id")
@@ -152,7 +153,7 @@ def research_page():
                         },
                     )
                 except Exception:  # pragma: no cover - defensive
-                    current_app.logger.debug("vector index upsert failed", exc_info=True)
+                    logger.debug("vector index upsert failed", exc_info=True)
         stats_payload = {
             "pages_fetched": int(result.get("pages_fetched", 0) or 0),
             "docs_indexed": int(result.get("docs_indexed", 0) or 0),

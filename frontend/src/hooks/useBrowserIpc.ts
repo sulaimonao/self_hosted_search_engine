@@ -60,17 +60,6 @@ export function useBrowserIpc() {
       }
       persistedHistory.add(key);
       try {
-        await apiClient.post("/api/history/visit", {
-          url: entry.url,
-          title: entry.title,
-          visited_at: entry.visitTime ? new Date(entry.visitTime).toISOString() : undefined,
-          tab_id: entry.tabId,
-          referrer: entry.referrer,
-        });
-      } catch (error) {
-        console.warn("[browser] failed to persist history", error);
-      }
-      try {
         await apiClient.post("/api/research/page", {
           url: entry.url,
           title: entry.title,

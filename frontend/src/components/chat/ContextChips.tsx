@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import { Loader2, RefreshCw, X } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { apiClient } from "@/lib/backend/apiClient";
 import type { ChatContext, DiagnosticsSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,13 +22,6 @@ export type ContextChipsProps = {
 };
 
 type IndexScope = "page" | "domain" | "site";
-
-type DiagnosticsResponse = DiagnosticsSummary & {
-  ok?: boolean;
-  stdout?: string;
-  stderr?: string;
-  incidents?: unknown;
-};
 
 const scopeOptions: Array<{ value: IndexScope; label: string; description: string }> = [
   { value: "domain", label: "Domain", description: "Index the current host with moderate depth." },
@@ -224,28 +218,16 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
   const handleDiagnostics = useCallback(async () => {
     setDiagLoading(true);
     try {
-      const response = await fetch(api("/api/diagnostics/run"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ smoke: true }),
-      });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Diagnostics failed (${response.status})`);
+      const snapshot = await apiClient.get<Record<string, unknown>>("/api/dev/diag/snapshot");
+      if (!snapshot || typeof snapshot !== "object") {
+        throw new Error("Unexpected diagnostics payload");
       }
-      const payload = (await response.json()) as DiagnosticsResponse;
-      const summary: DiagnosticsSummary = {
-        status: payload.status || (payload.ok ? "ok" : "error"),
-        summary: payload.summary || payload.stdout?.split("\n")[0] || "Diagnostics completed",
-        traceId: payload.traceId,
-        checks: payload.checks ?? null,
-      };
-      updateContext({ diagnostics: summary });
-      toast({ title: "Diagnostics attached", description: summary.summary });
+      updateContext({ diagnostics: snapshot });
+      toast({ title: "Diagnostics attached", description: "Latest desktop diagnostics will be included." });
     } catch (error) {
       toast({
-        title: "Diagnostics error",
-        description: error instanceof Error ? error.message : "Unable to run diagnostics",
+        title: "Diagnostics unavailable",
+        description: error instanceof Error ? error.message : "Unable to fetch diagnostics snapshot",
         variant: "destructive",
       });
     } finally {
@@ -283,37 +265,46 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
     }
   }, [resolvedActiveUrl, toast, updateContext]);
 
-  const handleIndexSite = useCallback(async () => {
-    const trimmed = indexUrl.trim();
-    if (!trimmed) {
-      toast({ title: "URL required", description: "Enter a URL to index before submitting.", variant: "destructive" });
-      return;
-    }
-    setIndexingSite(true);
+  const handleDiagnostics = useCallback(async () => {
+    setDiagLoading(true);
     try {
-      const response = await fetch(api("/api/index/site"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: trimmed, scope: indexScope }),
-      });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Index site failed (${response.status})`);
+      const snapshot = await apiClient.get<Record<string, unknown>>("/api/dev/diag/snapshot");
+      if (!snapshot || typeof snapshot !== "object") {
+        throw new Error("Unexpected diagnostics payload");
       }
-      const payload = await response.json();
-      updateContext({ tools: { allowIndexing: true } });
-      toast({ title: "Crawl queued", description: payload.message || "Focused crawl job submitted." });
-      setDialogOpen(false);
+      const status = typeof snapshot.status === "string" && snapshot.status.trim() ? snapshot.status.trim() : "attached";
+      const summaryText = typeof snapshot.summary === "string" && snapshot.summary.trim().length > 0 ? snapshot.summary.trim() : "Desktop diagnostics snapshot attached";
+      const traceId =
+        typeof snapshot.trace_id === "string"
+          ? snapshot.trace_id
+          : typeof snapshot.traceId === "string"
+          ? snapshot.traceId
+          : undefined;
+      const normalized: DiagnosticsSummary = {
+        status,
+        summary: summaryText,
+        traceId: traceId ?? null,
+        checks: [
+          {
+            id: "desktop_snapshot",
+            status: "info",
+            detail: JSON.stringify(snapshot),
+          },
+        ],
+        snapshot,
+      };
+      updateContext({ diagnostics: normalized });
+      toast({ title: "Diagnostics attached", description: "Latest desktop diagnostics will be included." });
     } catch (error) {
       toast({
-        title: "Unable to index site",
-        description: error instanceof Error ? error.message : "Unexpected error while queuing the crawl",
+        title: "Diagnostics unavailable",
+        description: error instanceof Error ? error.message : "Unable to fetch diagnostics snapshot",
         variant: "destructive",
       });
     } finally {
-      setIndexingSite(false);
+      setDiagLoading(false);
     }
-  }, [indexUrl, indexScope, toast, updateContext]);
+  }, [toast, updateContext]);
 
   const chips = useMemo(() => {
     const entries: Array<{ key: string; label: string; detail?: string; removable?: boolean; onRemove?: () => void; extra?: ReactNode }> = [];

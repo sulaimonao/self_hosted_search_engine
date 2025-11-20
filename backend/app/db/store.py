@@ -1277,17 +1277,19 @@ class AppStateDB:
         normalized_path: str | None = None,
         parent_url: str | None = None,
         is_source: bool = False,
+        reason: str | None = None,
     ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path, parent_url, is_source)
-                VALUES(?, 'queued', ?, ?, ?, ?, ?)
+                INSERT INTO crawl_jobs(id, status, seed, query, normalized_path, parent_url, is_source, reason)
+                VALUES(?, 'queued', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     seed=excluded.seed,
                     query=excluded.query,
                     parent_url=COALESCE(excluded.parent_url, crawl_jobs.parent_url),
-                    is_source=excluded.is_source
+                    is_source=excluded.is_source,
+                    reason=COALESCE(excluded.reason, crawl_jobs.reason)
                 """,
                 (
                     job_id,
@@ -1296,6 +1298,7 @@ class AppStateDB:
                     normalized_path,
                     parent_url,
                     int(bool(is_source)),
+                    reason,
                 ),
             )
 

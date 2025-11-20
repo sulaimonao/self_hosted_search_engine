@@ -326,6 +326,7 @@ export interface DiagnosticsSummary {
   summary: string;
   traceId?: string | null;
   checks?: DiagnosticsCheckSummary[] | null;
+  snapshot?: Record<string, unknown> | null;
 }
 
 export type ChatContext = {

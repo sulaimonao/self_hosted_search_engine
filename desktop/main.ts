@@ -82,6 +82,19 @@ type BrowserTabRecord = {
   lastUrl: string;
   isLoading: boolean;
   lastError?: BrowserNavError | null;
+  pendingReferrer?: string | null;
+  lastHistoryKey?: string | null;
+  lastHistoryAt?: number | null;
+};
+
+type BrowserHistoryEntry = {
+  id: number;
+  url: string;
+  title: string | null;
+  visitTime: number;
+  transition?: string | null;
+  referrer?: string | null;
+  tabId?: string;
 };
 
 type BrowserBounds = {
@@ -258,6 +271,7 @@ const DEFAULT_TAB_TITLE = 'New Tab';
 const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 136, width: 1280, height: 720 };
 const NAV_STATE_CHANNEL = 'nav:state';
 const TAB_LIST_CHANNEL = 'browser:tabs';
+const HISTORY_CHANNEL = 'browser:history';
 const SETTINGS_CHANNEL = 'settings:state';
 const DEFAULT_SETTINGS: BrowserSettings = {
   thirdPartyCookies: true,
@@ -267,6 +281,14 @@ const DEFAULT_SETTINGS: BrowserSettings = {
   openSearchExternally: false,
 };
 const FALLBACK_SPELLCHECK_LANGUAGES = ['en-US', 'en-GB'];
+const MAX_HISTORY_ENTRIES = 500;
+const FRONTEND_ORIGIN = (() => {
+  try {
+    return new URL(FRONTEND_URL).origin;
+  } catch {
+    return null;
+  }
+})();
 
 let win: BrowserWindow | null = null;
 let lastSystemCheck: SystemCheckResult = null;
@@ -283,6 +305,8 @@ let runtimeSettings: BrowserSettings = { ...DEFAULT_SETTINGS };
 let settingsFilePath: string | null = null;
 let cachedSystemSpellcheckLanguages: string[] | null = null;
 const permissionHandlerSessions = new WeakSet<Electron.Session>();
+const historyEntries: BrowserHistoryEntry[] = [];
+let historySeq = 1;
 
 function formatAcceptLanguageHeader(value: string | null | undefined): string | null {
   const normalized = normalizeLanguageCode(value);
@@ -657,6 +681,98 @@ function emitTabList() {
   sendToRenderer(TAB_LIST_CHANNEL, snapshotTabList());
 }
 
+function normalizeHistoryUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === 'about:blank') {
+    return null;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (
+    lowered.startsWith('chrome://') ||
+    lowered.startsWith('devtools://') ||
+    lowered.startsWith('about:') ||
+    lowered.startsWith('file://') ||
+    lowered.startsWith('app://')
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (FRONTEND_ORIGIN && parsed.origin === FRONTEND_ORIGIN) {
+      return null;
+    }
+  } catch {
+    if (!/^https?:/i.test(trimmed)) {
+      return null;
+    }
+  }
+  return trimmed;
+}
+
+function emitHistoryEntry(entry: BrowserHistoryEntry) {
+  sendToRenderer(HISTORY_CHANNEL, entry);
+}
+
+async function syncHistoryEntry(entry: BrowserHistoryEntry): Promise<void> {
+  const payload: Record<string, unknown> = {
+    url: entry.url,
+    title: entry.title,
+    visited_at: new Date(entry.visitTime).toISOString(),
+    tab_id: entry.tabId,
+  };
+  if (entry.referrer) {
+    payload.referrer = entry.referrer;
+  }
+  try {
+    await fetch(`${API_BASE_URL}/api/history/visit`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    log.debug('history.visit_failed', { error });
+  }
+}
+
+async function recordHistoryVisit(tab: BrowserTabRecord, url: string, referrer?: string | null) {
+  const normalizedUrl = normalizeHistoryUrl(url);
+  if (!normalizedUrl) {
+    return;
+  }
+  const visitTime = Date.now();
+  const historyKey = `${tab.id}:${normalizedUrl}`;
+  if (tab.lastHistoryKey === historyKey && tab.lastHistoryAt && visitTime - tab.lastHistoryAt < 750) {
+    return;
+  }
+  tab.lastHistoryKey = historyKey;
+  tab.lastHistoryAt = visitTime;
+  const wcTitle = (() => {
+    try {
+      return tab.view.webContents.getTitle();
+    } catch {
+      return null;
+    }
+  })();
+  const entry: BrowserHistoryEntry = {
+    id: historySeq++,
+    url: normalizedUrl,
+    title: tab.title ?? wcTitle ?? null,
+    visitTime,
+    referrer: referrer ?? tab.pendingReferrer ?? undefined,
+    tabId: tab.id,
+  };
+  tab.pendingReferrer = null;
+  historyEntries.push(entry);
+  if (historyEntries.length > MAX_HISTORY_ENTRIES) {
+    historyEntries.shift();
+  }
+  emitHistoryEntry(entry);
+  void syncHistoryEntry(entry);
+}
+
 function sanitizeBounds(bounds: BrowserBounds): Rectangle {
   const safe: Rectangle = {
     x: Number.isFinite(bounds.x) ? Math.max(0, Math.round(bounds.x)) : 0,
@@ -775,6 +891,7 @@ function handleTabLifecycle(tab: BrowserTabRecord) {
     if (!isMainFrame) {
       return;
     }
+    tab.pendingReferrer = tab.lastUrl;
     tab.isLoading = true;
     tab.lastError = null;
     tab.lastUrl = url;
@@ -783,17 +900,21 @@ function handleTabLifecycle(tab: BrowserTabRecord) {
   });
 
   wc.on('did-navigate', (_event, url) => {
+    const referrer = tab.pendingReferrer ?? undefined;
     tab.lastUrl = url;
     tab.isLoading = false;
     tab.lastError = null;
     emitNavState(tab);
     emitTabList();
+    void recordHistoryVisit(tab, url, referrer);
   });
 
   wc.on('did-navigate-in-page', (_event, url) => {
+    const referrer = tab.lastUrl;
     tab.lastUrl = url;
     emitNavState(tab);
     emitTabList();
+    void recordHistoryVisit(tab, url, referrer);
   });
 
   wc.on('did-stop-loading', () => {
@@ -852,6 +973,9 @@ async function createBrowserTab(url?: string, options: { activate?: boolean } = 
     lastUrl: DEFAULT_TAB_URL,
     isLoading: false,
     lastError: null,
+    pendingReferrer: null,
+    lastHistoryKey: null,
+    lastHistoryAt: null,
   };
 
   tabs.set(id, tab);
@@ -1436,6 +1560,13 @@ ipcMain.handle('browser:close-tab', async (_event, payload: { tabId?: string } |
 });
 
 ipcMain.handle('browser:request-tabs', async () => snapshotTabList());
+
+ipcMain.handle('browser:request-history', async (_event, payload: { limit?: number } | number | null | undefined) => {
+  const rawLimit = typeof payload === 'number' ? payload : typeof payload === 'object' && payload !== null ? payload.limit : undefined;
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(Number(rawLimit), MAX_HISTORY_ENTRIES)) : 100;
+  const slice = historyEntries.slice(-limit);
+  return slice.reverse();
+});
 
 ipcMain.on('browser:set-active', (_event, tabId: unknown) => {
   if (typeof tabId === 'string' && tabId) {

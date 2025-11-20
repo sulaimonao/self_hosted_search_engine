@@ -106,8 +106,22 @@ export function KnowledgeGraphPanel() {
       const edgesData = await edgesResponse.json();
 
       if (viewMode === "pages") {
-        setNodes(nodesData.nodes || []);
-        setEdges(edgesData.edges || []);
+        const rawNodes = Array.isArray(nodesData.nodes) ? (nodesData.nodes as GraphNode[]) : [];
+        const normalizedNodes = rawNodes.map((node, index) => {
+          const url = typeof node.url === "string" ? node.url.trim() : "";
+          const fallbackId = node.id ? String(node.id) : `node-${index}`;
+          return { ...node, id: url || fallbackId };
+        });
+        const nodeIds = new Set(normalizedNodes.map((node) => node.id).filter(Boolean));
+        const normalizedEdges: GraphEdge[] = (Array.isArray(edgesData.edges) ? (edgesData.edges as GraphEdge[]) : [])
+          .map((edge) => ({
+            ...edge,
+            src_url: typeof edge.src_url === "string" ? edge.src_url.trim() : "",
+            dst_url: typeof edge.dst_url === "string" ? edge.dst_url.trim() : "",
+          }))
+          .filter((edge) => edge.src_url && edge.dst_url && nodeIds.has(edge.src_url) && nodeIds.has(edge.dst_url));
+        setNodes(normalizedNodes);
+        setEdges(normalizedEdges);
       } else {
         const siteNodes: GraphNode[] = ((nodesData.nodes as SiteNode[]) || []).map((n) => ({
           id: n.id,
@@ -122,11 +136,14 @@ export function KnowledgeGraphPanel() {
           val: Math.max(1, Math.min(12, Math.floor(Math.log2(n.pages + 1) + n.degree / 50))),
         }));
 
-        const siteEdges: GraphEdge[] = ((edgesData.edges as RawSiteEdge[]) || []).map((e) => ({
-          src_url: e.src_site,
-          dst_url: e.dst_site,
-          relation: e.weight != null ? String(e.weight) : null,
-        }));
+        const nodeIds = new Set(siteNodes.map((node) => node.id));
+        const siteEdges: GraphEdge[] = ((edgesData.edges as RawSiteEdge[]) || [])
+          .map((e) => ({
+            src_url: e.src_site,
+            dst_url: e.dst_site,
+            relation: e.weight != null ? String(e.weight) : null,
+          }))
+          .filter((edge) => edge.src_url && edge.dst_url && nodeIds.has(edge.src_url) && nodeIds.has(edge.dst_url));
 
         setNodes(siteNodes);
         setEdges(siteEdges);
