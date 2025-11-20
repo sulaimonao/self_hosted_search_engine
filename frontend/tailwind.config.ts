@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
+  darkMode: "class",
   content: [
     "./src/**/*.{ts,tsx,mdx}",
     "./src/app/**/*.{ts,tsx,mdx}",
@@ -9,6 +10,13 @@ const config: Config = {
     "./src/hooks/**/*.{ts,tsx,mdx}",
   ],
   theme: {
+    container: {
+      center: true,
+      padding: "1.5rem",
+      screens: {
+        "2xl": "1440px",
+      },
+    },
     extend: {
       colors: {
         app: {
@@ -44,6 +52,16 @@ const config: Config = {
           warning: "var(--warning)",
           danger: "var(--danger)",
           info: "var(--info)",
+        },
+        desert: {
+          sand: "#fdfcf8",
+          dune: "#f5f2ea",
+          clay: "#e0d8cc",
+          terracotta: "#c05621",
+          sunset: "#dd6b20",
+          earth: "#4338ca",
+          espresso: "#2d2420",
+          sage: "#708238",
         },
       },
       borderRadius: {

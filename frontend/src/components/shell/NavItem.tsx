@@ -14,15 +14,23 @@ export function NavItem({ item }: { item: NavigationItem }) {
     <Link
       href={item.href}
       className={cn(
-        "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-fast ease-default border-l-2",
+        "group flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-all duration-fast ease-default",
         isActive
-          ? "border-accent bg-accent-soft text-fg"
-          : "border-transparent text-fg-muted hover:bg-app-card-hover hover:text-fg"
+          ? "border-sidebar-ring/70 bg-sidebar-primary/15 text-sidebar-foreground shadow-subtle"
+          : "border-transparent text-fg-muted hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-foreground"
       )}
+      aria-current={isActive ? "page" : undefined}
     >
-      <item.icon className="size-4" />
+      <span
+        className={cn(
+          "flex h-9 w-9 items-center justify-center rounded-md border border-border-subtle bg-app-card-subtle text-fg-muted shadow-subtle transition-colors group-hover:text-sidebar-foreground",
+          isActive && "border-sidebar-ring bg-sidebar-primary text-sidebar-primary-foreground"
+        )}
+      >
+        <item.icon className="size-4" />
+      </span>
       <div className="flex-1">
-        <p className="font-medium leading-5 text-fg">{item.title}</p>
+        <p className="font-semibold leading-5 text-sidebar-foreground">{item.title}</p>
         <p className="text-xs text-fg-muted">{item.description}</p>
       </div>
     </Link>
