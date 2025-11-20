@@ -235,38 +235,6 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
     }
   }, [toast, updateContext]);
 
-  const handleIndexPage = useCallback(async () => {
-    if (!resolvedActiveUrl) {
-      toast({ title: "No page detected", description: "Open a page before indexing it.", variant: "destructive" });
-      return;
-    }
-    setIndexingPage(true);
-    try {
-      const response = await fetch(api("/api/index/snapshot"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: resolvedActiveUrl }),
-      });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Snapshot failed (${response.status})`);
-      }
-      const payload = await response.json();
-      updateContext({ tools: { allowIndexing: true } });
-      toast({ title: "Indexing queued", description: payload.message || "Shadow indexer will fetch this page shortly." });
-    } catch (error) {
-      toast({
-        title: "Index request failed",
-        description: error instanceof Error ? error.message : "Unable to queue the snapshot",
-        variant: "destructive",
-      });
-    } finally {
-      setIndexingPage(false);
-    }
-  }, [resolvedActiveUrl, toast, updateContext]);
-
-  const handleDiagnostics = useCallback(async () => {
-    setDiagLoading(true);
     try {
       const snapshot = await apiClient.get<Record<string, unknown>>("/api/dev/diag/snapshot");
       if (!snapshot || typeof snapshot !== "object") {
