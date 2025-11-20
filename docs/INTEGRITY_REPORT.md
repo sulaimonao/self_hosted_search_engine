@@ -8,6 +8,7 @@ Backend
 
 Frontend
 - Moved `ChatThreadProvider` to `frontend/src/app/layout.tsx` and removed the nested wrapper in `frontend/src/components/shell/AppShell.tsx` so all routes share chat context (fixes `useChatThread` runtime errors on non-shell pages).
+- Fixed `frontend/src/components/KnowledgeGraphPanel.tsx` runtime error by declaring `loadGraphData` before hooks that depend on it.
 - Updated `frontend/src/components/UsePageContextToggle.tsx` to expose “Use current page context” as the accessible label, matching the e2e selector expectation.
 - Marked unused/legacy candidates with inline comments: `frontend/src/components/PageContextChatPanel.tsx`, `frontend/src/components/local-discovery-panel.tsx`, `frontend/src/components/DocInspector.tsx`.
 

@@ -59,35 +59,6 @@ export function KnowledgeGraphPanel() {
   const [limit, setLimit] = useState<number>(200);
   const [minWeight, setMinWeight] = useState<number>(1);
 
-  useEffect(() => {
-    loadGraphSummary();
-  }, []);
-
-  useEffect(() => {
-    if (!globalView && !selectedSite && viewMode === "pages") {
-      loadGraphData(null);
-    }
-  }, [globalView, selectedSite, viewMode, loadGraphData]);
-
-  
-
-  async function loadGraphSummary() {
-    try {
-      setLoading(true);
-      const response = await fetch(api("/api/browser/graph/summary"));
-      if (!response.ok) {
-        throw new Error(`Failed to load graph summary: ${response.statusText}`);
-      }
-      const data = await response.json();
-      setSummary(data);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   const loadGraphData = useCallback(async (site?: string | null) => {
     try {
       setLoading(true);
@@ -165,6 +136,33 @@ export function KnowledgeGraphPanel() {
       setLoading(false);
     }
   }, [globalView, minDegree, category, fromDate, toDate, indexedOnly, limit, viewMode, minWeight]);
+
+  useEffect(() => {
+    loadGraphSummary();
+  }, []);
+
+  useEffect(() => {
+    if (!globalView && !selectedSite && viewMode === "pages") {
+      loadGraphData(null);
+    }
+  }, [globalView, selectedSite, viewMode, loadGraphData]);
+
+  async function loadGraphSummary() {
+    try {
+      setLoading(true);
+      const response = await fetch(api("/api/browser/graph/summary"));
+      if (!response.ok) {
+        throw new Error(`Failed to load graph summary: ${response.statusText}`);
+      }
+      const data = await response.json();
+      setSummary(data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // load when a site is selected or when toggling to global view
   useEffect(() => {
