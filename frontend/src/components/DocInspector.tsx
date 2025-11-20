@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+// Candidate legacy component: document inspector panel is unused in current UI but kept for debugging.
 interface DocInspectorProps {
   doc: Record<string, unknown> | null;
 }

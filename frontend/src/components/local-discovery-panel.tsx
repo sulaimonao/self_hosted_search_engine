@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import type { DiscoveryPreview } from "@/lib/types";
 import { formatFileSize } from "@/lib/format";
 
+// Candidate legacy component: the floating local discovery toaster is not referenced by current routes.
 interface LocalDiscoveryPanelProps {
   items: DiscoveryPreview[];
   busyIds: Set<string>;

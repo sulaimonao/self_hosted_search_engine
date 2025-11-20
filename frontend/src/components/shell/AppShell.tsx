@@ -8,7 +8,6 @@ import { CommandPalette } from "@/components/command/CommandPalette";
 import { ShellLayoutGrid } from "@/components/shell/ShellLayoutGrid";
 import { SidebarNav } from "@/components/shell/SidebarNav";
 import { TopBar } from "@/components/shell/TopBar";
-import { ChatThreadProvider } from "@/lib/useChatThread";
 import { NAV_ITEMS } from "@/lib/navigation";
 import { useSessionPreference } from "@/hooks/useSessionPreference";
 import { UI_SESSION_KEYS } from "@/lib/uiSession";
@@ -50,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [router, toggleAiPanel]);
 
   return (
-    <ChatThreadProvider>
+    <>
       <div className="flex h-full min-h-0 flex-col bg-app-bg text-fg">
         <TopBar
           onCommandPalette={() => setCommandPaletteOpen(true)}
@@ -70,6 +69,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
-    </ChatThreadProvider>
+    </>
   );
 }

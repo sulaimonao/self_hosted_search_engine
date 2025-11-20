@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { storeChatMessage } from "@/lib/api";
 import { apiClient } from "@/lib/backend/apiClient";
 
+// Legacy diagnostic panel kept for manual page-context testing; not mounted in the current shell.
 export function PageContextChatPanel() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [input, setInput] = useState("");

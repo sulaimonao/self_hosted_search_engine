@@ -12,6 +12,7 @@ import { StatusBar } from "@/components/status/StatusBar";
 import { FirstRunWizard } from "@/components/setup/FirstRunWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ErrorClientSetup from "@/components/ErrorClientSetup";
+import { ChatThreadProvider } from "@/lib/useChatThread";
 
 import "./globals.css";
 
@@ -48,22 +49,24 @@ export default function RootLayout({
           {/* The ClientOnly wrapper prevents hydration mismatches and excessive render loops by waiting
              until the component mounts on the client before rendering children. */}
           <ClientOnly>
-            <ReactQueryProvider>
-              <RenderLoopGuardProvider>
-                <NavProgressProvider>
-                  <ErrorBoundary>
-                    <ErrorClientSetup />
-                    <div className="relative flex h-screen flex-col bg-background">
-                      <FirstRunWizard />
-                      <main className="flex-1 min-h-0 overflow-hidden">
-                        {children}
-                      </main>
-                      <StatusBar />
-                    </div>
-                  </ErrorBoundary>
-                </NavProgressProvider>
-              </RenderLoopGuardProvider>
-            </ReactQueryProvider>
+            <ChatThreadProvider>
+              <ReactQueryProvider>
+                <RenderLoopGuardProvider>
+                  <NavProgressProvider>
+                    <ErrorBoundary>
+                      <ErrorClientSetup />
+                      <div className="relative flex h-screen flex-col bg-background">
+                        <FirstRunWizard />
+                        <main className="flex-1 min-h-0 overflow-hidden">
+                          {children}
+                        </main>
+                        <StatusBar />
+                      </div>
+                    </ErrorBoundary>
+                  </NavProgressProvider>
+                </RenderLoopGuardProvider>
+              </ReactQueryProvider>
+            </ChatThreadProvider>
           </ClientOnly>
         </SWRConfig>
       </body>
