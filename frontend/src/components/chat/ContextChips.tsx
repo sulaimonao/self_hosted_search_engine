@@ -222,24 +222,6 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
       if (!snapshot || typeof snapshot !== "object") {
         throw new Error("Unexpected diagnostics payload");
       }
-      updateContext({ diagnostics: snapshot });
-      toast({ title: "Diagnostics attached", description: "Latest desktop diagnostics will be included." });
-    } catch (error) {
-      toast({
-        title: "Diagnostics unavailable",
-        description: error instanceof Error ? error.message : "Unable to fetch diagnostics snapshot",
-        variant: "destructive",
-      });
-    } finally {
-      setDiagLoading(false);
-    }
-  }, [toast, updateContext]);
-
-    try {
-      const snapshot = await apiClient.get<Record<string, unknown>>("/api/dev/diag/snapshot");
-      if (!snapshot || typeof snapshot !== "object") {
-        throw new Error("Unexpected diagnostics payload");
-      }
       const status = typeof snapshot.status === "string" && snapshot.status.trim() ? snapshot.status.trim() : "attached";
       const summaryText = typeof snapshot.summary === "string" && snapshot.summary.trim().length > 0 ? snapshot.summary.trim() : "Desktop diagnostics snapshot attached";
       const traceId =
