@@ -17,7 +17,6 @@ import { TabsBar } from "@/components/browser/Tabs";
 import { AddressBar, ADDRESS_BAR_INPUT_ID } from "@/components/browser/AddressBar";
 import { NavHistory } from "@/components/browser/nav-history";
 import { ModeToggle } from "@/components/browser/ModeToggle";
-import { StatusBar } from "@/components/browser/StatusBar";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { ToastGate } from "@/components/notifications/ToastGate";
 import { AgentLogPanel } from "@/components/panels/AgentLogPanel";
@@ -962,7 +961,6 @@ function BrowserShellInner() {
         </Sheet>
       </main>
 
-      <StatusBar />
       <DownloadsTray />
       <PermissionPrompt />
       <DiagnosticsDrawer

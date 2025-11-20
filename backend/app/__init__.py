@@ -22,6 +22,7 @@ from flask_cors import CORS
 from observability import configure_tracing
 from .logging_setup import setup_logging
 from backend.app.observability import install_requests_logging
+from backend.app.services.runtime_status import build_health_snapshot
 
 
 LOGGER = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ def create_app() -> Flask:
     from .api import plan as plan_api
     from .api import shadow as shadow_api
     from .api import research as research_api
+    from .api import history as history_api
     from .api import reasoning as reasoning_api
     from .api import web_search as web_search_api
     from .api import seeds as seeds_api
@@ -632,6 +634,7 @@ def create_app() -> Flask:
     app.register_blueprint(progress_api.bp)
     app.register_blueprint(agent_logs_api.bp)
     app.register_blueprint(visits_api.bp)
+    app.register_blueprint(history_api.bp)
     app.register_blueprint(docs_api.bp)
     app.register_blueprint(domains_api.bp)
     app.register_blueprint(domain_profiles_api.bp)
@@ -683,7 +686,19 @@ def create_app() -> Flask:
 
     @app.route("/api/health")
     def health_check():
-        return jsonify({"status": "ok"})
+        return jsonify(build_health_snapshot())
+
+    @app.route("/api/graph/summary")
+    def graph_summary():
+        state_db = app.config.get("APP_STATE_DB")
+        if state_db is None:
+            return jsonify({"error": "unavailable"}), 503
+        try:
+            summary = state_db.graph_summary()
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.exception("graph.summary_failed")
+            return jsonify({"error": "graph_summary_failed"}), 500
+        return jsonify(summary), 200
 
     # Back-compat liveness endpoint used by tests
     @app.route("/api/healthz")

@@ -240,6 +240,27 @@ class ShadowCaptureService:
             "domain": domain,
             "text_markdown": markdown,
         }
+        outlinks_payload = payload.get("outlinks") or []
+        normalized_outlinks: list[str] = []
+        if isinstance(outlinks_payload, str):
+            normalized_outlinks = [
+                token.strip()
+                for token in outlinks_payload.split(",")
+                if token and token.strip()
+            ]
+        elif isinstance(outlinks_payload, list):
+            for entry in outlinks_payload:
+                if isinstance(entry, Mapping):
+                    candidate = entry.get("url")
+                else:
+                    candidate = entry
+                if not isinstance(candidate, str):
+                    continue
+                trimmed = candidate.strip()
+                if not trimmed:
+                    continue
+                normalized_outlinks.append(trimmed)
+        normalized_doc["outlinks"] = normalized_outlinks
         normalized_json = json.dumps(normalized_doc, ensure_ascii=False)
 
         raw_path = snapshot_dir / "raw.html"
@@ -331,6 +352,7 @@ class ShadowCaptureService:
                 labels=None,
                 source="shadow-capture",
                 verification={"policy_id": policy.policy_id},
+                outlinks=normalized_outlinks,
             )
         except Exception:  # pragma: no cover - defensive guard
             LOGGER.exception(

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from backend.app.services.source_follow import (
     SourceFollowConfig,
@@ -93,6 +94,45 @@ def _parse_int(value: Any) -> int | None:
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def _normalize_site(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        parsed = None
+    host = parsed.hostname if parsed else None
+    if not host:
+        host = value
+    host = host.strip().lower()
+    return host or None
+
+
+def _normalize_links(outlinks: Iterable[str] | None) -> list[str]:
+    if not outlinks:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in outlinks:
+        if not isinstance(raw, str):
+            continue
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            continue
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        normalized_url = parsed.geturl()
+        if normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        normalized.append(normalized_url)
+    return normalized
 
 
 @dataclass(slots=True)
@@ -980,6 +1020,9 @@ class AppStateDB:
             site_total = self._conn.execute(
                 "SELECT COUNT(DISTINCT site) FROM pages WHERE site IS NOT NULL"
             ).fetchone()[0]
+            edge_total = self._conn.execute(
+                "SELECT COUNT(*) FROM link_edges"
+            ).fetchone()[0]
             fresh = self._conn.execute(
                 "SELECT COUNT(*) FROM pages WHERE last_seen IS NOT NULL AND last_seen >= ?",
                 (seven_days_ago.isoformat(),),
@@ -995,14 +1038,34 @@ class AppStateDB:
               LIMIT 5
                 """
             ).fetchall()
+            sample_pages = self._conn.execute(
+                """
+                SELECT url, title, site, last_seen
+                  FROM pages
+              ORDER BY datetime(COALESCE(last_seen, first_seen)) DESC
+                 LIMIT 5
+                """
+            ).fetchall()
         clusters = []
         for row in top_sites:
             clusters.append({"site": row["site"], "degree": row["degree"]})
+        sample = []
+        for row in sample_pages:
+            sample.append(
+                {
+                    "url": row["url"],
+                    "title": row["title"],
+                    "site": row["site"],
+                    "last_seen": row["last_seen"],
+                }
+            )
         return {
             "pages": int(page_total),
             "sites": int(site_total),
             "fresh_7d": int(fresh),
+            "connections": int(edge_total),
             "top_sites": clusters,
+            "sample": sample,
         }
 
     def graph_nodes(
@@ -1331,12 +1394,25 @@ class AppStateDB:
         labels: Iterable[str] | None,
         source: str | None,
         verification: Mapping[str, Any] | None = None,
+        outlinks: Iterable[str] | None = None,
     ) -> None:
         categories_json = _serialize(_ensure_list(categories or []))
         labels_json = _serialize(_ensure_list(labels or []))
         verification_json = (
             _serialize(verification) if verification is not None else None
         )
+        site_value = _normalize_site(site) or _normalize_site(url)
+        try:
+            last_seen = (
+                datetime.fromtimestamp(float(fetched_at), tz=timezone.utc).isoformat(
+                    timespec="seconds"
+                )
+                if fetched_at is not None
+                else _utc_now()
+            )
+        except (TypeError, ValueError):
+            last_seen = _utc_now()
+        outlinks_normalized = _normalize_links(outlinks)
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -1368,7 +1444,7 @@ class AppStateDB:
                     document_id,
                     url,
                     canonical_url,
-                    site,
+                    site_value,
                     title,
                     description,
                     language,
@@ -1384,6 +1460,40 @@ class AppStateDB:
                     verification_json,
                 ),
             )
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO pages(url, site, title, first_seen, last_seen, topics, embedding)
+                    VALUES(?, ?, ?, ?, ?, ?, NULL)
+                    ON CONFLICT(url) DO UPDATE SET
+                        site = COALESCE(excluded.site, pages.site),
+                        title = COALESCE(NULLIF(excluded.title, ''), COALESCE(pages.title, excluded.url)),
+                        last_seen = excluded.last_seen,
+                        topics = CASE
+                            WHEN excluded.topics IS NOT NULL AND excluded.topics != '[]' THEN excluded.topics
+                            ELSE pages.topics
+                        END
+                    """,
+                    (
+                        url,
+                        site_value,
+                        title or url,
+                        last_seen,
+                        last_seen,
+                        categories_json,
+                    ),
+                )
+                if outlinks_normalized:
+                    for link in outlinks_normalized:
+                        self._conn.execute(
+                            """
+                            INSERT OR IGNORE INTO link_edges(src_url, dst_url, relation)
+                            VALUES (?, ?, 'link')
+                            """,
+                            (url, link),
+                        )
+            except Exception:  # pragma: no cover - defensive logging only
+                LOGGER.debug("failed to persist page/link graph for %s", url, exc_info=True)
 
     # ------------------------------------------------------------------
     # Domain profiles

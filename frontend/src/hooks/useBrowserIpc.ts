@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import {
   resolveBrowserAPI,
@@ -17,6 +17,7 @@ import {
 import { useAppStore } from "@/state/useAppStore";
 import { useBrowserRuntimeStore } from "@/state/useBrowserRuntime";
 import { setIfChanged } from "@/lib/store/utils";
+import { apiClient } from "@/lib/backend/apiClient";
 
 function mapNavStateToTab(state: BrowserNavState) {
   return {
@@ -49,6 +50,36 @@ export function useBrowserIpc() {
     }
 
     let cancelled = false;
+    const persistedHistory = new Set<string>();
+
+    const persistHistory = async (entry: BrowserHistoryEntry) => {
+      if (!entry?.url) return;
+      const key = `${entry.id ?? entry.url}|${entry.visitTime ?? 0}`;
+      if (persistedHistory.has(key)) {
+        return;
+      }
+      persistedHistory.add(key);
+      try {
+        await apiClient.post("/api/history/visit", {
+          url: entry.url,
+          title: entry.title,
+          visited_at: entry.visitTime ? new Date(entry.visitTime).toISOString() : undefined,
+          tab_id: entry.tabId,
+          referrer: entry.referrer,
+        });
+      } catch (error) {
+        console.warn("[browser] failed to persist history", error);
+      }
+      try {
+        await apiClient.post("/api/research/page", {
+          url: entry.url,
+          title: entry.title,
+          source: "navigation",
+        });
+      } catch (error) {
+        console.debug?.("[browser] enqueue crawl skipped", error);
+      }
+    };
 
     api
       .requestTabList()
@@ -107,6 +138,7 @@ export function useBrowserIpc() {
 
     const unsubscribeHistory = subscribeHistory(api, (entry) => {
       useBrowserRuntimeStore.getState().addHistory(entry);
+      void persistHistory(entry);
     });
 
     const unsubscribeDownloads = subscribeDownloads(api, (download) => {

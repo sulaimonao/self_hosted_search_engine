@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useAppStore } from "@/state/useAppStore";
+import { apiClient } from "@/lib/backend/apiClient";
 
 type FallbackItem = {
   title: string;
@@ -23,6 +24,7 @@ export function AgentLogPanel() {
   const [fallback, setFallback] = useState<FallbackResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastEnqueue = useRef<string | null>(null);
 
   useEffect(() => {
     const url = activeTab?.url;
@@ -58,6 +60,22 @@ export function AgentLogPanel() {
       cancelled = true;
     };
   }, [activeTab?.url]);
+
+  useEffect(() => {
+    if (!fallback || !fallback.items.length) {
+      return;
+    }
+    const signature = `${activeTab?.url ?? "none"}|${fallback.strategy}|${fallback.items.length}`;
+    if (signature === lastEnqueue.current) {
+      return;
+    }
+    lastEnqueue.current = signature;
+    const urls = fallback.items.slice(0, 5).map((item) => item.url);
+    if (urls.length === 0) return;
+    void apiClient
+      .post("/api/research/page", { urls, source: "agent_discovery" })
+      .catch((err) => console.debug?.("[agent] failed to enqueue discovery seeds", err));
+  }, [activeTab?.url, fallback]);
 
   const strategyLabel = fallback?.strategy ? fallback.strategy.replace("_", " ") : "unknown";
 

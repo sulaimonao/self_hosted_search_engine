@@ -55,6 +55,7 @@ diagnostics/*
 !backend/app/api/system_check.py
 !backend/app/api/meta.py
 !backend/app/api/runtime.py
+!backend/app/api/history.py
 !backend/app/api/config.py
 !backend/app/api/dev_diag.py
 !backend/app/api/sources.py

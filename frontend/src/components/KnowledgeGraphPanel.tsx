@@ -39,6 +39,8 @@ interface GraphSummary {
   pages: number;
   sites: number;
   fresh_7d: number;
+  connections?: number;
+  sample?: Array<{ url: string; title: string | null; site: string | null; last_seen: string | null }>;
   top_sites: Array<{ site: string; degree: number }>;
 }
 
@@ -327,11 +329,33 @@ export function KnowledgeGraphPanel() {
               <div className="text-sm text-fg-muted">Fresh (7d)</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-state-info">{edges.length}</div>
+              <div className="text-2xl font-bold text-state-info">{summary.connections ?? edges.length}</div>
               <div className="text-sm text-fg-muted">Connections</div>
             </div>
           </div>
         )}
+        {summary?.sample?.length ? (
+          <div className="rounded-xl border border-border-subtle bg-app-card-subtle p-4">
+            <p className="mb-2 text-sm font-semibold text-foreground">Recent pages</p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {summary.sample.map((page) => {
+                const lastSeen = page.last_seen ? new Date(page.last_seen) : null;
+                return (
+                  <button
+                    key={page.url}
+                    onClick={() => navigate(page.url, { newTab: false })}
+                    className="flex flex-col items-start rounded-md border border-border-subtle bg-background px-3 py-2 text-left text-sm hover:border-accent/70 hover:shadow-subtle"
+                  >
+                    <span className="truncate font-medium text-foreground">{page.title || page.url}</span>
+                    <span className="truncate text-xs text-fg-muted">
+                      {page.site || "unknown"} {lastSeen ? `· ${lastSeen.toLocaleString()}` : ""}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {viewMode === "pages" && summary?.top_sites?.length ? (

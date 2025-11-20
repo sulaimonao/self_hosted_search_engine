@@ -19,6 +19,7 @@ from backend.app.routes.util import get_db
 from backend.app.services import index_health
 from backend.app.services import ollama_client
 from server.refresh_worker import RefreshWorker
+from backend.app.db import AppStateDB
 
 
 LOGGER = logging.getLogger(__name__)
@@ -106,7 +107,19 @@ def _index_health() -> HealthComponent:
 def _crawler_health() -> HealthComponent:
     worker = current_app.config.get("REFRESH_WORKER")
     if not isinstance(worker, RefreshWorker):
-        return HealthComponent("crawler", "unknown", {"available": False})
+        state_db = current_app.config.get("APP_STATE_DB")
+        overview = {}
+        status = "unknown"
+        if isinstance(state_db, AppStateDB):
+            try:
+                overview = state_db.crawl_overview()
+                queued = int(overview.get("queued") or 0)
+                running = int(overview.get("running") or 0)
+                status = "running" if running else ("idle" if queued == 0 else "queued")
+            except Exception:  # pragma: no cover - defensive guard
+                overview = {}
+                status = "unknown"
+        return HealthComponent("crawler", status, {"available": False, "overview": overview})
     snapshot = worker.status()
     active = snapshot.get("active") or []
     recent = snapshot.get("recent") or []

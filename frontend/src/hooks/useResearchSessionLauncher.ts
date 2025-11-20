@@ -18,22 +18,29 @@ export function useResearchSessionLauncher() {
   const [isStarting, setIsStarting] = useState(false);
 
   const startSession = useCallback(
-    async (topic?: string) => {
+    async (topic?: string, tabIdOverride?: string | null, tabTitleOverride?: string | null) => {
       setIsStarting(true);
       try {
         const tabs = tabsQuery.data?.items ?? [];
-        const availableTab = tabs.find((tab) => !tab.thread_id) ?? tabs[0];
+        const resolvedTab =
+          (tabIdOverride ? tabs.find((tab) => tab.id === tabIdOverride) : undefined) ??
+          tabs.find((tab) => !tab.thread_id) ??
+          tabs[0];
         const session = await createResearchSession({
           topic,
-          tabId: availableTab?.id,
-          tabTitle: availableTab?.current_title ?? availableTab?.current_url ?? undefined,
+          tabId: tabIdOverride ?? resolvedTab?.id,
+          tabTitle:
+            tabTitleOverride ??
+            resolvedTab?.current_title ??
+            resolvedTab?.current_url ??
+            undefined,
         });
         selectThread(session.threadId);
         setAiPanelSessionOpen(true);
         router.push(ROUTES.browse);
         toast({
           title: session.topic ? `Researching ${session.topic}` : "New research session",
-          description: availableTab ? "Linked to your active browser tab." : "Thread ready for browsing.",
+          description: resolvedTab ? "Linked to your active browser tab." : "Thread ready for browsing.",
         });
         return session;
       } catch (error) {

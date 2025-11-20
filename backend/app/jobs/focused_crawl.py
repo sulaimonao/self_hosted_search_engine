@@ -285,6 +285,7 @@ def run_focused_crawl(
                         labels=[],
                         source="focused_crawl",
                         verification=doc.get("verification") or {},
+                        outlinks=doc.get("outlinks") or [],
                     )
             if learned_db is not None:
                 try:
