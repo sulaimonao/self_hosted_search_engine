@@ -18,6 +18,10 @@ node_modules/
 _MAIN_0.toc
 /worktrees/
 /data/telemetry/
+logs/*
+!logs/llm_exports/
+logs/llm_exports/*
+!logs/llm_exports/sample-session.jsonl
 diagnostics/*
 !frontend/src/app/shipit/diagnostics/
 *.py

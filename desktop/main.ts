@@ -13,7 +13,6 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import log from 'electron-log';
 import { randomUUID } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 
@@ -108,22 +107,56 @@ type BrowserSettings = {
   thirdPartyCookies: boolean;
   searchMode: 'auto' | 'query';
   spellcheckLanguage: string;
-  proxy: {
-    mode: 'system' | 'manual';
-    host: string;
-    port: string;
-  };
-  openSearchExternally: boolean;
-};
+  import {
+    app,
+    BrowserWindow,
+    BrowserView,
+    ipcMain,
+    Menu,
+    Rectangle,
+    session,
+    shell,
+    WebContents,
+  } from 'electron';
+  import path from 'node:path';
+  import fs from 'node:fs';
+  import { pathToFileURL, fileURLToPath } from 'node:url';
+  import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
-const { runBrowserDiagnostics }: {
-  runBrowserDiagnostics: (options?: {
-    timeoutMs?: number;
-    write?: boolean;
-    log?: boolean;
-  }) => Promise<BrowserDiagnosticsReport>;
-} = require('../scripts/diagnoseBrowser.js');
+  declare global {
+    // eslint-disable-next-line no-var
+    var __desktopLoggerHandlersRegistered: boolean | undefined;
+  }
+const sharedLogger = require('../shared/logger');
+const log = sharedLogger.createComponentLogger('electron-main', { pid: process.pid });
+
+if (!globalThis.__desktopLoggerHandlersRegistered) {
+  process.on('uncaughtException', (error: Error) => {
+    log.error('Uncaught exception in Electron main process', {
+      message: error?.message,
+      stack: error?.stack,
+    });
+  });
+  process.on('unhandledRejection', (reason: unknown) => {
+    if (reason instanceof Error) {
+      log.error('Unhandled promise rejection in Electron main process', {
+        message: reason.message,
+        stack: reason.stack,
+      });
+      return;
+    }
+    let serialized: string;
+    try {
+      serialized = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+    } catch {
+      serialized = String(reason);
+    }
+    log.error('Unhandled promise rejection in Electron main process', {
+      reason: serialized,
+    });
+  });
+  globalThis.__desktopLoggerHandlersRegistered = true;
+}
 
 const DEFAULT_FRONTEND_ORIGIN = (() => {
   const fallbackHost = 'localhost';
@@ -1174,6 +1207,8 @@ function buildApplicationMenu() {
 }
 
 function createWindow() {
+  const target = resolveFrontendTarget();
+  log.info('Creating primary BrowserWindow', { target });
   win = new BrowserWindow({
     width: 1366,
     height: 900,
@@ -1192,6 +1227,7 @@ function createWindow() {
   });
 
   win.once('ready-to-show', () => {
+    log.info('Main window ready to show');
     win?.show();
     emitSettingsState();
   });
@@ -1210,14 +1246,17 @@ function createWindow() {
     }
   });
 
-  const target = resolveFrontendTarget();
   win
     .loadURL(target)
     .catch((error) => {
-      log.error('Failed to load frontend', error);
+      log.error('Failed to load frontend', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     });
 
   win.on('closed', () => {
+    log.info('Browser window closed; cleaning up tabs');
     for (const [tabId, tab] of tabs) {
       try {
         if (!tab.view.webContents.isDestroyed()) {
@@ -1236,6 +1275,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  log.info('Electron app ready; preparing browser session');
   loadRuntimeSettings();
   const mainSession = session.fromPartition(MAIN_SESSION_KEY);
   mainSession.setUserAgent(RESOLVED_USER_AGENT);
@@ -1329,6 +1369,7 @@ app.whenReady().then(async () => {
     });
 
   app.on('activate', () => {
+    log.info('Electron app activate event received');
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
@@ -1336,6 +1377,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  log.info('All BrowserWindows closed');
   if (process.platform !== 'darwin') {
     app.quit();
   }

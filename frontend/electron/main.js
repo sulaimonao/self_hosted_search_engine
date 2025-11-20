@@ -2,6 +2,7 @@ import { app, BrowserWindow, BrowserView, ipcMain, session, shell, webContents }
 import path from 'path';
 import { fileURLToPath } from 'url';
 import waitOn from 'wait-on';
+import logger from '../../shared/logger/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +35,33 @@ const sharedWebPreferences = Object.freeze({
 let mainWindow;
 const shadowModeByWindow = new Map();
 let frameBypassHookRegistered = false;
+const log = logger.child({ component: 'electron-main', pid: process.pid });
+
+if (!globalThis.__frontendElectronLoggerHandlersRegistered) {
+  process.on('uncaughtException', (error) => {
+    log.error('Uncaught exception in Electron main process', {
+      message: error?.message,
+      stack: error?.stack,
+    });
+  });
+  process.on('unhandledRejection', (reason) => {
+    if (reason instanceof Error) {
+      log.error('Unhandled promise rejection in Electron main process', {
+        message: reason.message,
+        stack: reason.stack,
+      });
+      return;
+    }
+    let serialized;
+    try {
+      serialized = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+    } catch {
+      serialized = String(reason);
+    }
+    log.error('Unhandled promise rejection in Electron main process', { reason: serialized });
+  });
+  globalThis.__frontendElectronLoggerHandlersRegistered = true;
+}
 
 function isShadowModeEnabled(win) {
   if (!win) {
@@ -194,7 +222,10 @@ function postShadowCrawl(win, targetUrl, reason) {
     });
   } catch (error) {
     // Intentionally ignore network errors; renderer will surface failures if needed.
-    console.warn('shadow crawl request failed', error);
+    log.warn('Shadow crawl request failed', {
+      message: error?.message,
+      stack: error?.stack,
+    });
   }
 }
 
@@ -209,7 +240,10 @@ function attachView(window, view) {
     try {
       view.setBounds({ x: 0, y: 0, width, height });
     } catch (error) {
-      console.warn('failed to resize BrowserView', error);
+      log.warn('Failed to resize BrowserView', {
+        message: error?.message,
+        stack: error?.stack,
+      });
     }
   };
   const resizeEvents = [
@@ -297,7 +331,10 @@ function attachNavigationHandlers(window, view, initialUrl) {
           }
         }
       } catch (error) {
-        console.warn('nav-progress resolution failed', error);
+        log.warn('nav-progress resolution failed', {
+          message: error?.message,
+          stack: error?.stack,
+        });
       }
     }
     try {
@@ -308,7 +345,10 @@ function attachNavigationHandlers(window, view, initialUrl) {
         tabId,
       });
     } catch (error) {
-      console.warn('nav-progress delivery failed', error);
+      log.warn('nav-progress delivery failed', {
+        message: error?.message,
+        stack: error?.stack,
+      });
     }
   });
 }
@@ -330,6 +370,7 @@ function createBrowserWindow({ parent = null, initialUrl = null, shadowEnabled =
 
   const targetUrl =
     typeof initialUrl === 'string' && initialUrl.trim().length > 0 ? initialUrl : resolveBrowserStartUrl();
+  log.info('Creating BrowserWindow', { targetUrl, shadowEnabled: Boolean(shadowEnabled) });
 
   const revealWindow = () => {
     if (!window.isDestroyed()) {
@@ -337,16 +378,24 @@ function createBrowserWindow({ parent = null, initialUrl = null, shadowEnabled =
     }
   };
 
-  window.once('ready-to-show', revealWindow);
+  window.once('ready-to-show', () => {
+    log.info('BrowserWindow ready to show', { windowId: window.id });
+    revealWindow();
+  });
   view.webContents.once('did-finish-load', revealWindow);
 
   view.webContents.loadURL(targetUrl).catch((error) => {
-    console.warn('initial load failed', error);
+    log.error('Initial BrowserView load failed', {
+      message: error?.message,
+      stack: error?.stack,
+      targetUrl,
+    });
   });
 
   shadowModeByWindow.set(window.id, Boolean(shadowEnabled));
 
   window.on('closed', () => {
+    log.info('BrowserWindow closed', { windowId: window.id });
     detachView();
     shadowModeByWindow.delete(window.id);
   });
@@ -360,6 +409,7 @@ async function createWindow(options = {}) {
   const requestedUrl = typeof options.initialUrl === 'string' ? options.initialUrl : null;
   const targetUrl = requestedUrl && requestedUrl.trim().length > 0 ? requestedUrl : resolveBrowserStartUrl();
   await waitForRenderer(targetUrl);
+  log.info('Launching main BrowserWindow', { targetUrl });
   mainWindow = createBrowserWindow({
     ...options,
     initialUrl: targetUrl,
@@ -368,6 +418,7 @@ async function createWindow(options = {}) {
 }
 
 app.whenReady().then(async () => {
+  log.info('Electron runtime ready (frontend shell)');
   ipcMain.on('shadow-mode:update', (event, payload) => {
     const sender = event?.sender;
     const win = sender ? BrowserWindow.fromWebContents(sender) : null;
@@ -379,6 +430,7 @@ app.whenReady().then(async () => {
 
   await createWindow();
   app.on('activate', () => {
+    log.info('Electron app activate event received');
     if (BrowserWindow.getAllWindows().length === 0) {
       void createWindow();
     }
@@ -386,6 +438,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  log.info('All BrowserWindows closed (frontend shell)');
   if (process.platform !== 'darwin') {
     app.quit();
   }

@@ -1,5 +1,7 @@
 import { createTextStreamResponse } from 'ai';
+import { randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
+import logger from '@shared/logger';
 
 export const runtime = 'nodejs';
 
@@ -181,7 +183,68 @@ function buildMessages(payload: unknown, fallbackText: string): Array<{ role: st
   return [];
 }
 
+const baseLogger = logger.child({ component: 'next-api' });
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __nextChatLoggerRegistered: boolean | undefined;
+}
+
+if (!globalThis.__nextChatLoggerRegistered) {
+  process.on('uncaughtException', (error: Error) => {
+    baseLogger.error('Uncaught exception in Next.js API process', {
+      message: error?.message,
+      stack: error?.stack,
+    });
+  });
+  process.on('unhandledRejection', (reason: unknown) => {
+    if (reason instanceof Error) {
+      baseLogger.error('Unhandled rejection in Next.js API process', {
+        message: reason.message,
+        stack: reason.stack,
+      });
+      return;
+    }
+    let serialized: string;
+    try {
+      serialized = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+    } catch {
+      serialized = String(reason);
+    }
+    baseLogger.error('Unhandled rejection in Next.js API process', { reason: serialized });
+  });
+  globalThis.__nextChatLoggerRegistered = true;
+}
+
+function withCorrelationLogger(correlationId: string | null) {
+  return correlationId ? baseLogger.child({ correlationId }) : baseLogger;
+}
+
 export async function POST(req: NextRequest) {
+  const correlationId = req.headers.get('x-correlation-id') ?? randomUUID();
+  const apiLogger = withCorrelationLogger(correlationId);
+  const method = req.method;
+  const path = req.nextUrl?.pathname ?? '/api/chat';
+  const startTime = Date.now();
+
+  apiLogger.info('Request start', { method, path });
+
+  const respond = (response: Response) => {
+    try {
+      response.headers.set('x-correlation-id', correlationId);
+    } catch {
+      // ignore header mutation issues
+    }
+    const durationMs = Date.now() - startTime;
+    apiLogger.info('Request complete', {
+      method,
+      path,
+      statusCode: response.status,
+      durationMs,
+    });
+    return response;
+  };
+
   let incoming: unknown = null;
   try {
     incoming = await req.json();
@@ -203,10 +266,12 @@ export async function POST(req: NextRequest) {
   const messagesPayload = buildMessages(inc.messages, text);
   const hasNonEmptyUser = messagesPayload.some((m) => m.role.toLowerCase() === 'user' && m.content.trim().length > 0);
   if (!hasNonEmptyUser) {
-    return new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return respond(
+      new Response(JSON.stringify({ error: 'EMPTY_MESSAGE' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
   }
 
   const accept = (req.headers.get('accept') || '').toLowerCase();
@@ -225,106 +290,128 @@ export async function POST(req: NextRequest) {
     stream,
   });
 
-  if (wantsNdjson) {
+  const upstreamHeaders = {
+    'Content-Type': 'application/json',
+    'X-Correlation-Id': correlationId,
+  };
+
+  try {
+    if (wantsNdjson) {
+      const upstream = await fetch(`${backend}/api/chat`, {
+        method: 'POST',
+        headers: {
+          ...upstreamHeaders,
+          Accept: 'application/x-ndjson',
+        },
+        body: JSON.stringify(makePayload(true)),
+      });
+
+      const error = await maybeReturnStreamingError(upstream);
+      if (error) return respond(error);
+
+      return respond(
+        new Response(upstream.body, {
+          status: upstream.status,
+          headers: {
+            'Content-Type': 'application/x-ndjson',
+            'Cache-Control': 'no-store',
+            'Access-Control-Expose-Headers': '*',
+          },
+        }),
+      );
+    }
+
+    if (wantsSse) {
+      const upstream = await fetch(`${backend}/api/chat/stream`, {
+        method: 'POST',
+        headers: {
+          ...upstreamHeaders,
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify(makePayload(true)),
+      });
+
+      const error = await maybeReturnStreamingError(upstream);
+      if (error) return respond(error);
+
+      return respond(
+        new Response(upstream.body, {
+          status: upstream.status,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+            'Access-Control-Expose-Headers': '*',
+          },
+        }),
+      );
+    }
+
     const upstream = await fetch(`${backend}/api/chat`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/x-ndjson',
+        ...upstreamHeaders,
+        Accept: 'application/json',
       },
-      body: JSON.stringify(makePayload(true)),
+      body: JSON.stringify(makePayload(false)),
     });
 
-    const error = await maybeReturnStreamingError(upstream);
-    if (error) return error;
+    if (!upstream.ok) {
+      const errorText = await upstream.text();
+      const headers = new Headers({
+        'Content-Type': upstream.headers.get('content-type') || 'application/json',
+      });
+      const modelHeader = upstream.headers.get('x-llm-model');
+      const requestId = upstream.headers.get('x-request-id');
+      if (modelHeader) headers.set('X-LLM-Model', modelHeader);
+      if (requestId) headers.set('X-Request-Id', requestId);
+      return respond(new Response(errorText, { status: upstream.status, headers }));
+    }
 
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: {
-        'Content-Type': 'application/x-ndjson',
-        'Cache-Control': 'no-store',
-        'Access-Control-Expose-Headers': '*',
-      },
-    });
-  }
+    const rawBody = await upstream.text();
+    let parsed: unknown = rawBody;
+    try {
+      parsed = JSON.parse(rawBody) as AnyRecord;
+    } catch {
+      // fall back to raw text
+    }
 
-  if (wantsSse) {
-    const upstream = await fetch(`${backend}/api/chat/stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(makePayload(true)),
-    });
+    const textResponse =
+      typeof parsed === 'string'
+        ? (parsed.length > 0 ? parsed : rawBody)
+        : (() => {
+            const candidate = formatResponseText(parsed, rawBody);
+            return candidate.length > 0 ? candidate : rawBody;
+          })();
 
-    const error = await maybeReturnStreamingError(upstream);
-    if (error) return error;
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Access-Control-Expose-Headers': '*',
-      },
-    });
-  }
-
-  const upstream = await fetch(`${backend}/api/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(makePayload(false)),
-  });
-
-  if (!upstream.ok) {
-    const errorText = await upstream.text();
     const headers = new Headers({
-      'Content-Type': upstream.headers.get('content-type') || 'application/json',
+      'Cache-Control': 'no-store',
+      'Access-Control-Expose-Headers': '*',
     });
     const modelHeader = upstream.headers.get('x-llm-model');
     const requestId = upstream.headers.get('x-request-id');
     if (modelHeader) headers.set('X-LLM-Model', modelHeader);
     if (requestId) headers.set('X-Request-Id', requestId);
-    return new Response(errorText, { status: upstream.status, headers });
+
+    const stream = new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue(textResponse);
+        controller.close();
+      },
+    });
+
+    return respond(createTextStreamResponse({ headers, textStream: stream }));
+  } catch (error) {
+    apiLogger.error('Unhandled error while processing chat request', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return respond(
+      new Response(JSON.stringify({ error: 'INTERNAL_SERVER_ERROR' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
   }
-
-  const rawBody = await upstream.text();
-  let parsed: unknown = rawBody;
-  try {
-    parsed = JSON.parse(rawBody) as AnyRecord;
-  } catch {
-    // fall back to raw text
-  }
-
-  const textResponse =
-    typeof parsed === 'string'
-      ? (parsed.length > 0 ? parsed : rawBody)
-      : (() => {
-          const candidate = formatResponseText(parsed, rawBody);
-          return candidate.length > 0 ? candidate : rawBody;
-        })();
-
-  const headers = new Headers({
-    'Cache-Control': 'no-store',
-    'Access-Control-Expose-Headers': '*',
-  });
-  const modelHeader = upstream.headers.get('x-llm-model');
-  const requestId = upstream.headers.get('x-request-id');
-  if (modelHeader) headers.set('X-LLM-Model', modelHeader);
-  if (requestId) headers.set('X-Request-Id', requestId);
-
-  const stream = new ReadableStream<string>({
-    start(controller) {
-      controller.enqueue(textResponse);
-      controller.close();
-    },
-  });
-
-  return createTextStreamResponse({ headers, textStream: stream });
 }

@@ -38,6 +38,7 @@
     "types",
     "vitest.config.ts",
     "vitest.setup.ts",
+    "middleware.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [
