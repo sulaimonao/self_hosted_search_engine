@@ -1,6 +1,6 @@
 models:
-  llm_primary: "gpt-oss"
-  llm_fallback: "gemma3"
+  llm_primary: "gemma3"
+  llm_fallback: "gpt-oss"
   embed: "embeddinggemma"
 ollama:
   base_url: "http://127.0.0.1:11434"

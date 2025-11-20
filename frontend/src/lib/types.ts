@@ -396,6 +396,13 @@ export interface SearchHit {
   score?: number | null;
   blendedScore?: number | null;
   lang?: string | null;
+   vectorScore?: number | null;
+   keywordScore?: number | null;
+   matchReason?: string | null;
+   source?: string | null;
+   domain?: string | null;
+   temp?: boolean;
+   about?: Record<string, unknown> | null;
 }
 
 export interface SearchIndexResponse {
@@ -417,6 +424,7 @@ export interface SearchIndexResponse {
   action?: string;
   candidates?: Array<Record<string, unknown>>;
   embedderStatus?: Record<string, unknown>;
+   weights?: Record<string, number> | null;
 }
 
 export interface JobLogEvent {

@@ -52,6 +52,16 @@ seeds/           Curated discovery registry (`docs/registry_structure.md`)
 Supporting assets live under `data/` at runtime. The directory is safe to delete
 while the services are stopped; the next boot will recreate it as needed.
 
+### Hybrid search & transparency
+
+- `/api/index/hybrid_search` blends Whoosh BM25 keywords with EmbeddingGemma
+  semantic matches using configurable weights and returns per-hit breakdowns
+  (`match_reason`, `keyword_score`, `vector_score`, `blended_score`) so the UI
+  can expose “about this result” details.
+- The Local Search panel includes a “Record browsing” toggle wired to the
+  shadow capture API and labels temporary vs library-backed results so you stay
+  in control of what is stored.
+
 ### Roadmap panel
 
 The Control Center exposes a Roadmap view at `/control-center/roadmap` that renders items from `config/roadmap.json`, merges user notes/status overrides stored in the SQLite runtime DB, and lets you trigger diagnostics to recompute live statuses. The canonical spec lives in `docs/roadmap_browser.md`.

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Mapping, Sequence
 import hashlib
 import json
 import os
 import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 import duckdb
 from chromadb.api.models.Collection import Collection
@@ -127,6 +127,7 @@ class RetrievedChunk:
     title: str | None
     url: str | None
     similarity: float
+    metadata: dict[str, Any]
 
 
 class VectorStore:
@@ -394,6 +395,7 @@ class VectorStore:
                         title=metadata.get("title"),
                         url=metadata.get("url"),
                         similarity=similarity,
+                        metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
                     )
                 )
             retrieved.sort(key=lambda chunk: chunk.similarity, reverse=True)

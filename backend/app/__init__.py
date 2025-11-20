@@ -346,8 +346,8 @@ def create_app() -> Flask:
     # RAG components
     # --------------------------------------------------------------------------
     rag_enabled = _as_bool(os.getenv("RAG_ENABLED"), default=False)
-    rag_model_primary = os.getenv("RAG_MODEL_PRIMARY", "gpt-oss").strip()
-    rag_model_fallback = os.getenv("RAG_MODEL_FALLBACK", "").strip() or None
+    rag_model_primary = os.getenv("RAG_MODEL_PRIMARY", "gemma3").strip()
+    rag_model_fallback = os.getenv("RAG_MODEL_FALLBACK", "gpt-oss").strip() or None
     rag_model_embed = os.getenv("RAG_MODEL_EMBED", "embeddinggemma").strip()
 
     engine_config = EngineConfig.from_yaml(CONFIG_PATH)

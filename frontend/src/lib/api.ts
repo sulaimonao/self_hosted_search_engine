@@ -985,6 +985,30 @@ function normalizeSearchPayload(
     const score = coerceNumber(entry.score);
     const blended = coerceNumber(entry.blended_score ?? entry.blendedScore);
     const lang = typeof entry.lang === "string" ? entry.lang : null;
+    const vectorScore = coerceNumber(entry.vector_score ?? entry.vectorScore);
+    const keywordScore = coerceNumber(
+      entry.keyword_score ?? entry.keywordScore ?? entry.bm25_score ?? entry.bm25Score,
+    );
+    const matchReason =
+      typeof entry.match_reason === "string"
+        ? entry.match_reason
+        : typeof entry.matchReason === "string"
+        ? entry.matchReason
+        : null;
+    const source =
+      typeof entry.source === "string"
+        ? entry.source
+        : typeof entry.source_type === "string"
+        ? entry.source_type
+        : null;
+    const domain = typeof entry.domain === "string" ? entry.domain : null;
+    const temp = typeof entry.temp === "boolean" ? entry.temp : undefined;
+    const about =
+      entry.about && typeof entry.about === "object"
+        ? (entry.about as Record<string, unknown>)
+        : entry.metadata && typeof entry.metadata === "object"
+        ? (entry.metadata as Record<string, unknown>)
+        : undefined;
     const identifierCandidate =
       typeof entry.id === "string" && entry.id.trim().length > 0
         ? entry.id.trim()
@@ -1002,6 +1026,13 @@ function normalizeSearchPayload(
       score,
       blendedScore: blended,
       lang,
+      vectorScore,
+      keywordScore,
+      matchReason,
+      source,
+      domain,
+      temp,
+      about: about ?? null,
     });
   });
 
@@ -1045,6 +1076,10 @@ function normalizeSearchPayload(
     payload.embedder_status && typeof payload.embedder_status === "object"
       ? (payload.embedder_status as Record<string, unknown>)
       : undefined;
+  const weights =
+    payload.weights && typeof payload.weights === "object"
+      ? (payload.weights as Record<string, number>)
+      : undefined;
 
   return {
     status,
@@ -1061,6 +1096,7 @@ function normalizeSearchPayload(
     action,
     candidates,
     embedderStatus,
+    weights: weights ?? null,
   };
 }
 

@@ -55,6 +55,7 @@ class SearchHit:
     title: str | None
     chunk: str
     score: float
+    metadata: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +63,7 @@ class SearchHit:
             "title": self.title,
             "chunk": self.chunk,
             "score": self.score,
+            "metadata": dict(self.metadata) if self.metadata is not None else None,
         }
 
 
@@ -276,6 +278,7 @@ class VectorIndexService:
                         title=item.title,
                         chunk=item.text,
                         score=float(item.similarity),
+                        metadata=getattr(item, "metadata", None),
                     )
                 )
             if span is not None:

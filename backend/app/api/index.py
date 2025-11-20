@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import re
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -58,76 +61,221 @@ def _coerce_metadata(value: Any) -> dict[str, Any] | None:
     return {str(key): item for key, item in value.items()}
 
 
+def _tokenize_query(query: str) -> list[str]:
+    terms = re.findall(r"[a-z0-9]+", (query or "").lower())
+    return [term for term in terms if term]
+
+
+def _highlight_terms(text: str, terms: list[str], *, limit: int = 360) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned or not terms:
+        return cleaned[:limit]
+    pattern = re.compile(r"(" + "|".join(re.escape(term) for term in terms) + r")", re.IGNORECASE)
+
+    def _mark(match: re.Match[str]) -> str:
+        return f"<mark>{match.group(0)}</mark>"
+
+    highlighted = pattern.sub(_mark, cleaned)
+    if len(highlighted) <= limit:
+        return highlighted
+    return highlighted[:limit] + "…"
+
+
+def _domain_from_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if parsed.hostname:
+        return parsed.hostname
+    return None
+
+
+def _normalize_weights(keyword_weight: float, vector_weight: float) -> tuple[float, float]:
+    kw = max(0.0, float(keyword_weight))
+    vec = max(0.0, float(vector_weight))
+    total = kw + vec
+    if total <= 0:
+        return 0.5, 0.5
+    return kw / total, vec / total
+
+
+HYBRID_BM25_WEIGHT = float(os.getenv("HYBRID_KEYWORD_WEIGHT", "0.6"))
+HYBRID_VECTOR_WEIGHT = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.4"))
+HYBRID_MAX_CANDIDATES = max(10, int(os.getenv("HYBRID_CANDIDATE_POOL", "40")))
+
+
 def _run_hybrid_search(
     query: str, *, k: int, filters: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     filters_dict = dict(filters or {})
-    vector_hits = _service().search(query, k=k, filters=filters_dict or None)
-    top_score = 0.0
-    for hit in vector_hits:
-        try:
-            score = float(hit.get("score") or 0.0)
-        except (TypeError, ValueError):
-            score = 0.0
-        if score > top_score:
-            top_score = score
-
-    keyword_hits: list[dict[str, Any]] = []
-    keyword_used = False
+    keyword_weight, vector_weight = _normalize_weights(
+        HYBRID_BM25_WEIGHT, HYBRID_VECTOR_WEIGHT
+    )
     search_service = current_app.config.get("SEARCH_SERVICE")
-    if (not vector_hits or top_score < 0.3) and search_service is not None:
+    keyword_hits: list[dict[str, Any]] = []
+    job_id = None
+    context: dict[str, Any] = {}
+    candidate_limit = min(max(k * 2, k + 5), HYBRID_MAX_CANDIDATES)
+    if search_service is not None:
         try:
-            whoosh_results, _job_id, _context = search_service.run_query(
+            keyword_hits, job_id, context = search_service.run_query(
                 query,
-                limit=k,
+                limit=candidate_limit,
                 use_llm=False,
                 model=None,
             )
         except Exception:  # pragma: no cover - defensive fallback
-            whoosh_results = []
-        if whoosh_results:
-            keyword_used = True
-            for item in whoosh_results:
-                keyword_hits.append(
-                    {
-                        "url": item.get("url"),
-                        "title": item.get("title"),
-                        "snippet": item.get("snippet"),
-                        "score": item.get("score"),
-                        "source": "keyword",
-                    }
-                )
+            keyword_hits = []
+            context = {}
+            job_id = None
 
-    combined: list[dict[str, Any]] = []
-    seen: set[str | None] = set()
-    for hit in vector_hits:
-        url = hit.get("url")
-        seen.add(url)
-        combined.append(
+    terms = _tokenize_query(query)
+    vector_hits: list[dict[str, Any]] = []
+    embed_error: dict[str, Any] | None = None
+    try:
+        vector_hits = _service().search(
+            query, k=candidate_limit, filters=filters_dict or None
+        )
+    except EmbedderUnavailableError as exc:
+        embed_error = {
+            "error": "embedding_unavailable",
+            "detail": exc.detail,
+            "model": exc.model,
+            "autopull_started": exc.autopull_started,
+        }
+        vector_hits = []
+
+    candidates: dict[str, dict[str, Any]] = {}
+    keyword_top_score = 0.0
+    for item in keyword_hits:
+        url = item.get("url")
+        if not url:
+            continue
+        bm25_score = float(item.get("blended_score") or item.get("score") or 0.0)
+        keyword_top_score = max(keyword_top_score, bm25_score)
+        entry = candidates.setdefault(
+            url,
             {
                 "url": url,
-                "title": hit.get("title"),
-                "snippet": hit.get("chunk"),
-                "score": hit.get("score"),
-                "source": "vector",
+                "title": item.get("title") or url,
+                "snippet": item.get("snippet") or "",
+                "lang": item.get("lang"),
+            },
+        )
+        entry["keyword_score"] = bm25_score
+        entry["source"] = "keyword"
+        entry["match_reason"] = "keyword"
+        entry["domain"] = _domain_from_url(url)
+
+    vector_top_score = 0.0
+    for item in vector_hits:
+        url = item.get("url")
+        if not url:
+            continue
+        vector_score = float(item.get("score") or 0.0)
+        vector_top_score = max(vector_top_score, vector_score)
+        snippet = _highlight_terms(item.get("chunk") or "", terms)
+        entry = candidates.setdefault(
+            url,
+            {
+                "url": url,
+                "title": item.get("title") or url,
+                "snippet": snippet,
+                "lang": item.get("lang"),
+            },
+        )
+        entry["vector_score"] = vector_score
+        entry["vector_snippet"] = snippet
+        entry["source"] = "semantic" if "keyword_score" in entry else "vector"
+        entry["domain"] = entry.get("domain") or _domain_from_url(url)
+        metadata = (
+            item.get("metadata") if isinstance(item, Mapping) else None
+        )
+        if isinstance(metadata, Mapping):
+            entry["metadata"] = dict(metadata)
+            if metadata.get("domain") and not entry.get("domain"):
+                entry["domain"] = str(metadata.get("domain"))
+            if "temp" in metadata:
+                entry["temp"] = bool(metadata.get("temp"))
+            if metadata.get("source"):
+                entry["source"] = str(metadata.get("source"))
+
+    combined: list[dict[str, Any]] = []
+    for url, entry in candidates.items():
+        kw_score = float(entry.get("keyword_score") or 0.0)
+        vec_score = float(entry.get("vector_score") or 0.0)
+        norm_kw = kw_score / keyword_top_score if keyword_top_score > 0 else 0.0
+        norm_vec = vec_score / vector_top_score if vector_top_score > 0 else 0.0
+        blended = (keyword_weight * norm_kw) + (vector_weight * norm_vec)
+        if kw_score > 0 and vec_score > 0:
+            match_reason = "keyword+semantic"
+        elif vec_score > 0:
+            match_reason = "semantic"
+        else:
+            match_reason = "keyword"
+        snippet = entry.get("snippet") or entry.get("vector_snippet") or ""
+        about_payload = {
+            "match_reason": match_reason,
+            "keyword_score": kw_score,
+            "vector_score": vec_score,
+            "normalized_keyword": norm_kw,
+            "normalized_vector": norm_vec,
+            "weights": {"keyword": keyword_weight, "vector": vector_weight},
+        }
+        combined.append(
+            {
+                "id": url,
+                "url": url,
+                "title": entry.get("title") or url,
+                "snippet": snippet,
+                "score": kw_score or vec_score,
+                "blended_score": blended,
+                "match_reason": match_reason,
+                "vector_score": vec_score,
+                "keyword_score": kw_score,
+                "source": entry.get("source"),
+                "lang": entry.get("lang"),
+                "domain": entry.get("domain"),
+                "temp": bool(entry.get("temp", False)),
+                "metadata": entry.get("metadata"),
+                "about": about_payload,
             }
         )
-    for hit in keyword_hits:
-        url = hit.get("url")
-        if url in seen:
-            continue
-        seen.add(url)
-        combined.append(hit)
 
-    return {
+    combined.sort(key=lambda item: item.get("blended_score", 0.0), reverse=True)
+    combined = combined[:k]
+
+    status = "ok"
+    detail = None
+    if embed_error:
+        status = "warming"
+        detail = embed_error.get("detail") or "Embedding model unavailable"
+
+    payload = {
+        "status": status,
+        "detail": detail,
         "query": query,
         "vector": vector_hits,
         "keyword": keyword_hits,
         "combined": combined,
+        "hits": combined,
         "filters": filters_dict,
-        "vector_top_score": top_score,
-        "keyword_fallback": keyword_used,
+        "vector_top_score": vector_top_score,
+        "keyword_top_score": keyword_top_score,
+        "keyword_fallback": bool(embed_error),
+        "weights": {"keyword": keyword_weight, "vector": vector_weight},
+        "job_id": job_id,
+        "confidence": context.get("confidence"),
+        "trigger_reason": context.get("trigger_reason"),
+        "seed_count": context.get("seed_count"),
     }
+    if embed_error:
+        payload["embedder_status"] = _service().embedding_status()
+        payload["code"] = "embedding_unavailable"
+    return payload
 
 
 @bp.post("/upsert")
