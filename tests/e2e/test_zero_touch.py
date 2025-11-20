@@ -11,6 +11,8 @@ from typing import Any
 
 from playwright.sync_api import Page, expect
 
+from tests.e2e.stack import ensure_zero_touch_stack
+
 API = "http://127.0.0.1:5050"
 WEB = "http://127.0.0.1:3100"
 CHAT_POST_RE = re.compile(r"/api/chat/[0-9a-fA-F-]{36}/message$")
@@ -29,6 +31,7 @@ def _json(url: str, timeout: float = 2.0) -> dict[str, Any]:
 def wait_for_health(max_wait_s: float = 90.0) -> None:
     """Poll the meta health endpoint until it reports ready."""
 
+    ensure_zero_touch_stack()
     start = time.time()
     while time.time() - start < max_wait_s:
         try:
@@ -151,13 +154,18 @@ def test_page_context_flag(page: Page) -> None:
 
     composer = None
     try:
-        composer = page.get_by_role("textbox").first
-        composer.fill("ping", timeout=5000)
+        # Prefer a stable test id if available.
+        composer = page.locator("[data-testid='chat-composer']").first
+        composer.fill("ping")
     except Exception:
         try:
-            page.fill("textarea, input[type='text']", "ping")
+            composer = page.get_by_role("textbox").first
+            composer.fill("ping")
         except Exception:
-            raise AssertionError("Unable to locate chat composer")
+            try:
+                page.fill("textarea, input[type='text']", "ping")
+            except Exception:
+                raise AssertionError("Unable to locate chat composer")
 
     def is_chat_post(request) -> bool:
         return request.method == "POST" and CHAT_POST_RE.search(request.url) is not None

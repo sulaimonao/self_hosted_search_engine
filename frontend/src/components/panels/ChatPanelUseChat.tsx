@@ -1111,7 +1111,14 @@ export default function ChatPanelUseChat({ inventory, selectedModel, threadId, o
           void handleSend();
         }}
       >
-  <Textarea value={input ?? ""} onChange={(e) => setInput(e.target.value)} placeholder={inventory ? "Ask the copilot" : "Ask the copilot"} rows={4} />
+        <Textarea
+          aria-label="Chat message"
+          data-testid="chat-composer"
+          value={input ?? ""}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={inventory ? "Ask the copilot" : "Ask the copilot"}
+          rows={4}
+        />
         <div className="flex items-center justify-between gap-2">
           {isBusy ? (
             <Button

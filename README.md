@@ -532,6 +532,11 @@ For iterative work, a quick smoke test is usually enough:
 pytest -q
 ```
 
+The `tests/e2e/test_zero_touch.py` suite now starts the Flask API and Next.js
+frontend automatically if they are not already listening on `5050/3100`. Logs
+land in `data/logs/zero_touch_{backend,frontend}.log`, and you can set
+`ZERO_TOUCH_SKIP_STACK=1` to opt out when you have a stack running elsewhere.
+
 The change-budget guard (`python scripts/change_budget.py`) enforces ≤10 files
 and ≤500 lines of churn for autonomous agents. Invoke it manually to validate
 local diffs before committing.

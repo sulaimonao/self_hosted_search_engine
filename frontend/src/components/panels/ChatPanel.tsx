@@ -1759,6 +1759,8 @@ export function ChatPanel(props: {
           ) : null}
           <form className="space-y-2" onSubmit={handleSubmit}>
             <Textarea
+              aria-label="Chat message"
+              data-testid="chat-composer"
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder={inputPlaceholder}

@@ -7,8 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 import { AiPanelHeader } from "@/components/ai/AiPanelHeader";
-import { ChatInput } from "@/components/ai/ChatInput";
-import { ChatMessageList } from "@/components/ai/ChatMessageList";
+import { ChatPanel as LegacyChatPanel } from "@/components/panels/ChatPanel";
 import { ContextPeek } from "@/components/ai/ContextPeek";
 import { TaskList } from "@/components/ai/TaskList";
 import { ThreadSummaryBar } from "@/components/ai/ThreadSummaryBar";
@@ -25,7 +24,7 @@ interface AiPanelProps {
 
 export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiPanelProps) {
   const collapsed = cn(
-    "hidden h-full shrink-0 border-l border-ai-border bg-ai-panel text-fg shadow-soft transition-all duration-normal ease-default lg:flex lg:flex-col",
+    "flex h-full shrink-0 border-l border-ai-border bg-ai-panel text-fg shadow-soft transition-all duration-normal ease-default flex-col",
     isOpen ? "w-[380px] p-4" : "w-12 items-center justify-between px-2 py-4",
   );
 
@@ -61,8 +60,7 @@ export function AiPanel({ isOpen, activeTab, onTabChange, onOpen, onClose }: AiP
           <TabsTrigger value="context">Context</TabsTrigger>
         </TabsList>
         <TabsContent value="chat" className="flex flex-1 flex-col overflow-hidden">
-          <ChatMessageList />
-          <ChatInput />
+          <LegacyChatPanel />
         </TabsContent>
         <TabsContent value="tasks" className="flex flex-1 flex-col overflow-hidden">
           <TaskList />
