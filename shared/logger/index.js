@@ -7,6 +7,24 @@ const DailyRotateFile = require('winston-daily-rotate-file');
 const SPLAT = Symbol.for('splat');
 const MESSAGE = Symbol.for('message');
 
+const ENV_NAME = (process.env.NODE_ENV || '').toLowerCase();
+const IS_DEV = ENV_NAME === '' || ENV_NAME === 'development' || ENV_NAME === 'dev';
+const DEFAULT_LOG_LEVEL = (process.env.LOG_LEVEL || (IS_DEV ? 'debug' : 'info')).toLowerCase();
+const DEFAULT_COMPONENT = process.env.LOG_COMPONENT || 'node';
+const MAX_JSONL_MESSAGE_LENGTH = Number.parseInt(process.env.LOG_MAX_MESSAGE_LENGTH || '2000', 10);
+const MAX_JSONL_STACK_LENGTH = Number.parseInt(process.env.LOG_MAX_STACK_LENGTH || '8000', 10);
+
+function truncateString(value, limit) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  if (!Number.isFinite(limit) || limit <= 0 || value.length <= limit) {
+    return value;
+  }
+  const truncated = value.slice(0, limit);
+  return `${truncated}…[truncated ${value.length - limit} chars]`;
+}
+
 function ensureDir(dirPath) {
   if (!dirPath) {
     return;
@@ -35,6 +53,14 @@ function resolveElectronLogDir() {
     console.warn('[logger] unable to resolve electron log dir', error);
   }
   return null;
+}
+
+function resolveEventName(info) {
+  const candidate = info.event || info.eventName || info.meta?.event;
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    return candidate.trim();
+  }
+  return 'log';
 }
 
 const RESOLVED_LOG_DIR = (() => {
@@ -74,6 +100,8 @@ function stripInternals(info) {
     'timestamp',
     'stack',
     'component',
+    'event',
+    'eventName',
     'correlationId',
     'correlation_id',
     'correlationID',
@@ -122,12 +150,17 @@ function textLineFormatter(info) {
   const correlationId = extractCorrelationId(info);
   const component = info.component || 'node';
   const level = String(info.level || 'info').toUpperCase();
+  const eventName = resolveEventName(info);
   const parts = [info.timestamp, `[${level}]`, `(${component})`];
   if (correlationId) {
     parts.push(`cid=${correlationId}`);
   }
+  if (eventName) {
+    parts.push(`evt=${eventName}`);
+  }
   const meta = safeMeta(info);
-  const message = info.stack || info.message || '';
+  const rawMessage = info.stack || info.message || '';
+  const message = truncateString(rawMessage, MAX_JSONL_MESSAGE_LENGTH);
   if (meta) {
     return `${parts.join(' ')} ${message} ${JSON.stringify(meta)}`.trim();
   }
@@ -136,15 +169,17 @@ function textLineFormatter(info) {
 
 function jsonLineFormatter(info) {
   const meta = safeMeta(info);
+  const eventName = resolveEventName(info);
   const payload = {
     timestamp: info.timestamp,
     level: String(info.level || 'info').toLowerCase(),
     component: info.component || 'node',
     correlation_id: extractCorrelationId(info),
-    message: info.message,
+    event: eventName,
+    message: truncateString(info.message, MAX_JSONL_MESSAGE_LENGTH),
   };
   if (info.stack) {
-    payload.stack = info.stack;
+    payload.stack = truncateString(info.stack, MAX_JSONL_STACK_LENGTH);
   }
   if (meta) {
     payload.meta = meta;
@@ -192,13 +227,20 @@ if (process.env.NODE_ENV !== 'production') {
           const meta = safeMeta(info);
           const correlationId = extractCorrelationId(info);
           const component = info.component || 'node';
+          const eventName = resolveEventName(info);
           const prefix = correlationId
             ? `[${info.level}] (${component}) cid=${correlationId}`
             : `[${info.level}] (${component})`;
-          if (!meta) {
-            return `${prefix} ${info.stack || info.message}`;
+          const suffixParts = [];
+          if (eventName) {
+            suffixParts.push(`evt=${eventName}`);
           }
-          return `${prefix} ${info.stack || info.message} ${JSON.stringify(meta)}`;
+          const renderedMessage = truncateString(info.stack || info.message, MAX_JSONL_MESSAGE_LENGTH);
+          suffixParts.push(renderedMessage);
+          if (meta) {
+            suffixParts.push(JSON.stringify(meta));
+          }
+          return `${prefix} ${suffixParts.join(' ')}`;
         }),
       ),
     }),
@@ -206,8 +248,8 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const logger = createLogger({
-  level: (process.env.LOG_LEVEL || 'info').toLowerCase(),
-  defaultMeta: { component: 'node' },
+  level: DEFAULT_LOG_LEVEL,
+  defaultMeta: { component: DEFAULT_COMPONENT },
   transports: transportList,
   exitOnError: false,
 });
@@ -228,3 +270,4 @@ module.exports.createComponentLogger = createComponentLogger;
 module.exports.withCorrelationId = withCorrelationId;
 module.exports.getLogDirectory = () => RESOLVED_LOG_DIR;
 module.exports.combineMessageAndSplat = combineMessageAndSplat;
+module.exports.truncateString = truncateString;

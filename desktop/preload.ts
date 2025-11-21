@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { randomUUID } from 'node:crypto';
 
 type BrowserNavError = {
   code?: number;
@@ -162,6 +163,25 @@ declare global {
   }
 }
 
+type CorrelatedPayload = Record<string, unknown> & { correlationId: string };
+
+function ensureCorrelationPayload(payload?: Record<string, unknown> | null): CorrelatedPayload {
+  const base: Record<string, unknown> =
+    payload && typeof payload === 'object' ? { ...payload } : Object.create(null);
+  const raw = typeof base.correlationId === 'string' ? base.correlationId.trim() : '';
+  const correlationId = raw || randomUUID();
+  base.correlationId = correlationId;
+  return base as CorrelatedPayload;
+}
+
+function invokeWithCorrelation<T = unknown>(channel: string, payload?: Record<string, unknown> | null) {
+  return ipcRenderer.invoke(channel, ensureCorrelationPayload(payload));
+}
+
+function sendWithCorrelation(channel: string, payload?: Record<string, unknown> | null): void {
+  ipcRenderer.send(channel, ensureCorrelationPayload(payload));
+}
+
 function spoofNavigator(): void {
   try {
     Object.defineProperty(navigator, 'webdriver', {
@@ -280,36 +300,36 @@ function createBrowserAPI(): BrowserAPI {
       if (!target) {
         return;
       }
-      ipcRenderer.send('nav:navigate', {
+      sendWithCorrelation('nav:navigate', {
         url: target,
         tabId: options?.tabId ?? null,
       });
     },
     goBack: (options) => {
-      ipcRenderer.send('nav:back', {
+      sendWithCorrelation('nav:back', {
         tabId: options?.tabId ?? null,
       });
     },
     goForward: (options) => {
-      ipcRenderer.send('nav:forward', {
+      sendWithCorrelation('nav:forward', {
         tabId: options?.tabId ?? null,
       });
     },
     reload: (options) => {
-      ipcRenderer.send('nav:reload', {
+      sendWithCorrelation('nav:reload', {
         tabId: options?.tabId ?? null,
         ignoreCache: options?.ignoreCache ?? false,
       });
     },
     createTab: (url, options) =>
-      ipcRenderer.invoke('browser:create-tab', {
+      invokeWithCorrelation('browser:create-tab', {
         url,
         incognito: options?.incognito ?? false,
       }),
-    closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', { tabId }),
+    closeTab: (tabId) => invokeWithCorrelation('browser:close-tab', { tabId }),
     setActiveTab: (tabId) => {
       if (typeof tabId === 'string' && tabId) {
-        ipcRenderer.send('browser:set-active', tabId);
+        sendWithCorrelation('browser:set-active', { tabId });
       }
     },
     setBounds: (bounds) => {
@@ -322,20 +342,20 @@ function createBrowserAPI(): BrowserAPI {
         width: Number.isFinite(bounds.width) ? Number(bounds.width) : 0,
         height: Number.isFinite(bounds.height) ? Number(bounds.height) : 0,
       };
-      ipcRenderer.send('browser:bounds', payload);
+      sendWithCorrelation('browser:bounds', payload);
     },
     onNavState: (handler) => subscribeBrowserChannel('nav:state', handler),
     onTabList: (handler) => subscribeBrowserChannel('browser:tabs', handler),
-    requestTabList: () => ipcRenderer.invoke('browser:request-tabs'),
+    requestTabList: () => invokeWithCorrelation('browser:request-tabs'),
     onHistoryEntry: (handler) => subscribeBrowserChannel('browser:history', handler),
     requestHistory: (limit) =>
-      ipcRenderer.invoke('browser:request-history', {
+      invokeWithCorrelation('browser:request-history', {
         limit: Number.isFinite(limit) ? Number(limit) : undefined,
       }),
     onSettings: (handler) => subscribeBrowserChannel('settings:state', handler),
-    getSettings: () => ipcRenderer.invoke('settings:get'),
-    updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch ?? {}),
-    getSpellcheckLanguages: () => ipcRenderer.invoke('settings:list-spellcheck-languages'),
+    getSettings: () => invokeWithCorrelation('settings:get'),
+    updateSettings: (patch) => invokeWithCorrelation('settings:update', patch ?? {}),
+    getSpellcheckLanguages: () => invokeWithCorrelation('settings:list-spellcheck-languages'),
   };
 
   return api;
@@ -343,19 +363,22 @@ function createBrowserAPI(): BrowserAPI {
 
 function exposeBridge() {
   const bridge: DesktopBridge = {
-    runSystemCheck: (options) => ipcRenderer.invoke('system-check:run', options ?? {}),
-    getLastSystemCheck: () => ipcRenderer.invoke('system-check:last'),
+    runSystemCheck: (options) => invokeWithCorrelation('system-check:run', options ?? {}),
+    getLastSystemCheck: () => invokeWithCorrelation('system-check:last'),
     openSystemCheckReport: async () => {
-      const result = await ipcRenderer.invoke('system-check:open-report');
+      const result = await invokeWithCorrelation('system-check:open-report');
       return result as DesktopOpenReportResult;
     },
     exportSystemCheckReport: async (options) => {
-      const result = await ipcRenderer.invoke('system-check:export-report', options ?? {});
+      const result = await invokeWithCorrelation('system-check:export-report', options ?? {});
       return result as DesktopExportDiagnosticsResult;
     },
     onSystemCheckEvent: (channel, handler) => subscribe(channel, handler),
-    shadowCapture: (payload) => ipcRenderer.invoke('shadow:capture', payload ?? {}),
-    indexSearch: (query) => ipcRenderer.invoke('index:search', query ?? ''),
+    shadowCapture: (payload) => invokeWithCorrelation('shadow:capture', payload ?? {}),
+    indexSearch: (query) => {
+      const normalized = typeof query === 'string' ? query : '';
+      return invokeWithCorrelation('index:search', { query: normalized });
+    },
     onShadowToggle: (handler) => {
       if (typeof handler !== 'function') {
         return noop;
@@ -390,7 +413,7 @@ function exposeBridge() {
         typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
           ? payload.tabId.trim()
           : null;
-      return ipcRenderer.invoke('llm:stream', { requestId, body, tabId });
+      return invokeWithCorrelation('llm:stream', { requestId, body, tabId });
     },
     onFrame: (handler: (payload: LlmFramePayload) => void) => {
       if (typeof handler !== 'function') {
@@ -419,13 +442,16 @@ function exposeBridge() {
           typeof payload.tabId === 'string' && payload.tabId.trim().length > 0
             ? payload.tabId.trim()
             : payload.tabId ?? null;
-        return ipcRenderer.invoke('llm:abort', { requestId, tabId });
+        return invokeWithCorrelation('llm:abort', { requestId, tabId });
       }
       if (typeof payload === 'string') {
         const trimmed = payload.trim();
-        return ipcRenderer.invoke('llm:abort', trimmed || null);
+        return invokeWithCorrelation('llm:abort', { requestId: trimmed || null });
       }
-      return ipcRenderer.invoke('llm:abort', payload ?? null);
+      if (payload === null || payload === undefined) {
+        return invokeWithCorrelation('llm:abort', {});
+      }
+      return invokeWithCorrelation('llm:abort', { value: payload });
     },
   });
 }

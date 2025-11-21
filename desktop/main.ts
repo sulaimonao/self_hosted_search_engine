@@ -21,7 +21,6 @@ type BrowserDiagnosticsReport = Record<string, unknown> & {
 };
 
 type SystemCheckResult = BrowserDiagnosticsReport | { skipped: true } | null;
-
 type SystemCheckRunOptions = {
   timeoutMs?: number;
   write?: boolean;
@@ -107,28 +106,25 @@ type BrowserSettings = {
   thirdPartyCookies: boolean;
   searchMode: 'auto' | 'query';
   spellcheckLanguage: string;
-  import {
-    app,
-    BrowserWindow,
-    BrowserView,
-    ipcMain,
-    Menu,
-    Rectangle,
-    session,
-    shell,
-    WebContents,
-  } from 'electron';
-  import path from 'node:path';
-  import fs from 'node:fs';
-  import { pathToFileURL, fileURLToPath } from 'node:url';
-  import { createRequire } from 'node:module';
+  proxy: {
+    mode: 'system' | 'manual';
+    host: string;
+    port: string;
+  };
+  openSearchExternally: boolean;
+};
 
-  declare global {
-    // eslint-disable-next-line no-var
-    var __desktopLoggerHandlersRegistered: boolean | undefined;
-  }
+declare global {
+  // eslint-disable-next-line no-var
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  var __desktopLoggerHandlersRegistered: boolean | undefined;
+}
+
+// Shared logger used across the Electron main process for structured logging.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
 const sharedLogger = require('../shared/logger');
 const log = sharedLogger.createComponentLogger('electron-main', { pid: process.pid });
+type ScopedLogger = ReturnType<typeof log.child>;
 
 if (!globalThis.__desktopLoggerHandlersRegistered) {
   process.on('uncaughtException', (error: Error) => {
@@ -156,6 +152,158 @@ if (!globalThis.__desktopLoggerHandlersRegistered) {
     });
   });
   globalThis.__desktopLoggerHandlersRegistered = true;
+}
+
+type UnwrappedIpcPayload = {
+  correlationId: string;
+  body: Record<string, unknown>;
+  raw: unknown;
+};
+
+function ensureCorrelationId(candidate?: string | null): string {
+  if (candidate && typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return `ipc_${randomUUID()}`;
+}
+
+function unwrapIpcPayload(payload: unknown): UnwrappedIpcPayload {
+  if (payload && typeof payload === 'object') {
+    const source = payload as Record<string, unknown>;
+    const correlationId = ensureCorrelationId(
+      typeof source.correlationId === 'string' ? source.correlationId : null,
+    );
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (key === 'correlationId') {
+        continue;
+      }
+      body[key] = value;
+    }
+    return { correlationId, body, raw: payload };
+  }
+  return { correlationId: ensureCorrelationId(null), body: {}, raw: payload };
+}
+
+function loggerWithCorrelation(correlationId: string) {
+  return correlationId ? log.child({ correlationId }) : log;
+}
+
+function applyCorrelationHeader(
+  headers: Record<string, string>,
+  correlationId: string,
+): Record<string, string> {
+  const nextHeaders = { ...headers };
+  if (correlationId) {
+    nextHeaders['X-Correlation-Id'] = correlationId;
+  }
+  return nextHeaders;
+}
+
+function summarizePayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const keys = Object.keys(payload);
+  if (keys.length === 0) {
+    return undefined;
+  }
+  const summary: Record<string, unknown> = { keys: keys.slice(0, 8) };
+  if (typeof payload.tabId === 'string') {
+    summary.tabId = payload.tabId;
+  }
+  if (typeof payload.url === 'string') {
+    const sanitized = payload.url.split('?')[0];
+    summary.url = sanitized.length > 120 ? `${sanitized.slice(0, 120)}…` : sanitized;
+  }
+  if (typeof payload.channel === 'string') {
+    summary.channel = payload.channel;
+  }
+  return summary;
+}
+
+type CorrelatedInvokeContext = {
+  event: Electron.IpcMainInvokeEvent;
+  payload: Record<string, unknown>;
+  raw: unknown;
+  correlationId: string;
+  logger: ScopedLogger;
+};
+
+type CorrelatedEventContext = {
+  event: Electron.IpcMainEvent;
+  payload: Record<string, unknown>;
+  raw: unknown;
+  correlationId: string;
+  logger: ScopedLogger;
+};
+
+function handleWithCorrelation(
+  channel: string,
+  handler: (ctx: CorrelatedInvokeContext) => Promise<unknown> | unknown,
+): void {
+  ipcMain.handle(channel, async (event, payload) => {
+    const { correlationId, body, raw } = unwrapIpcPayload(payload);
+    const scopedLogger = loggerWithCorrelation(correlationId);
+    const startedAt = Date.now();
+    scopedLogger.debug('IPC invoke start', {
+      event: 'ipc_invoke_start',
+      channel,
+      payload_summary: summarizePayload(body),
+    });
+    try {
+      const result = await handler({ event, payload: body, raw, correlationId, logger: scopedLogger });
+      scopedLogger.info('IPC invoke complete', {
+        event: 'ipc_invoke_complete',
+        channel,
+        duration_ms: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      scopedLogger.error('IPC invoke error', {
+        event: 'ipc_invoke_error',
+        channel,
+        duration_ms: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
+}
+
+function onWithCorrelation(
+  channel: string,
+  handler: (ctx: CorrelatedEventContext) => void,
+): void {
+  ipcMain.on(channel, (event, payload) => {
+    const { correlationId, body, raw } = unwrapIpcPayload(payload);
+    const scopedLogger = loggerWithCorrelation(correlationId);
+    const startedAt = Date.now();
+    scopedLogger.debug('IPC event received', {
+      event: 'ipc_event_start',
+      channel,
+      payload_summary: summarizePayload(body),
+    });
+    try {
+      handler({ event, payload: body, raw, correlationId, logger: scopedLogger });
+      scopedLogger.debug('IPC event handled', {
+        event: 'ipc_event_complete',
+        channel,
+        duration_ms: Date.now() - startedAt,
+      });
+    } catch (error) {
+      scopedLogger.error('IPC event handler error', {
+        event: 'ipc_event_error',
+        channel,
+        duration_ms: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
 }
 
 const DEFAULT_FRONTEND_ORIGIN = (() => {
@@ -762,7 +910,7 @@ async function syncHistoryEntry(entry: BrowserHistoryEntry): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/history/visit`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: applyCorrelationHeader({ ...JSON_HEADERS }, ensureCorrelationId(null)),
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -1383,28 +1531,27 @@ app.on('window-all-closed', () => {
   }
 });
 
-ipcMain.handle('settings:get', async () => runtimeSettings);
+handleWithCorrelation('settings:get', async () => runtimeSettings);
 
-ipcMain.handle('settings:update', async (_event, patch: Partial<BrowserSettings> | null | undefined) => {
+handleWithCorrelation('settings:update', async ({ payload }) => {
+  const patch = (payload ?? null) as Partial<BrowserSettings> | null | undefined;
   await updateRuntimeSettings(patch);
   return runtimeSettings;
 });
 
-ipcMain.handle('settings:list-spellcheck-languages', async () => listAvailableSpellcheckLanguages());
+handleWithCorrelation('settings:list-spellcheck-languages', async () => listAvailableSpellcheckLanguages());
 
-ipcMain.handle(
+handleWithCorrelation(
   'llm:stream',
-  async (
-    event,
-    payload:
+  async ({ event, payload, logger: scopedLogger, correlationId }) => {
+    const requestPayload = (payload ?? {}) as
       | { requestId?: string | null; body?: Record<string, unknown> | null; tabId?: string | null }
-      | undefined,
-  ) => {
+      | undefined;
     const sender = event.sender;
     const contentsId = sender.id;
-    const baseId = typeof payload?.requestId === 'string' ? payload.requestId.trim() : '';
+    const baseId = typeof requestPayload?.requestId === 'string' ? requestPayload.requestId.trim() : '';
     const requestId = baseId || randomUUID();
-    const rawBody = payload?.body && typeof payload.body === 'object' ? payload.body : {};
+    const rawBody = requestPayload?.body && typeof requestPayload.body === 'object' ? requestPayload.body : {};
     const body: Record<string, unknown> = { ...(rawBody as Record<string, unknown>) };
     if (typeof body['request_id'] !== 'string') {
       body['request_id'] = requestId;
@@ -1413,7 +1560,7 @@ ipcMain.handle(
 
     const controller = new AbortController();
     const tabKey = normalizeTabKey(
-      payload?.tabId ?? (body['tab_id'] as string | number | undefined),
+      requestPayload?.tabId ?? (body['tab_id'] as string | number | undefined),
       contentsId,
     );
     const registry = ensureLlmStreamRegistry(contentsId);
@@ -1437,7 +1584,10 @@ ipcMain.handle(
     try {
       const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
         method: 'POST',
-        headers: { ...JSON_HEADERS, Accept: 'text/event-stream' },
+        headers: applyCorrelationHeader(
+          { ...JSON_HEADERS, Accept: 'text/event-stream' } as Record<string, string>,
+          correlationId,
+        ),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -1484,6 +1634,13 @@ ipcMain.handle(
         errorPayload['timeout_ms'] = LLM_STREAM_INACTIVITY_MS;
       }
       sendSseError(sender, requestId, errorPayload);
+      scopedLogger.warn('llm stream terminated', {
+        event: 'ipc_llm_stream_error',
+        aborted,
+        timedOut,
+        requestId,
+        error: fallbackMessage,
+      });
       return { ok: false, error: errorCode, aborted, timeout: timedOut };
     } finally {
       const current = registry.get(tabKey);
@@ -1496,48 +1653,37 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle(
+handleWithCorrelation(
   'llm:abort',
-  (
-    event,
-    payload:
-      | { requestId?: string | null; tabId?: string | null }
-      | string
-      | null
-      | undefined,
-  ) => {
+  ({ event, payload, raw, logger: scopedLogger }) => {
     const contentsId = event.sender.id;
     const registry = activeLlmStreams.get(contentsId);
     if (!registry || registry.size === 0) {
+      scopedLogger.debug('llm:abort no active streams', {
+        event: 'ipc_llm_abort_idle',
+      });
       return { ok: false, active: false };
     }
-    let requestedId: string | null = null;
-    let requestedTab: string | null = null;
-    if (typeof payload === 'string') {
-      const trimmed = payload.trim();
-      requestedId = trimmed || null;
-    } else if (payload === null || payload === undefined) {
-      requestedId = null;
-    } else if (typeof payload === 'object') {
-      if ('requestId' in payload) {
-        const raw = payload.requestId;
-        if (typeof raw === 'string') {
-          const trimmed = raw.trim();
-          requestedId = trimmed || null;
-        } else if (raw === null) {
-          requestedId = null;
+    const requestedId = (() => {
+      const candidate = payload?.requestId;
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          return trimmed;
         }
       }
-      if ('tabId' in payload) {
-        const rawTab = payload.tabId;
-        if (typeof rawTab === 'string') {
-          const trimmedTab = rawTab.trim();
-          requestedTab = trimmedTab || null;
-        } else if (rawTab === null) {
-          requestedTab = null;
+      if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed) {
+          return trimmed;
         }
       }
-    }
+      return null;
+    })();
+    const requestedTab =
+      typeof payload?.tabId === 'string' && payload.tabId.trim().length > 0
+        ? payload.tabId.trim()
+        : null;
 
     let targetEntry: ActiveLlmStreamEntry | undefined;
     let tabKey: string | null = null;
@@ -1562,6 +1708,11 @@ ipcMain.handle(
     }
 
     if (!targetEntry || !tabKey) {
+      scopedLogger.debug('llm:abort target not found', {
+        event: 'ipc_llm_abort_miss',
+        requestId: requestedId,
+        tabKey: requestedTab,
+      });
       if (requestedId) {
         return { ok: false, mismatch: true };
       }
@@ -1573,62 +1724,70 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle('shadow:capture', async (_evt, payload) => {
+handleWithCorrelation('shadow:capture', async ({ payload, correlationId, logger: scopedLogger }) => {
+  const normalized =
+    payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : ({} as Record<string, unknown>);
   try {
     const response = await fetch(`${API_BASE_URL}/api/shadow/snapshot`, {
       method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload ?? {}),
+      headers: applyCorrelationHeader({ ...JSON_HEADERS }, correlationId),
+      body: JSON.stringify(normalized),
     });
     return {
       ok: response.ok,
       status: response.status,
       data: await safeJson(response),
     };
-  } catch (error: unknown) {
-    log.error('shadow:capture failed', error);
+  } catch (error) {
+    scopedLogger.error('shadow:capture failed', error);
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 
-ipcMain.handle('browser:create-tab', async (_event, payload: { url?: string } | undefined) => {
+handleWithCorrelation('browser:create-tab', async ({ payload }) => {
   const url = typeof payload?.url === 'string' ? payload.url : undefined;
   return createBrowserTab(url, { activate: true });
 });
 
-ipcMain.handle('browser:close-tab', async (_event, payload: { tabId?: string } | undefined) => {
+handleWithCorrelation('browser:close-tab', async ({ payload }) => {
   const tabId = typeof payload?.tabId === 'string' ? payload.tabId : '';
   return { ok: tabId ? closeBrowserTab(tabId) : false };
 });
 
-ipcMain.handle('browser:request-tabs', async () => snapshotTabList());
+handleWithCorrelation('browser:request-tabs', async () => snapshotTabList());
 
-ipcMain.handle('browser:request-history', async (_event, payload: { limit?: number } | number | null | undefined) => {
-  const rawLimit = typeof payload === 'number' ? payload : typeof payload === 'object' && payload !== null ? payload.limit : undefined;
-  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(Number(rawLimit), MAX_HISTORY_ENTRIES)) : 100;
+handleWithCorrelation('browser:request-history', async ({ payload, raw }) => {
+  const candidate = typeof payload?.limit === 'number' ? payload.limit : Number(raw);
+  const limit = Number.isFinite(candidate)
+    ? Math.max(1, Math.min(Number(candidate), MAX_HISTORY_ENTRIES))
+    : 100;
   const slice = historyEntries.slice(-limit);
   return slice.reverse();
 });
 
-ipcMain.on('browser:set-active', (_event, tabId: unknown) => {
-  if (typeof tabId === 'string' && tabId) {
-    setActiveTab(tabId);
+onWithCorrelation('browser:set-active', ({ payload }) => {
+  if (typeof payload?.tabId === 'string' && payload.tabId) {
+    setActiveTab(payload.tabId);
   }
 });
 
-ipcMain.on('browser:bounds', (_event, bounds: BrowserBounds) => {
-  if (bounds && typeof bounds === 'object') {
-    updateBrowserBounds(bounds);
+onWithCorrelation('browser:bounds', ({ payload }) => {
+  if (payload && typeof payload === 'object') {
+    updateBrowserBounds(payload as BrowserBounds);
   }
 });
 
-ipcMain.on('nav:navigate', (_event, payload: { url?: string; tabId?: string | null } | undefined) => {
+onWithCorrelation('nav:navigate', ({ payload, logger: scopedLogger }) => {
   const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
   if (!url) {
     return;
   }
   const tab = resolveTabFromId(payload?.tabId ?? null);
   if (!tab) {
+    scopedLogger.debug('nav:navigate tab not found', {
+      event: 'nav_navigate_tab_missing',
+      requested: payload?.tabId ?? null,
+    });
     return;
   }
   tab.isLoading = true;
@@ -1636,7 +1795,7 @@ ipcMain.on('nav:navigate', (_event, payload: { url?: string; tabId?: string | nu
   tab.lastUrl = url;
   emitNavState(tab);
   void tab.view.webContents.loadURL(url).catch((error) => {
-    log.warn('Failed to navigate tab', { tabId: tab.id, url, error });
+    scopedLogger.warn('Failed to navigate tab', { tabId: tab.id, url, error: String(error) });
     tab.isLoading = false;
     tab.lastError = {
       description: error instanceof Error ? error.message : String(error),
@@ -1645,9 +1804,13 @@ ipcMain.on('nav:navigate', (_event, payload: { url?: string; tabId?: string | nu
   });
 });
 
-ipcMain.on('nav:back', (_event, payload: { tabId?: string | null } | undefined) => {
+onWithCorrelation('nav:back', ({ payload, logger: scopedLogger }) => {
   const tab = resolveTabFromId(payload?.tabId ?? null);
   if (!tab) {
+    scopedLogger.debug('nav:back tab missing', {
+      event: 'nav_back_tab_missing',
+      requested: payload?.tabId ?? null,
+    });
     return;
   }
   if (tab.view.webContents.canGoBack()) {
@@ -1656,9 +1819,13 @@ ipcMain.on('nav:back', (_event, payload: { tabId?: string | null } | undefined) 
   emitNavState(tab);
 });
 
-ipcMain.on('nav:forward', (_event, payload: { tabId?: string | null } | undefined) => {
+onWithCorrelation('nav:forward', ({ payload, logger: scopedLogger }) => {
   const tab = resolveTabFromId(payload?.tabId ?? null);
   if (!tab) {
+    scopedLogger.debug('nav:forward tab missing', {
+      event: 'nav_forward_tab_missing',
+      requested: payload?.tabId ?? null,
+    });
     return;
   }
   if (tab.view.webContents.canGoForward()) {
@@ -1667,9 +1834,13 @@ ipcMain.on('nav:forward', (_event, payload: { tabId?: string | null } | undefine
   emitNavState(tab);
 });
 
-ipcMain.on('nav:reload', (_event, payload: { tabId?: string | null; ignoreCache?: boolean } | undefined) => {
+onWithCorrelation('nav:reload', ({ payload, logger: scopedLogger }) => {
   const tab = resolveTabFromId(payload?.tabId ?? null);
   if (!tab) {
+    scopedLogger.debug('nav:reload tab missing', {
+      event: 'nav_reload_tab_missing',
+      requested: payload?.tabId ?? null,
+    });
     return;
   }
   tab.isLoading = true;
@@ -1680,39 +1851,51 @@ ipcMain.on('nav:reload', (_event, payload: { tabId?: string | null; ignoreCache?
       tab.view.webContents.reload();
     }
   } catch (error) {
-    log.warn('Failed to reload tab', { tabId: tab.id, error });
+    scopedLogger.warn('Failed to reload tab', { tabId: tab.id, error: String(error) });
     tab.isLoading = false;
   }
   emitNavState(tab);
 });
 
-ipcMain.handle('index:search', async (_evt, query: string) => {
+handleWithCorrelation('index:search', async ({ payload, raw, correlationId, logger: scopedLogger }) => {
+  const queryValue = (() => {
+    if (typeof payload?.query === 'string' && payload.query.trim().length > 0) {
+      return payload.query.trim();
+    }
+    if (typeof raw === 'string' && raw.trim().length > 0) {
+      return raw.trim();
+    }
+    return '';
+  })();
   try {
     const url = new URL(`${API_BASE_URL}/api/index/search`);
-    if (typeof query === 'string' && query.trim().length > 0) {
-      url.searchParams.set('q', query);
+    if (queryValue) {
+      url.searchParams.set('q', queryValue);
     }
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: applyCorrelationHeader({}, correlationId),
+    });
     return {
       ok: response.ok,
       status: response.status,
       data: await safeJson(response),
     };
   } catch (error: unknown) {
-    log.error('index:search failed', error);
+    scopedLogger.error('index:search failed', error);
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 
-ipcMain.handle('system-check:run', async (_event, rawOptions = {}) => {
+handleWithCorrelation('system-check:run', async ({ payload, logger: scopedLogger }) => {
   if (process.env.SKIP_SYSTEM_CHECK === '1') {
+    scopedLogger.info('system-check:run skipped via env flag', { event: 'system_check_skipped_env' });
     return { skipped: true };
   }
   const options: SystemCheckRunOptions = {};
-  if (typeof rawOptions.timeoutMs === 'number' && Number.isFinite(rawOptions.timeoutMs)) {
-    options.timeoutMs = rawOptions.timeoutMs;
+  if (typeof payload?.timeoutMs === 'number' && Number.isFinite(payload.timeoutMs)) {
+    options.timeoutMs = payload.timeoutMs;
   }
-  if (rawOptions.write === false) {
+  if (payload?.write === false) {
     options.write = false;
   }
   try {
@@ -1720,31 +1903,37 @@ ipcMain.handle('system-check:run', async (_event, rawOptions = {}) => {
     return report ?? null;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    log.warn('system-check:run failed', message);
+    scopedLogger.warn('system-check:run failed', { event: 'system_check_run_failed', message });
     throw error instanceof Error ? error : new Error(message);
   }
 });
 
-ipcMain.handle('system-check:last', async () => {
+handleWithCorrelation('system-check:last', async ({ logger: scopedLogger }) => {
   try {
     await ensureInitialSystemCheck();
   } catch (error) {
-    log.warn('system-check:last initial check failed', error);
+    scopedLogger.warn('system-check:last initial check failed', {
+      event: 'system_check_last_bootstrap_failed',
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
   return lastSystemCheck;
 });
 
-ipcMain.handle('system-check:open-report', async () => openSystemCheckReport());
+handleWithCorrelation('system-check:open-report', async () => openSystemCheckReport());
 
-ipcMain.handle('system-check:export-report', async (_event, rawOptions = {}) => {
+handleWithCorrelation('system-check:export-report', async ({ payload, logger: scopedLogger }) => {
   if (process.env.SKIP_SYSTEM_CHECK === '1') {
+    scopedLogger.info('system-check:export-report skipped via env flag', {
+      event: 'system_check_export_skipped_env',
+    });
     return { ok: false, skipped: true };
   }
   const options: SystemCheckRunOptions = {};
-  if (typeof rawOptions.timeoutMs === 'number' && Number.isFinite(rawOptions.timeoutMs)) {
-    options.timeoutMs = rawOptions.timeoutMs;
+  if (typeof payload?.timeoutMs === 'number' && Number.isFinite(payload.timeoutMs)) {
+    options.timeoutMs = payload.timeoutMs;
   }
-  if (rawOptions.write === false) {
+  if (payload?.write === false) {
     options.write = false;
   }
   return exportSystemCheckReport(options);

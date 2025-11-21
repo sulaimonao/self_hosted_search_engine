@@ -16,6 +16,9 @@ _LOG_CONFIGURED = False
 _REQUEST_LOGGER_NAME = "flask.api"
 _ROOT_DIR = Path(__file__).resolve().parents[2]
 _DEFAULT_LOG_DIR = _ROOT_DIR / "logs"
+_DEFAULT_COMPONENT = os.getenv("LOG_COMPONENT", "flask-api")
+_MAX_MESSAGE_LENGTH = int(os.getenv("LOG_MAX_MESSAGE_LENGTH", "2000"))
+_MAX_STACK_LENGTH = int(os.getenv("LOG_MAX_STACK_LENGTH", "8000"))
 
 
 def _log_dir() -> Path:
@@ -25,8 +28,63 @@ def _log_dir() -> Path:
 
 
 def _resolve_level() -> int:
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    explicit = os.getenv("LOG_LEVEL")
+    if explicit:
+        level_name = explicit.upper()
+    else:
+        level_name = "DEBUG" if _is_dev_environment() else "INFO"
     return getattr(logging, level_name, logging.INFO)
+
+
+def _is_dev_environment() -> bool:
+    for key in ("FLASK_ENV", "APP_ENV", "ENV", "NODE_ENV"):
+        value = os.getenv(key)
+        if not value:
+            continue
+        normalized = value.strip().lower()
+        if normalized in {"dev", "development", "local"}:
+            return True
+        if normalized in {"prod", "production"}:
+            return False
+    flask_debug = os.getenv("FLASK_DEBUG")
+    if flask_debug and flask_debug not in {"0", "false", "False"}:
+        return True
+    return False
+
+
+def _truncate(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    if limit <= 0 or len(value) <= limit:
+        return value
+    suffix = f"…[truncated {len(value) - limit} chars]"
+    return f"{value[:limit]}{suffix}"
+
+
+def _resolve_event(record: logging.LogRecord) -> str:
+    for attr in ("event", "event_name", "eventName"):
+        value = getattr(record, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    meta = getattr(record, "meta", None)
+    if isinstance(meta, dict):
+        event = meta.get("event")
+        if isinstance(event, str) and event.strip():
+            return event.strip()
+    return "log"
+
+
+def _safe_meta(record: logging.LogRecord) -> Optional[dict[str, Any]]:
+    meta = getattr(record, "meta", None)
+    if meta is None:
+        return None
+    if isinstance(meta, dict):
+        try:
+            json.dumps(meta)
+            return meta
+        except TypeError:
+            return {"repr": repr(meta)}
+    return {"value": repr(meta)}
 
 
 class CorrelationIdFilter(logging.Filter):
@@ -50,26 +108,48 @@ class JsonlFormatter(logging.Formatter):
     """Formatter that renders each record as a single JSON object."""
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401 - override signature
+        message = record.getMessage()
         payload: dict[str, Any] = {
             "timestamp": self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S"),
             "level": record.levelname.lower(),
-            "component": getattr(record, "component", "flask-api"),
+            "component": getattr(record, "component", _DEFAULT_COMPONENT),
             "correlation_id": getattr(record, "correlation_id", None),
-            "message": record.getMessage(),
+            "event": _resolve_event(record),
+            "message": _truncate(message, _MAX_MESSAGE_LENGTH),
         }
         if record.exc_info:
-            payload["stack"] = self.formatException(record.exc_info)
-        meta = getattr(record, "meta", None)
+            payload["stack"] = _truncate(self.formatException(record.exc_info), _MAX_STACK_LENGTH)
+        meta = _safe_meta(record)
         if meta:
             payload["meta"] = meta
         return json.dumps(payload, ensure_ascii=False)
 
 
+class PlainFormatter(logging.Formatter):
+    """Formatter used for the human-readable rotating log."""
+
+    def format(self, record: logging.LogRecord) -> str:  # noqa: D401 - override signature
+        timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
+        component = getattr(record, "component", _DEFAULT_COMPONENT)
+        correlation_id = getattr(record, "correlation_id", None)
+        event_name = _resolve_event(record)
+        message = record.getMessage()
+        rendered_message = _truncate(message, _MAX_MESSAGE_LENGTH)
+        if record.exc_info:
+            rendered_message = _truncate(self.formatException(record.exc_info), _MAX_STACK_LENGTH)
+        parts = [timestamp, f"[{record.levelname}]", f"({component})"]
+        if correlation_id:
+            parts.append(f"cid={correlation_id}")
+        if event_name:
+            parts.append(f"evt={event_name}")
+        meta = _safe_meta(record)
+        if meta:
+            return f"{' '.join(parts)} {rendered_message} {json.dumps(meta, ensure_ascii=False)}"
+        return f"{' '.join(parts)} {rendered_message}"
+
+
 def _plain_formatter() -> logging.Formatter:
-    return logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(correlation_id)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    return PlainFormatter()
 
 
 def _build_namer(extension: str):

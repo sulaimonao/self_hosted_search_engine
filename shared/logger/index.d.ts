@@ -9,3 +9,4 @@ export declare function createComponentLogger(component: string, meta?: Record<s
 export declare function withCorrelationId(baseLogger: Logger, correlationId?: string | null | undefined): Logger;
 export declare function getLogDirectory(): string;
 export declare const combineMessageAndSplat: Format;
+export declare function truncateString(value: string, limit?: number): string;
