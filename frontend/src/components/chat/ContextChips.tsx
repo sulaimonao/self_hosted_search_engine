@@ -29,6 +29,37 @@ const scopeOptions: Array<{ value: IndexScope; label: string; description: strin
   { value: "page", label: "Single page", description: "Treat the URL as a standalone snapshot." },
 ];
 
+const scopeLabels: Record<IndexScope, string> = {
+  domain: "Domain",
+  site: "Site",
+  page: "Single page",
+};
+
+type SnapshotJobResponse = {
+  jobId?: string | null;
+  status?: string | null;
+  phase?: string | null;
+  url?: string | null;
+  message?: string | null;
+};
+
+type SiteJobResponse = {
+  jobId?: string | null;
+  status?: string | null;
+  created?: string | null;
+  scope?: string | null;
+  query?: string | null;
+};
+
+function describeTarget(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || url;
+  } catch {
+    return url;
+  }
+}
+
 function withDefaults(context: ChatContext): ChatContext {
   return {
     page: context.page ?? null,
@@ -255,6 +286,73 @@ export function ContextChips({ activeUrl, value, onChange }: ContextChipsProps) 
       setDiagLoading(false);
     }
   }, [toast, updateContext]);
+
+  const handleIndexPage = useCallback(async () => {
+    const targetUrl = resolvedPageUrl?.trim();
+    if (!targetUrl) {
+      toast({
+        title: "No URL to index",
+        description: "Open a page in the browser to queue it for indexing.",
+        variant: "warning",
+      });
+      return;
+    }
+    setIndexingPage(true);
+    try {
+      const payload = await apiClient.post<SnapshotJobResponse>("/api/index/snapshot", { url: targetUrl });
+      toast({
+        title: "Page queued",
+        description: payload.message ?? `Queued snapshot for ${describeTarget(targetUrl)}.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Unable to index page",
+        description: error instanceof Error ? error.message : "Unexpected error while queuing snapshot",
+        variant: "destructive",
+      });
+    } finally {
+      setIndexingPage(false);
+    }
+  }, [resolvedPageUrl, toast]);
+
+  const handleIndexSite = useCallback(async () => {
+    const targetUrl = indexUrl.trim();
+    if (!targetUrl) {
+      toast({
+        title: "URL required",
+        description: "Enter a valid URL before queuing a crawl.",
+        variant: "warning",
+      });
+      return;
+    }
+    setIndexingSite(true);
+    try {
+      if (indexScope === "page") {
+        const payload = await apiClient.post<SnapshotJobResponse>("/api/index/snapshot", { url: targetUrl });
+        toast({
+          title: "Page queued",
+          description: payload.message ?? `Queued snapshot for ${describeTarget(targetUrl)}.`,
+        });
+      } else {
+        const payload = await apiClient.post<SiteJobResponse>("/api/index/site", { url: targetUrl, scope: indexScope });
+        const label = scopeLabels[indexScope] ?? indexScope;
+        const detail = payload.jobId ? `Job ${payload.jobId}` : "Crawl job";
+        toast({
+          title: `${label} crawl queued`,
+          description: `${detail} scheduled for ${describeTarget(targetUrl)}.`,
+        });
+      }
+      setDialogOpen(false);
+    } catch (error) {
+      toast({
+        title: "Unable to queue index job",
+        description: error instanceof Error ? error.message : "Unexpected error while queuing crawl",
+        variant: "destructive",
+      });
+    } finally {
+      setIndexingSite(false);
+    }
+  }, [indexScope, indexUrl, toast]);
 
   const chips = useMemo(() => {
     const entries: Array<{ key: string; label: string; detail?: string; removable?: boolean; onRemove?: () => void; extra?: ReactNode }> = [];

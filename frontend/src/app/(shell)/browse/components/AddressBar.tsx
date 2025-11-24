@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useMemo, useState } from "react";
 import { CircleDotIcon, Loader2Icon, SparklesIcon } from "lucide-react";
 
@@ -62,9 +63,11 @@ export function AddressBar() {
     <div className="flex items-center gap-3 rounded-md border border-border-subtle bg-app-card-subtle px-3 py-2">
       <div className="flex flex-1 items-center gap-2 truncate text-sm">
         {domain ? (
-          <img
+          <Image
             src={`https://www.google.com/s2/favicons?domain=${domain}`}
             alt=""
+            width={16}
+            height={16}
             className="h-4 w-4 rounded-sm"
             referrerPolicy="no-referrer"
           />

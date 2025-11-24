@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { BellIcon, CircleDotIcon, CommandIcon, HelpCircleIcon, PlusIcon, SparklesIcon } from "lucide-react";
 import { useMemo } from "react";
 
@@ -41,9 +42,11 @@ export function TopBar({ onCommandPalette, aiPanelOpen, onToggleAiPanel }: TopBa
         <div className="flex flex-1 items-center gap-3 lg:max-w-sm">
           <div className="flex w-full items-center gap-2 rounded-md border border-border-subtle bg-app-input px-3 py-2 text-left text-sm">
             {domain ? (
-              <img
+              <Image
                 src={`https://www.google.com/s2/favicons?domain=${domain}`}
                 alt=""
+                width={16}
+                height={16}
                 className="h-4 w-4 rounded-sm"
                 referrerPolicy="no-referrer"
               />
