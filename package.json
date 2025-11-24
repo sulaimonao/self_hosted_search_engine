@@ -54,6 +54,7 @@
     "@ai-sdk/react": "^2.0.89",
     "ai": "^5.0.89",
     "better-sqlite3": "^12.4.1",
-    "winston": "^3.18.3"
+    "winston": "^3.18.3",
+    "winston-daily-rotate-file": "^5.0.0"
   }
 }

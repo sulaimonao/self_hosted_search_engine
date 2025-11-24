@@ -10,7 +10,7 @@ import { OverviewCards } from "@/components/overview/OverviewCards";
 import { SessionsList } from "@/components/overview/SessionsList";
 import { Button } from "@/components/ui/button";
 import { StartResearchSessionDialog } from "@/components/research/StartResearchSessionDialog";
-import { ArrowRight, Compass, Database, Search, Sparkles } from "lucide-react";
+import { ArrowRight, Compass, Database, FilePlus, Search, Sparkles } from "lucide-react";
 import { useOverview, useThreads, useJobs } from "@/lib/backend/hooks";
 import { useChatThread } from "@/lib/useChatThread";
 import { ROUTES } from "@/lib/navigation";
@@ -62,6 +62,10 @@ export default function HomePage() {
     router.push(`${ROUTES.activity}?job=${jobId}`);
   };
 
+  const handleNewDocument = () => {
+    router.push(`${ROUTES.data}?focus=import`);
+  };
+
   const heroStats = [
     {
       label: "Documents",
@@ -109,6 +113,17 @@ export default function HomePage() {
                   </Button>
                 }
               />
+              <Button
+                size="lg"
+                variant="outline"
+                aria-label="New document"
+                data-testid="primary-start-button"
+                className="border-border-subtle bg-background text-foreground hover:border-sidebar-ring hover:bg-muted/60"
+                onClick={handleNewDocument}
+              >
+                <FilePlus className="h-4 w-4" aria-hidden />
+                New document
+              </Button>
               <Button
                 size="lg"
                 variant="outline"
