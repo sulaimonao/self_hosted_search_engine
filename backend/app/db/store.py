@@ -1266,6 +1266,104 @@ class AppStateDB:
         ]
 
     # ------------------------------------------------------------------
+    # Mission Control graph views
+    # ------------------------------------------------------------------
+    def graph_network_snapshot(self, *, limit: int = 2000) -> dict[str, Any]:
+        """Return a simplified node/link snapshot for the force graph."""
+
+        capped_limit = max(1, min(int(limit or 1), 5000))
+        with self._lock, self._conn:
+            edge_rows = self._conn.execute(
+                "SELECT src_url, dst_url FROM link_edges LIMIT ?",
+                (capped_limit,),
+            ).fetchall()
+
+        urls: set[str] = set()
+        for row in edge_rows:
+            if row["src_url"]:
+                urls.add(str(row["src_url"]))
+            if row["dst_url"]:
+                urls.add(str(row["dst_url"]))
+
+        metadata: dict[str, dict[str, Any]] = {}
+        if urls:
+            placeholders = ",".join("?" for _ in urls)
+            query = f"SELECT url, title, site FROM pages WHERE url IN ({placeholders})"
+            with self._lock, self._conn:
+                for row in self._conn.execute(query, tuple(urls)):
+                    metadata[str(row["url"])] = {
+                        "title": row["title"],
+                        "site": row["site"],
+                    }
+
+        nodes: dict[str, dict[str, Any]] = {}
+        links: list[dict[str, Any]] = []
+        for row in edge_rows:
+            src = str(row["src_url"]) if row["src_url"] else None
+            dst = str(row["dst_url"]) if row["dst_url"] else None
+            if not src or not dst:
+                continue
+
+            src_meta = metadata.get(src, {})
+            dst_meta = metadata.get(dst, {})
+            if src not in nodes:
+                nodes[src] = {
+                    "id": src,
+                    "name": src_meta.get("title") or src,
+                    "group": src_meta.get("site"),
+                    "val": 5,
+                    "color": None,
+                }
+            if dst not in nodes:
+                nodes[dst] = {
+                    "id": dst,
+                    "name": dst_meta.get("title") or dst,
+                    "group": dst_meta.get("site"),
+                    "val": 3,
+                    "color": None,
+                }
+            links.append({"source": src, "target": dst})
+
+        return {"nodes": list(nodes.values()), "links": links}
+
+    def graph_hierarchy_snapshot(self, *, max_sites: int = 200) -> dict[str, Any]:
+        """Return hierarchical data grouped by site for treemap/radial views."""
+
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT site, url, title, COALESCE(text_len, tokens, 1) AS value
+                  FROM documents
+              ORDER BY (site IS NULL) ASC, site ASC, value DESC
+                """
+            ).fetchall()
+
+        sites: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            site = str(row["site"]).strip().lower() if row["site"] else "unknown"
+            entries = sites.setdefault(site, [])
+            value = row["value"] or 1
+            try:
+                value = int(value)
+            except Exception:
+                value = 1
+            entries.append(
+                {
+                    "name": row["title"] or row["url"],
+                    "value": max(1, value),
+                    "url": row["url"],
+                }
+            )
+
+        hierarchy = {"name": "Root", "children": []}
+        for idx, (site, pages) in enumerate(sites.items()):
+            if idx >= max_sites:
+                break
+            hierarchy["children"].append({"name": site or "unknown", "children": pages})
+
+        return hierarchy
+
+    # ------------------------------------------------------------------
     # Crawl jobs
     # ------------------------------------------------------------------
     def record_crawl_job(

@@ -105,6 +105,7 @@ def create_app() -> Flask:
     from .api import sources as sources_api
     from .api import runtime as runtime_api
     from .api import repo as repo_api
+    from .api import graph_viz as graph_viz_api
     from .api import embeddings as embeddings_api
     from .api import overview as overview_api
     try:
@@ -668,6 +669,7 @@ def create_app() -> Flask:
     app.register_blueprint(index_api.bp)
     app.register_blueprint(index_health_api.bp)
     app.register_blueprint(discovery_api.bp)
+    app.register_blueprint(graph_viz_api.bp)
     app.register_blueprint(embeddings_api.bp)
     app.register_blueprint(shadow_api.bp)
     app.register_blueprint(shipit_crawl_api.bp)
