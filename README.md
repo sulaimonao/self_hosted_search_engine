@@ -207,6 +207,18 @@ make stop || true
 BACKEND_PORT=5050 make dev
 ```
 
+### Mission Control dashboard
+
+- Visit [http://localhost:3100/mission-control](http://localhost:3100/mission-control)
+  to explore the desert-themed "Mission Control" overview.
+- The page calls two backend APIs exposed by the Flask app:
+  - `/api/graph/network` – force-directed URL/link network.
+  - `/api/graph/hierarchy` – hierarchical site/topic data for treemap + radial
+    views.
+- When developing against a remote API, set `NEXT_PUBLIC_API_BASE_URL` in
+  `frontend/.env` (or your shell) so the frontend fetches from the correct
+  origin.
+
 ### Desktop development
 
 - Run `npm run dev:desktop` to launch the Flask API on `tcp://127.0.0.1:5050`, auto-detect an open renderer port (preferring `http://127.0.0.1:3100`), and open an Electron window pointed at the freshly spawned Next.js dev server. `detect-port` prevents collisions with stale runs, and `kill-port` guarantees the prior renderer is cleaned up before boot.

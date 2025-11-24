@@ -71,6 +71,7 @@ diagnostics/*
 !backend/app/api/utils.py
 !backend/app/api/db.py
 !backend/app/api/embeddings.py
+!backend/app/api/graph_viz.py
 !backend/app/config/
 !backend/app/config/__init__.py
 !backend/app/config/models.py
