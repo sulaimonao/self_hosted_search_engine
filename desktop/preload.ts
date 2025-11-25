@@ -154,12 +154,79 @@ type DesktopBridge = {
   onShadowToggle: (handler: ShadowToggleHandler) => Unsubscribe;
 };
 
+type ModelRef = {
+  name: string;
+};
+
+type AppConfig = {
+  models_primary: ModelRef;
+  models_fallback: ModelRef;
+  models_embedder: ModelRef;
+  features_shadow_mode: boolean;
+  features_agent_mode: boolean;
+  features_local_discovery: boolean;
+  features_browsing_fallbacks: boolean;
+  features_index_auto_rebuild: boolean;
+  features_auth_clearance_detectors: boolean;
+  chat_use_page_context_default: boolean;
+  browser_persist: boolean;
+  browser_allow_cookies: boolean;
+  sources_seed: Record<string, unknown>;
+  setup_completed: boolean;
+  dev_render_loop_guard: boolean;
+};
+
+type ConfigFieldOption = {
+  key: string;
+  type: 'boolean' | 'select';
+  label: string;
+  description?: string;
+  default: unknown;
+  options?: string[] | null;
+};
+
+type ConfigSection = {
+  id: string;
+  label: string;
+  fields: ConfigFieldOption[];
+};
+
+type ConfigSchema = {
+  version: number;
+  sections: ConfigSection[];
+};
+
+type HealthSnapshot = {
+  status: string;
+  timestamp: string;
+  environment?: Record<string, unknown>;
+  components: Record<string, { status: string; detail: Record<string, unknown> }>;
+};
+
+type ApiBridge = {
+  config: {
+    get: () => Promise<AppConfig>;
+    update: (patch: Partial<AppConfig>) => Promise<{ ok: boolean }>;
+    schema: () => Promise<ConfigSchema>;
+  };
+  health: () => Promise<HealthSnapshot>;
+  capabilities: () => Promise<Record<string, unknown>>;
+  diagnostics: {
+    snapshot: () => Promise<Record<string, unknown>>;
+    repair: () => Promise<Record<string, unknown>>;
+  };
+  models: {
+    install: (models: string[]) => Promise<{ ok: boolean; results?: unknown; error?: string }>;
+  };
+};
+
 declare global {
   interface Window {
     desktop?: DesktopBridge;
     DesktopBridge?: DesktopBridge;
     browserAPI?: BrowserAPI;
     llm?: LlmBridge;
+    api?: ApiBridge;
   }
 }
 
@@ -172,6 +239,87 @@ function ensureCorrelationPayload(payload?: Record<string, unknown> | null): Cor
   const correlationId = raw || randomUUID();
   base.correlationId = correlationId;
   return base as CorrelatedPayload;
+}
+
+const DEFAULT_API_URL = 'http://127.0.0.1:5050';
+
+function resolveApiBase(): string {
+  const explicit =
+    process.env.API_URL || process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    return explicit.trim().replace(/\/$/, '');
+  }
+  const rawPort = process.env.BACKEND_PORT;
+  const parsedPort = rawPort ? Number.parseInt(rawPort, 10) : NaN;
+  if (Number.isFinite(parsedPort) && parsedPort > 0) {
+    return `http://127.0.0.1:${parsedPort}`.replace(/\/$/, '');
+  }
+  return DEFAULT_API_URL;
+}
+
+const API_BASE_URL = resolveApiBase();
+
+function buildApiUrl(path: string): string {
+  if (path.startsWith('http')) {
+    return path;
+  }
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${normalized}`;
+}
+
+async function parseApiJson<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get('content-type') ?? '';
+  let payload: unknown = null;
+  try {
+    if (contentType.includes('application/json')) {
+      payload = await response.json();
+    } else {
+      const text = await response.text();
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = text;
+      }
+    }
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const message =
+      (payload && typeof payload === 'object' && 'error' in (payload as Record<string, unknown>)
+        ? (payload as { error?: unknown }).error
+        : null) ||
+      (payload && typeof payload === 'object' && 'message' in (payload as Record<string, unknown>)
+        ? (payload as { message?: unknown }).message
+        : null) ||
+      `Request failed (${response.status})`;
+    const error = new Error(typeof message === 'string' ? message : 'Request failed');
+    (error as Error & { status?: number; details?: unknown }).status = response.status;
+    (error as Error & { status?: number; details?: unknown }).details = payload;
+    throw error;
+  }
+  return payload as T;
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+  };
+  if (init?.headers instanceof Headers) {
+    init.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+  } else if (init?.headers && typeof init.headers === 'object') {
+    Object.assign(headers, init.headers as Record<string, string>);
+  }
+  headers['x-correlation-id'] = headers['x-correlation-id'] || randomUUID();
+  const response = await fetch(buildApiUrl(path), {
+    credentials: init?.credentials ?? 'include',
+    ...init,
+    headers,
+  });
+  return parseApiJson<T>(response);
 }
 
 function invokeWithCorrelation<T = unknown>(channel: string, payload?: Record<string, unknown> | null) {
@@ -461,6 +609,30 @@ function exposeBrowserAPI() {
   contextBridge.exposeInMainWorld('browserAPI', api);
 }
 
+function exposeApiBridge() {
+  const api: ApiBridge = {
+    config: {
+      get: () => apiRequest<AppConfig>('/api/config'),
+      update: (patch) => apiRequest<{ ok: boolean }>('/api/config', { method: 'PUT', body: JSON.stringify(patch ?? {}) }),
+      schema: () => apiRequest<ConfigSchema>('/api/config/schema'),
+    },
+    health: () => apiRequest<HealthSnapshot>('/api/health'),
+    capabilities: () => apiRequest<Record<string, unknown>>('/api/capabilities'),
+    diagnostics: {
+      snapshot: () => apiRequest<Record<string, unknown>>('/api/dev/diag/snapshot'),
+      repair: () => apiRequest<Record<string, unknown>>('/api/dev/diag/repair', { method: 'POST' }),
+    },
+    models: {
+      install: (models: string[]) =>
+        apiRequest<{ ok: boolean; results?: unknown; error?: string }>('/api/admin/install_models', {
+          method: 'POST',
+          body: JSON.stringify({ models: Array.isArray(models) ? models : [] }),
+        }),
+    },
+  };
+  contextBridge.exposeInMainWorld('api', api);
+}
+
 // Simple client-side logger exposed to renderer: forwards to backend ingestion
 function exposeAppLogger() {
   const send = async (payload: Record<string, unknown> | Record<string, unknown>[]) => {
@@ -502,3 +674,4 @@ exposeAppLogger();
 spoofNavigator();
 exposeBridge();
 exposeBrowserAPI();
+exposeApiBridge();

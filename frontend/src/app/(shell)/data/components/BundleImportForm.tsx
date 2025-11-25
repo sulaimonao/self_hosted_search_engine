@@ -53,6 +53,7 @@ export function BundleImportForm({ autoFocus }: BundleImportFormProps) {
             value={file}
             onChange={(event) => setFile(event.target.value)}
             placeholder="/path/to/bundle.json"
+            data-testid="bundle-import-path"
           />
           <div className="grid gap-2">
             {COMPONENT_OPTIONS.map((option) => (
@@ -72,7 +73,7 @@ export function BundleImportForm({ autoFocus }: BundleImportFormProps) {
             </div>
           )}
           {importMutation.error && <p className="text-sm text-destructive">{importMutation.error.message}</p>}
-          <Button type="submit" variant="secondary" disabled={importMutation.isPending}>
+          <Button type="submit" variant="secondary" disabled={importMutation.isPending} data-testid="bundle-import-submit">
             {importMutation.isPending ? "Importing" : "Import"}
           </Button>
         </form>

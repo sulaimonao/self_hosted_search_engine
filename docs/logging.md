@@ -112,6 +112,7 @@ A sample file (`logs/llm_exports/sample-session.jsonl`) documents the final sche
 
 - Shared logger module: `shared/logger/index.js`
 - Electron main processes: `desktop/main.ts`, `frontend/electron/main.js`
+- Desktop preload bridge: `desktop/preload.ts` now exposes `window.api` for config, health, diagnostics, and model install calls against the Flask backend
 - Next.js middleware: `frontend/middleware.ts`
 - Next.js chat API logging: `frontend/src/app/api/chat/route.ts`
 - Flask configuration: `backend/app/logging_setup.py`, `backend/app/middleware/request_id.py`
